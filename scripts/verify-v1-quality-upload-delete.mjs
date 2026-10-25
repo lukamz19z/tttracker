@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { PGlite } from "@electric-sql/pglite";
 const require=createRequire(import.meta.url),ts=require("typescript");
-function load(file,mocks) {const exports={};new Function("require","exports",ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{assert.ok(name in mocks,`Missing mock ${name}`);return mocks[name];},exports);return exports;}
+function load(file,mocks) {const exports={};new Function("require","exports",ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});assert.ok(name in mocks,`Missing mock ${name}`);return mocks[name];},exports);return exports;}
 globalThis.__DEV__=false;
 process.env.SUPABASE_SERVICE_ROLE_KEY="test-key-never-a-real-secret";
 const ticketModule=load("lib/quality/upload-ticket.ts",{"node:crypto":require("node:crypto")});
@@ -28,7 +28,7 @@ const api=load("mobile/lib/api/quality.ts",{
   "@/lib/api/client":{ApiRequestError:class extends Error{},apiJson:async(path,init)=>{const value=JSON.parse(init.body);assert.ok(init.body.length<4000);assert.ok(!init.body.includes("data:image"));if(path.endsWith("upload-session")){assert.equal(value.size,original.length);assert.ok(!value.uri && !value.annotatedUri);return {uploadUrl:"https://upload.example/scoped-secret",ticket:"signed-metadata-only"};}assert.equal(value.ticket,"signed-metadata-only");completed++;return {file:{id:"evidence"}};}},
   "@/lib/offline/db":{},"@/lib/offline/revision-workspaces":{},
 });
-assert.equal((await api.uploadQualityPhoto({projectId:"p",towerId:"t",revisionId:"r",revisionItemId:"i",fileRole:"before_photo",uri:"original",annotatedUri:"annotated",name:"photo.jpg",mimeType:"image/jpeg",clientMutationId:"photo-1"})).file.id,"evidence");
+assert.equal((await api.uploadQualityPhoto({projectId:"p",towerId:"t",revisionId:"r",revisionItemId:"i",fileRole:"before_photo",uri:"original",annotatedUri:"annotated",name:"photo.jpg",mimeType:"image/jpeg",clientMutationId:"photo-1",capturedAt:"2026-10-25T05:19:23.123Z"})).file.id,"evidence");
 assert.equal(completed,1);assert.equal(puts[0].start,0);assert.equal(puts.at(-1).end+1,original.length);assert.deepEqual(original,saved);
 console.log("PASS 8 MiB original + 6 MiB preview: only bounded binary chunks go direct; website JSON stays below 4 KiB; no bearer forwarded; original unchanged.");
 

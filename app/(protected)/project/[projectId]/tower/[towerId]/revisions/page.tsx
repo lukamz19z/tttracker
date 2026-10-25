@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 import { qualityJsonResponse } from "@/lib/quality/http-response";
+import { qualityCaptureLabel } from "@/lib/quality/date-time";
+import { browserPhotoCaptureTime } from "@/lib/quality/browser-capture";
 
 import {
   Camera,
@@ -33,6 +35,7 @@ type TowerRow = {
 };
 
 type ProjectRow = {
+  timezone?: string | null;
   id: string;
   name?: string | null;
   project_number?: string | null;
@@ -142,6 +145,7 @@ type FindingEdit = {
 };
 
 type EvidenceView = {
+  recordedAt?: string | null;
   id: string;
   name: string;
   role: "before_photo" | "after_photo";
@@ -194,12 +198,6 @@ function prettyDate(value: string | null | undefined) {
   if (!value) return "-";
   const parsed = new Date(`${value.slice(0, 10)}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en-AU");
-}
-
-function prettyDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString("en-AU");
 }
 
 function revisionStatusClasses(status: RevisionRow["status"]) {
@@ -270,7 +268,7 @@ export default function TowerRevisionsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     const [projectRes, towerRes, docketRes, revisionRes, itemRes, fileRes, issueRes, memberRes] = await Promise.all([
-      supabase.from("projects").select("id,name,project_number").eq("id", projectId).single(),
+      supabase.from("projects").select("id,name,project_number,timezone").eq("id", projectId).single(),
       supabase.from("towers").select("*").eq("id", towerId).single(),
       supabase
         .from("tower_daily_dockets")
@@ -420,6 +418,7 @@ export default function TowerRevisionsPage() {
     selectedFiles: File[];
   }) {
     for (const original of selectedFiles) {
+      const capturedAt=await browserPhotoCaptureTime(original,project?.timezone);
       const file = await normalisePhoto(original);
       const body = new FormData();
       body.set("projectId", projectId);
@@ -427,7 +426,7 @@ export default function TowerRevisionsPage() {
       body.set("revisionId", revisionId);
       body.set("revisionItemId", itemId);
       body.set("fileRole", role);
-      body.set("capturedAt", new Date().toISOString());
+      body.set("capturedAt", capturedAt);
       body.set("file", file);
       const response = await apiFetch("/api/quality/files/upload", { method: "POST", body });
       const payload = (await response.json()) as { error?: string };
@@ -834,6 +833,7 @@ export default function TowerRevisionsPage() {
             role: file.file_role,
             url: URL.createObjectURL(await response.blob()),
             capturedAt: file.captured_at,
+            recordedAt: file.created_at,
             uploadedBy: file.uploaded_by_label,
           } as EvidenceView;
         }),
@@ -1169,7 +1169,7 @@ export default function TowerRevisionsPage() {
             {(["before_photo", "after_photo"] as const).map((role) => {
               const roleViews = evidenceViews.filter((view) => view.role === role);
               const label = role === "before_photo" ? "Before" : "After";
-              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view) => <button key={view.id} type="button" onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left"><img src={view.url} alt={view.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{prettyDateTime(view.capturedAt)}<br />{view.uploadedBy || "-"}</div></div></button>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
+              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view) => <button key={view.id} type="button" onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left"><img src={view.url} alt={view.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{qualityCaptureLabel(view.capturedAt,project?.timezone,view.recordedAt)}<br />{view.uploadedBy || "-"}</div></div></button>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
             })}
           </div>
         </Modal>

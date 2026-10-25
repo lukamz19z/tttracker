@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
 export type QualityProjectRow = {
+  timezone?: string | null;
   id: string;
   name: string | null;
   project_number: string | null;
@@ -111,7 +112,7 @@ export async function loadQualityProject(
   const { data, error } = await service
     .from("projects")
     .select(
-      "id,name,project_number,sharepoint_site_id,sharepoint_drive_id,sharepoint_folder_id",
+      "id,name,project_number,timezone,sharepoint_site_id,sharepoint_drive_id,sharepoint_folder_id",
     )
     .eq("id", projectId)
     .single();

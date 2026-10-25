@@ -1,9 +1,10 @@
+import { qualityCaptureLabel } from "./date-time";
 export const WATERMARK_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"] as const;
 export type WatermarkPosition = typeof WATERMARK_POSITIONS[number];
 export type EvidenceContext = Record<string, unknown>;
 
 export function watermarkLines(context: EvidenceContext) {
-  return [context.phase, context.project && `Project ${context.project}`, context.tower && (/^tower\b/i.test(String(context.tower)) ? context.tower : `Tower ${context.tower}`), context.reference && (context.kind === "defect" || String(context.reference).includes("Pending") ? context.reference : `RECT ${context.reference}`), context.kind === "defect" ? null : context.fli ? `FLI # ${context.fli}` : "Pending FLI", context.assignedFlag && `Assigned Flag: ${context.assignedFlag}`, context.leg && `Leg: ${context.leg}`, context.segment && `Segment: ${context.segment}`, context.member && `Member: ${context.member}`, context.drawing && `Drawing: ${context.drawing}`, context.issue && `Issue: ${context.issue}`, context.capturedAt].filter(Boolean).map(String);
+  return [context.phase, context.project && `Project ${context.project}`, context.tower && (/^tower\b/i.test(String(context.tower)) ? context.tower : `Tower ${context.tower}`), context.reference && (context.kind === "defect" || String(context.reference).includes("Pending") ? context.reference : `RECT ${context.reference}`), context.kind === "defect" ? null : context.fli ? `FLI # ${context.fli}` : "Pending FLI", context.assignedFlag && `Assigned Flag: ${context.assignedFlag}`, context.leg && `Leg: ${context.leg}`, context.segment && `Segment: ${context.segment}`, context.member && `Member: ${context.member}`, context.drawing && `Drawing: ${context.drawing}`, context.issue && `Issue: ${context.issue}`, qualityCaptureLabel(context.capturedAt, context.timeZone, context.recordedAt)].filter(Boolean).map(String);
 }
 export function evidenceLayout(imageWidth: number, imageHeight: number, context: EvidenceContext, position: WatermarkPosition) {
   const width = Math.max(80, Math.round(imageWidth * 0.48));

@@ -1,4 +1,6 @@
 import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { loadQualityProject } from "@/lib/quality/server";
+import { qualityTimeZone } from "@/lib/quality/date-time";
 export { deleteFinding as DELETE } from "@/lib/quality/delete-finding";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextRequest, NextResponse } from "next/server";
@@ -41,6 +43,7 @@ export async function GET(request: NextRequest, context: Context) {
     if (!parent.data || !tower.data) return NextResponse.json({error:"Revision or tower not found."},{status:404});
     const reference=revisionReference(parent.data),fli=revisionItemFli(item);
     if(!reference || !fli) return NextResponse.json({error:"Finding identifiers are not ready."},{status:409});
-    return NextResponse.json({ item, evidenceContext:revisionEvidenceContext(parent.data,item,tower.data.name,issue.data?.name) });
+    const project=await loadQualityProject(service,item.project_id);
+    return NextResponse.json({ item, evidenceContext:{...revisionEvidenceContext(parent.data,item,tower.data.name,issue.data?.name),project:project.project_number,timeZone:qualityTimeZone(project.timezone)} });
   }catch(error){ const result=qualityRouteError(error);return NextResponse.json({error:result.message},{status:result.status}); }
 }

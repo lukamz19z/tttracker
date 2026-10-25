@@ -29,7 +29,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { data: storedFile, error } = await service
       .from("tower_quality_files")
       .select(
-        "id,project_id,tower_id,photo_no,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
+        "id,project_id,tower_id,photo_no,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,created_at,evidence_metadata",
       )
       .eq("id", fileId)
       .single();

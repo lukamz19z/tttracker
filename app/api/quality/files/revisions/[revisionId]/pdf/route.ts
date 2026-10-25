@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import sharp from "sharp";
 import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
 import { qualityPdfName } from "@/lib/quality/file-names";
+import { qualityTimeZone } from "@/lib/quality/date-time";
 
 import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
@@ -47,6 +48,7 @@ type QualityFileRow = {
   annotated_sharepoint_item_id?: string | null;
   evidence_metadata?: Record<string,unknown> | null;
   captured_at: string | null;
+  created_at?: string | null;
   uploaded_by_label: string | null;
 };
 
@@ -89,6 +91,7 @@ async function toPdfPhoto(file: QualityFileRow, context?: Record<string,unknown>
     mimeType: file.annotated_sharepoint_item_id || context ? "image/jpeg" : file.mime_type || "image/jpeg",
     dataUrl: await graphFileDataUrl(file,context),
     capturedAt: file.captured_at,
+    recordedAt: file.created_at,
     uploadedByLabel: file.uploaded_by_label,
   };
 }
@@ -148,7 +151,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_quality_files")
           .select(
-            "id,project_id,tower_id,defect_id,photo_no,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,uploaded_by_label",
+            "id,project_id,tower_id,defect_id,photo_no,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,created_at,uploaded_by_label",
           )
           .eq("revision_id", revision.id)
           .in("file_role", ["before_photo", "after_photo"])
@@ -272,6 +275,7 @@ export async function POST(request: Request, context: RouteContext) {
       notes: revision.notes,
       generatedBy,
       generatedAt,
+      timeZone:qualityTimeZone(project.timezone),
       branding: {
         logoDataUrl: branding.logoDataUrl,
         companyName: branding.companyName,

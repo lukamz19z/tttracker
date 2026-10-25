@@ -232,7 +232,7 @@ function RevisionsScreenContent() {
         </View>
       ) : null}
 
-      {listError ? <Text style={styles.meta}>Using cached Rectifications ? {listError}</Text> : null}
+      {listError ? <Text style={styles.meta}>Using cached Rectifications · {listError}</Text> : null}
       {localRevisions.filter(row=>(status==="All" || (row.cachedDetail?.revision.status || "Draft")===status) && (!query || [row.serverRevisionNumber,row.notes,towerById.get(row.towerId)].join(" ").toLowerCase().includes(query.toLowerCase()))).map((revision) => (
         <Pressable
           key={revision.routeKey}
@@ -249,7 +249,7 @@ function RevisionsScreenContent() {
                 {[
                   projectCode,
                   towerById.get(revision.towerId) || "Tower",
-                  "RECT · Pending sync",
+                  revision.serverRevisionNumber || "RECT · Pending sync",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -310,7 +310,8 @@ function RevisionsScreenContent() {
             ) : null}
           </Pressable>
         );
-      })}      {nextOffset!==null ? <Pressable style={styles.card} onPress={()=>{if(!data?.projectId)return;void(async()=>{try{const page=online?await listQualityRevisions({projectId:data.projectId,query:search,status,offset:nextOffset}):(await cachedQualityRevisionList({projectId:data.projectId,query:search,status,offset:nextOffset}))?.value;if(page){setServerRows(current=>[...new Map([...current,...page.rows].map(row=>[row.id,row])).values()]);setNextOffset(page.nextOffset);}}catch(error){setListError(error instanceof Error?error.message:"More records unavailable.");}})();}}><Text>Load more</Text></Pressable> : null}
+      })}
+      {nextOffset!==null ? <Pressable style={styles.card} onPress={()=>{if(!data?.projectId)return;void(async()=>{try{const page=online?await listQualityRevisions({projectId:data.projectId,query:search,status,offset:nextOffset}):(await cachedQualityRevisionList({projectId:data.projectId,query:search,status,offset:nextOffset}))?.value;if(page){setServerRows(current=>[...new Map([...current,...page.rows].map(row=>[row.id,row])).values()]);setNextOffset(page.nextOffset);}}catch(error){setListError(error instanceof Error?error.message:"More records unavailable.");}})();}}><Text>Load more</Text></Pressable> : null}
 
     </QualityShell>
   );

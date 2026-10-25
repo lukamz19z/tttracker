@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { loadQualityProject } from "@/lib/quality/server";
+import { qualityTimeZone } from "@/lib/quality/date-time";
 import { qualityDisplayName } from "@/lib/quality/display-name";
 import { defectEvidenceContext } from "@/lib/quality/evidence-context";
 
@@ -71,6 +73,7 @@ export async function GET(
     }
 
     const defect=defectResult.data;
+    const project=await loadQualityProject(service,projectId);
     const [tower,issue]=await Promise.all([
       service.from("towers").select("name").eq("id",defect.tower_id).eq("project_id",projectId).maybeSingle(),
       defect.issue_type_id ? service.from("project_field_issue_types").select("name").eq("id",defect.issue_type_id).maybeSingle() : Promise.resolve({data:null,error:null}),
@@ -80,7 +83,7 @@ export async function GET(
       projectId,
       generatedAt: new Date().toISOString(),
       defect: {...defect,assigned_to_label:defect.assigned_to_label ? qualityDisplayName(defect.assigned_to_label):null},
-      evidenceContext:defectEvidenceContext(defect,tower.data?.name,issue.data?.name),
+      evidenceContext:{...defectEvidenceContext(defect,tower.data?.name,issue.data?.name),project:project.project_number,timeZone:qualityTimeZone(project.timezone)},
       files: filesResult.data ?? [],
     });
   } catch (error) {

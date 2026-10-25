@@ -3,15 +3,17 @@ import { annotateEvidence,EVIDENCE_WATERMARK_VERSION,WATERMARK_POSITIONS,type Wa
 import { loadDefectEvidenceContext,loadRevisionEvidenceContext } from "./evidence-context";
 import { loadQualityProject,loadQualityTower,qualityTowerLabel } from "./server";
 import { qualityEvidenceName } from "./file-names";
+import { canonicalCaptureTime, qualityTimeZone } from "./date-time";
 import { ensureDefectPhotosFolder,ensureRevisionPhotoFolder,uploadQualityFile } from "@/lib/sharepoint/quality";
 import { downloadDriveItemContent,ensureDriveFolder,renameDriveItem,moveDriveItem } from "@/lib/sharepoint/graph";
 
-export type PublishedEvidence = {id:string;project_id:string;tower_id:string;revision_id:string|null;revision_item_id:string|null;defect_id:string|null;file_role:string;file_name:string;mime_type:string|null;sharepoint_drive_id:string;sharepoint_item_id:string;annotated_sharepoint_item_id?:string|null;captured_at:string|null;photo_no?:number|null;evidence_metadata?:Record<string,unknown>|null};
+export type PublishedEvidence = {id:string;project_id:string;tower_id:string;revision_id:string|null;revision_item_id:string|null;defect_id:string|null;file_role:string;file_name:string;mime_type:string|null;sharepoint_drive_id:string;sharepoint_item_id:string;annotated_sharepoint_item_id?:string|null;captured_at:string|null;photo_no?:number|null;created_at?:string|null;evidence_metadata?:Record<string,unknown>|null};
 /** Upgrade old UUID names/tofu derivatives from original bytes, preserving IDs. */
 export async function ensurePublishedQualityEvidence<T extends PublishedEvidence>(service:SupabaseClient,file:T):Promise<T> {
   if(!["before_photo","after_photo","defect_photo"].includes(file.file_role)) return file;
-  if(file.evidence_metadata?.watermarkVersion===EVIDENCE_WATERMARK_VERSION && file.photo_no && file.annotated_sharepoint_item_id) return file;
-  const [project,tower]=await Promise.all([loadQualityProject(service,file.project_id),loadQualityTower(service,file.tower_id,file.project_id)]);
+  const project=await loadQualityProject(service,file.project_id);
+  if(file.evidence_metadata?.watermarkVersion===EVIDENCE_WATERMARK_VERSION && file.evidence_metadata?.timeZone===qualityTimeZone(project.timezone) && file.photo_no && file.annotated_sharepoint_item_id) return file;
+  const tower=await loadQualityTower(service,file.tower_id,file.project_id);
   if(!project.sharepoint_drive_id || !project.sharepoint_folder_id) throw new Error("Project SharePoint destination is not configured.");
   const context=file.defect_id?await loadDefectEvidenceContext(service,file.project_id,file.defect_id):await loadRevisionEvidenceContext(service,file.project_id,String(file.revision_id),String(file.revision_item_id));
   const phase=file.file_role==="before_photo"?"BEFORE":file.file_role==="after_photo"?"AFTER":String(file.evidence_metadata?.phase || "EVIDENCE");
@@ -21,7 +23,7 @@ export async function ensurePublishedQualityEvidence<T extends PublishedEvidence
   const base={driveId:project.sharepoint_drive_id,projectFolderId:project.sharepoint_folder_id,towerLabel:qualityTowerLabel(tower)};
   const folder=file.defect_id?await ensureDefectPhotosFolder({...base,defectNumber:String(context.reference)}):await ensureRevisionPhotoFolder({...base,fliNumber:String(context.reference),photoType:phase==="AFTER"?"after":"before"});
   const original=await downloadDriveItemContent({driveId:file.sharepoint_drive_id,itemId:file.sharepoint_item_id});
-  const metadata={...context,project:project.project_number,phase,capturedAt:file.captured_at,position:file.evidence_metadata?.position || "bottom-left",watermarkVersion:EVIDENCE_WATERMARK_VERSION};
+  const metadata={...context,project:project.project_number,phase,capturedAt:canonicalCaptureTime(file.captured_at),recordedAt:file.created_at,timeZone:qualityTimeZone(project.timezone),position:file.evidence_metadata?.position || "bottom-left",watermarkVersion:EVIDENCE_WATERMARK_VERSION};
   const position:WatermarkPosition=WATERMARK_POSITIONS.includes(metadata.position as WatermarkPosition)?metadata.position as WatermarkPosition:"bottom-left";
   const jpeg=await annotateEvidence(original.content,metadata,position);
   const originals=await ensureDriveFolder({driveId:base.driveId,parentItemId:folder.id,name:"Originals"});

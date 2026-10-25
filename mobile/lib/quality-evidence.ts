@@ -20,7 +20,7 @@ export function photoContext(context: EvidenceContext, phase: string, capturedAt
     assignedFlag: context.assignedFlag || context.Flag, leg: context.leg || context.Leg,
     segment: context.segment || context.Segment, member: context.member || context.Member,
     drawing: context.drawing || context.Drawing, issue: context.issue || context.Issue,
-    capturedAt: new Date(capturedAt).toLocaleString("en-AU") };
+    capturedAt, timeZone: context.timeZone };
 }
 export async function annotateQualityPhoto(photo: LocalQualityPhoto, context = photo.watermarkContext || {}): Promise<LocalQualityPhoto> {
   const task = serial.catch(() => undefined).then(async () => {

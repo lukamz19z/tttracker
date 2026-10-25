@@ -16,6 +16,7 @@ export type InspectionStage =
   | "Other";
 
 export type QualityProject = {
+  timezone?: string | null;
   id: string;
   name: string;
   project_number: string | null;

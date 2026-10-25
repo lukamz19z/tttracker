@@ -1,9 +1,10 @@
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { captureTimeFromExif, projectLocalCaptureTime, qualityCaptureLabel, qualityTimeZone } from "../../../lib/quality/date-time";
 import { annotateQualityPhoto, photoContext } from "@/lib/quality-evidence";
 import * as ImagePicker from "expo-image-picker";
 import { Camera, ImagePlus, Trash2 } from "lucide-react-native";
-import { Alert, Image, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Image, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { persistOfflineFile, removeOfflineFile } from "@/lib/offline/files";
 import type { LocalQualityPhoto } from "@/types/quality";
@@ -12,7 +13,7 @@ function id() {
   return `photo-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-async function persistAsset(asset: ImagePicker.ImagePickerAsset, prefix: string): Promise<LocalQualityPhoto> {
+async function persistAsset(asset: ImagePicker.ImagePickerAsset, prefix: string, capturedAt: string): Promise<LocalQualityPhoto> {
   const uri = await persistOfflineFile(asset.uri, prefix);
   const name = asset.fileName || `${prefix}-${Date.now()}.jpg`;
   return {
@@ -22,7 +23,7 @@ async function persistAsset(asset: ImagePicker.ImagePickerAsset, prefix: string)
     uri, originalUri: uri,
     name,
     mimeType: asset.mimeType || "image/jpeg",
-    capturedAt: new Date().toISOString(),
+    capturedAt,
   };
 }
 
@@ -44,6 +45,17 @@ export function QualityPhotoPicker({
   const [preview,setPreview] = useState<string | null>(null);
   const [error,setError] = useState<string | null>(null);
   const [busy,setBusy] = useState(false);
+  const [capturePrompt,setCapturePrompt]=useState<string|null>(null);
+  const [captureInput,setCaptureInput]=useState("");
+  const captureReply=useRef<{resolve:(value:string)=>void;reject:(error:Error)=>void}|null>(null);
+  const zone=qualityTimeZone(context?.timeZone);
+  function confirmCaptureTime() {
+    const iso=projectLocalCaptureTime(captureInput,zone);
+    if(!iso){setError("Enter a valid capture date/time: YYYY-MM-DD HH:mm.");return;}
+    captureReply.current?.resolve(iso);captureReply.current=null;setCapturePrompt(null);
+  }
+  function cancelCaptureTime() {captureReply.current?.reject(new Error("Photo capture date/time was not supplied."));captureReply.current=null;setCapturePrompt(null);}
+  function requestCaptureTime(name:string) {setCaptureInput("");setCapturePrompt(name);return new Promise<string>((resolve,reject)=>{captureReply.current={resolve,reject};});}
   const contextKey = JSON.stringify(context || {});
   const phase = String(context?.phase || (label.toLowerCase().includes("after") ? "AFTER" : "BEFORE"));
   const collectAnnotation = (photo: LocalQualityPhoto) => context || prefix.startsWith("revision")
@@ -68,9 +80,11 @@ export function QualityPhotoPicker({
   async function camera() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) return;
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1 });
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1, exif:true });
     if (result.canceled || !result.assets[0]) return;
-    const original=await persistAsset(result.assets[0],prefix);
+    // Record immediately on camera return, before copying/rasterising/queueing.
+    const capturedAt=captureTimeFromExif(result.assets[0].exif,Intl.DateTimeFormat().resolvedOptions().timeZone) || new Date().toISOString();
+    const original=await persistAsset(result.assets[0],prefix,capturedAt);
     try { onChange([...photos,await collectAnnotation(original)]); }
     catch(error) { onChange([...photos,{...original,watermarkContext:photoContext(JSON.parse(contextKey),phase,original.capturedAt)}]);throw error; }
   }
@@ -83,11 +97,13 @@ export function QualityPhotoPicker({
       quality: 1,
       allowsMultipleSelection: true,
       selectionLimit: 6,
+      exif:true,
     });
     if (result.canceled) return;
     const next: LocalQualityPhoto[] = [];
     for (const asset of result.assets) {
-      const original=await persistAsset(asset,prefix);
+      const capturedAt=captureTimeFromExif(asset.exif,zone) || await requestCaptureTime(asset.fileName || "Selected photo");
+      const original=await persistAsset(asset,prefix,capturedAt);
       try { next.push(await collectAnnotation(original)); }
       catch(error) { onChange([...photos,...next,{...original,watermarkContext:photoContext(JSON.parse(contextKey),phase,original.capturedAt)}]);throw error; }
     }
@@ -121,10 +137,22 @@ export function QualityPhotoPicker({
           </Pressable>
           {context ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>{(["top-left","top-right","bottom-left","bottom-right"] as const).map(corner => <Pressable key={corner} onPress={() => onChange(photos.map(row => row.id === photo.id ? { ...row, watermarkPosition: corner } : row))} style={{ minHeight: 44, padding: 8, justifyContent: "center", borderRadius: 8, backgroundColor: corner === position ? "#dbeafe" : "#f1f5f9" }}><Text>{corner.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join(" ")}</Text></Pressable>)}</View> : null}
           <View style={styles.photoRow}><Text style={styles.photoName} >{index + 1}. {photo.name}</Text><Pressable hitSlop={12} onPress={() => void remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
+          <Text style={styles.photoName}>{qualityCaptureLabel(photo.capturedAt,zone)}</Text>
         </View>;
       })}
       {busy ? <Text style={styles.required}>Preparing evidence image?</Text> : null}
       {error ? <Text style={styles.required}>{error}</Text> : null}
+      <Modal visible={capturePrompt!==null} transparent onRequestClose={cancelCaptureTime}>
+        <SafeAreaView style={{flex:1,backgroundColor:"rgba(0,0,0,0.6)",justifyContent:"center",padding:20}}>
+          <View style={{backgroundColor:"white",padding:16,borderRadius:12,gap:10}}>
+            <Text style={styles.label}>Photo capture date/time</Text>
+            <Text>{capturePrompt} has no capture metadata. Enter when it was taken in {zone}.</Text>
+            <TextInput accessibilityLabel="Photo capture date/time" placeholder="YYYY-MM-DD HH:mm" value={captureInput} onChangeText={setCaptureInput} style={{minHeight:44,borderWidth:1,padding:10,borderColor:"#cbd5e1"}} />
+            {error ? <Text style={styles.required}>{error}</Text> : null}
+            <View style={styles.actions}><Pressable style={styles.button} onPress={cancelCaptureTime}><Text>Cancel</Text></Pressable><Pressable style={styles.button} onPress={confirmCaptureTime}><Text>Use capture time</Text></Pressable></View>
+          </View>
+        </SafeAreaView>
+      </Modal>
       <Modal visible={Boolean(preview)} transparent onRequestClose={() => setPreview(null)}>
         <SafeAreaView style={{flex:1,backgroundColor:"rgba(0,0,0,0.95)",paddingHorizontal:16}}>
           <Pressable accessibilityLabel="Close photo preview" onPress={() => setPreview(null)} style={{minHeight:44,justifyContent:"center"}}><Text style={{color:"white",padding:12}}>Close</Text></Pressable>

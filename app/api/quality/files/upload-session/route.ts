@@ -5,6 +5,7 @@ import { ensureDefectPhotosFolder, ensureRevisionPhotoFolder } from "@/lib/share
 import { graphRequest } from "@/lib/sharepoint/graph";
 import { revisionReference } from "@/lib/quality/fli";
 import { signQualityUpload } from "@/lib/quality/upload-ticket";
+import { canonicalCaptureTime } from "@/lib/quality/date-time";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,8 @@ export async function POST(request: Request) {
     const text = (key: string) => String(body[key] || "").trim();
     const projectId=text("projectId"),towerId=text("towerId"),defectId=text("defectId"),revisionId=text("revisionId"),revisionItemId=text("revisionItemId"),fileRole=text("fileRole");
     const size=Number(body.size),mimeType=text("mimeType");
+    const capturedAt=canonicalCaptureTime(text("capturedAt"));
+    if(!capturedAt) return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
     if (!projectId || !towerId || !text("clientMutationId") || !["image/jpeg","image/png"].includes(mimeType) || !Number.isSafeInteger(size) || size < 1) return NextResponse.json({error:"Invalid Quality photo upload."},{status:400});
     if (size>25*1024*1024) return NextResponse.json({error:"Original photo exceeds the 25 MB evidence limit. Choose a smaller photo; the original has been retained locally."},{status:413});
     await assertQualityProjectAccess({service,userId:user.id,role,projectId});
@@ -46,7 +49,7 @@ export async function POST(request: Request) {
     if(tracked.error || !tracked.data) throw new Error(tracked.error?.message || "Evidence transfer receipt was not saved.");
     const session=await graphRequest<{uploadUrl:string;expirationDateTime:string}>(`/drives/${encodeURIComponent(base.driveId)}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(stagingName)}:/createUploadSession`,{method:"POST",body:JSON.stringify({item:{"@microsoft.graph.conflictBehavior":"replace",name:stagingName}})});
     if(!session.uploadUrl?.startsWith("https://") || !Number.isFinite(Date.parse(session.expirationDateTime))) throw new Error("Evidence provider did not return a valid expiring upload session.");
-    const ticket=signQualityUpload({sessionId:tracked.data.id,userId:user.id,projectId,towerId,defectId,revisionId,revisionItemId,fileRole,evidencePhase:["BEFORE","AFTER","EVIDENCE"].includes(text("evidencePhase"))?text("evidencePhase"):"EVIDENCE",clientMutationId:text("clientMutationId"),watermarkPosition:text("watermarkPosition")||"bottom-left",capturedAt:text("capturedAt"),driveId:base.driveId,folderId:folder.id,stagingName,name:text("name"),mimeType,size,expires:Math.min(Date.now()+60*60*1000,Date.parse(session.expirationDateTime))});
+    const ticket=signQualityUpload({sessionId:tracked.data.id,userId:user.id,projectId,towerId,defectId,revisionId,revisionItemId,fileRole,evidencePhase:["BEFORE","AFTER","EVIDENCE"].includes(text("evidencePhase"))?text("evidencePhase"):"EVIDENCE",clientMutationId:text("clientMutationId"),watermarkPosition:text("watermarkPosition")||"bottom-left",capturedAt,driveId:base.driveId,folderId:folder.id,stagingName,name:text("name"),mimeType,size,expires:Math.min(Date.now()+60*60*1000,Date.parse(session.expirationDateTime))});
     // uploadUrl is a short-lived capability for this one file, not a Graph token.
     return NextResponse.json({uploadUrl:session.uploadUrl,ticket},{headers:{"Cache-Control":"no-store"}});
   } catch(error) { const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status}); }

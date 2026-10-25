@@ -572,7 +572,7 @@ function NewDefectContent() {
 
       <QualityLegField value={form.leg} onChange={leg=>setForm(current=>({...current,leg}))} />
       <QualityPhotoPicker
-        context={{kind:"defect",phase:"BEFORE",leg:form.leg,reference:"Pending DEF",tower:towerLabel,segment:form.segment,member:form.memberNumber,drawing:form.drawingNumber,assignedFlag:form.clientReference,issue:issueOptions.find(row=>row.id===form.issueTypeId)?.label}}
+        context={{timeZone:data?.project?.timezone,project:data?.project?.project_number,kind:"defect",phase:"BEFORE",leg:form.leg,reference:"Pending DEF",tower:towerLabel,segment:form.segment,member:form.memberNumber,drawing:form.drawingNumber,assignedFlag:form.clientReference,issue:issueOptions.find(row=>row.id===form.issueTypeId)?.label}}
         label="Defect photos"
         photos={form.photos}
         onChange={(photos) =>

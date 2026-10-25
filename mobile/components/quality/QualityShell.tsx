@@ -15,6 +15,7 @@ import { PermissionScreen } from "@/components/common/PermissionScreen";
 import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuality } from "@/contexts/QualityContext";
+import { formatQualityDateTime } from "../../../lib/quality/date-time";
 
 export function QualityShell({
   permission,
@@ -29,7 +30,7 @@ export function QualityShell({
   root?: boolean;
 }>) {
   const { profile } = useAuth();
-  const { refreshing, refresh, cachedAt, error } = useQuality();
+  const { refreshing, refresh, cachedAt, error, data } = useQuality();
 
   return (
     <PermissionScreen permission={permission}>
@@ -53,7 +54,7 @@ export function QualityShell({
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           <SyncStatus compact />
           {cachedAt ? (
-            <Text style={styles.cache}>Quality cache updated {new Date(cachedAt).toLocaleString("en-AU")}</Text>
+            <Text style={styles.cache}>Quality cache updated {formatQualityDateTime(cachedAt,data?.project?.timezone)}</Text>
           ) : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {children}

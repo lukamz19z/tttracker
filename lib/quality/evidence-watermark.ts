@@ -2,7 +2,7 @@ import sharp from "sharp";
 import path from "node:path";
 import { evidenceLayout, type WatermarkPosition } from "./evidence-layout";
 export { WATERMARK_POSITIONS, watermarkLines, type WatermarkPosition } from "./evidence-layout";
-export const EVIDENCE_WATERMARK_VERSION = 2;
+export const EVIDENCE_WATERMARK_VERSION = 3;
 const escape = (value: string) => value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[char]!);
 export async function annotateEvidence(original: Uint8Array, context: Record<string, unknown>, position: WatermarkPosition) {
   const { data, info } = await sharp(original, { limitInputPixels: 80_000_000 }).rotate().resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true }).toBuffer({ resolveWithObject: true });

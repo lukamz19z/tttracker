@@ -3,6 +3,7 @@ import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, EVIDENCE_WATERMARK_VERSION, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { qualityEvidenceName } from "@/lib/quality/file-names";
+import { canonicalCaptureTime, qualityTimeZone } from "@/lib/quality/date-time";
 import { NextResponse } from "next/server";
 
 import {
@@ -43,12 +44,6 @@ type FileRole =
 
 function field(formData: FormData, name: string) {
   return String(formData.get(name) ?? "").trim();
-}
-
-function normaliseCapturedAt(value: string) {
-  if (!value) return new Date().toISOString();
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
 }
 
 function timestampPart(value: string) {
@@ -114,7 +109,8 @@ export async function POST(request: Request) {
     const mutationKey = photoMutationId ? `${revisionItemId || defectId}:${fileRole}:${photoMutationId}` : null;
     const watermarkPosition = (field(formData, "watermarkPosition") || "bottom-left") as WatermarkPosition;
     if (!WATERMARK_POSITIONS.includes(watermarkPosition)) return NextResponse.json({ error: "Invalid watermark position." }, { status: 400 });
-    const capturedAt = normaliseCapturedAt(field(formData, "capturedAt"));
+    const capturedAt = canonicalCaptureTime(field(formData, "capturedAt")) || "";
+    if (["before_photo","after_photo","defect_photo"].includes(fileRole) && !capturedAt) return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
     const displayValue = formData.get("file");
     const originalValue = formData.get("originalFile");
     // Legacy multipart clients may carry both; direct sessions carry only
@@ -327,6 +323,7 @@ export async function POST(request: Request) {
       photoNumber=Number(number.data);
       finalName=qualityEvidenceName(project.project_number,towerLabel,evidenceContext.reference,evidenceContext.fli,phase,photoNumber);
     }
+    if(evidenceContext) evidenceContext.timeZone=qualityTimeZone(project.timezone);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const annotatedBytes = evidenceContext ? await annotateEvidence(bytes,evidenceContext,watermarkPosition) : null;
     console.info("Quality evidence size",{operation:"quality_evidence_upload",fileRole,originalBytes:bytes.byteLength,annotatedBytes:annotatedBytes?.byteLength,transport:staging?"SharePoint upload session":"multipart"});
@@ -371,7 +368,7 @@ export async function POST(request: Request) {
         sharepoint_folder_id: folder.id,
         sharepoint_item_id: uploaded.id,
         sharepoint_web_url: annotatedWebUrl || uploaded.webUrl || null,
-        captured_at: capturedAt,
+        captured_at: capturedAt || null,
         uploaded_by: user.id,
         uploaded_by_label: uploadedByLabel,
       })

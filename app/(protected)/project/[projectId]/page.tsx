@@ -5,9 +5,11 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { getUserRole } from "@/lib/roles";
+import { qualityTimeZone } from "@/lib/quality/date-time";
 import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Project = {
+  timezone?: string | null;
   id: string;
   name: string;
   status?: string | null;
@@ -849,6 +851,7 @@ export default function ProjectDashboard() {
     projectYear: String(new Date().getFullYear()),
     projectSequence: "1",
     location: "",
+    timezone: "",
     totalTowers: "",
     status: "ongoing",
   });
@@ -872,7 +875,7 @@ export default function ProjectDashboard() {
 
     const { data: projectData, error: projectError } = await supabase
       .from("projects")
-      .select("id, name, status, client, client_code, project_year, project_sequence, project_number, location, total_towers, sharepoint_url, sharepoint_tender_url")
+      .select("id, name, status, client, client_code, project_year, project_sequence, project_number, location, timezone, total_towers, sharepoint_url, sharepoint_tender_url")
       .eq("id", projectId)
       .single();
 
@@ -986,6 +989,7 @@ export default function ProjectDashboard() {
         ? String(loadedProject.project_sequence)
         : "1",
       location: loadedProject?.location || "",
+      timezone: loadedProject?.timezone || "",
       totalTowers:
         loadedProject?.total_towers !== null &&
         loadedProject?.total_towers !== undefined
@@ -1847,6 +1851,7 @@ export default function ProjectDashboard() {
         ? String(value.project_sequence)
         : "1",
       location: value.location || "",
+      timezone: value.timezone || "",
       totalTowers:
         value.total_towers !== null && value.total_towers !== undefined
           ? String(value.total_towers)
@@ -1933,6 +1938,7 @@ export default function ProjectDashboard() {
           projectYear,
           projectSequence,
           location: projectForm.location.trim(),
+          timezone: projectForm.timezone.trim() || null,
           totalTowers,
           status: projectForm.status,
         }),
@@ -2303,6 +2309,14 @@ export default function ProjectDashboard() {
                 />
               </div>
 
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Project / site timezone
+                </label>
+                <input className="w-full rounded-xl border border-slate-300 px-3 py-2.5" aria-label="Project timezone" list="project-timezones" value={projectForm.timezone} placeholder={qualityTimeZone()} onChange={event=>setProjectForm(previous=>({...previous,timezone:event.target.value}))} />
+                <datalist id="project-timezones">{["Australia/Sydney","Australia/Brisbane","Australia/Melbourne","Australia/Adelaide","Australia/Perth","Australia/Darwin","Australia/Hobart","Pacific/Auckland","UTC"].map(zone=><option key={zone} value={zone}/>)}</datalist>
+                <p className="mt-1 text-xs text-slate-500">IANA timezone for evidence capture times. Blank uses the Australian default. Daylight saving is automatic.</p>
+              </div>
               <div className="md:col-span-2">
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Project Status

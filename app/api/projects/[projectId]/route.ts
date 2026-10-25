@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
+import { qualityTimeZone, validQualityTimeZone } from "@/lib/quality/date-time";
 
 import {
   deleteProjectSharePointFolders,
@@ -22,6 +23,7 @@ type UpdateProjectBody = {
   projectYear?: number | string;
   projectSequence?: number | string;
   location?: string;
+  timezone?: string | null;
   status?: string;
   totalTowers?: number | string | null;
 };
@@ -115,6 +117,9 @@ export async function PATCH(
     const clientCode =
       body.clientCode?.trim().toUpperCase() ?? "";
     const location = body.location?.trim() ?? "";
+    if(body.timezone!==undefined && body.timezone!==null && typeof body.timezone!=="string") return NextResponse.json({error:"Enter a valid IANA project timezone."},{status:400});
+    const timezone=body.timezone?.trim() || null;
+    if(timezone && !validQualityTimeZone(timezone)) return NextResponse.json({error:"Enter a valid IANA project timezone."},{status:400});
     const status =
       body.status?.trim() || "ongoing";
 
@@ -275,6 +280,7 @@ export async function PATCH(
         project_sequence: projectSequence,
         project_number: projectNumber,
         location,
+        ...(body.timezone!==undefined?{timezone:timezone?qualityTimeZone(timezone):null}:{}),
         status,
         total_towers: totalTowers,
         sharepoint_synced_at:

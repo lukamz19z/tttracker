@@ -2,6 +2,7 @@ import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence
 import { deleteQualityFinding } from "@/lib/offline/quality-deletion";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
+import { nextFindingLocation, savedFindingLocation } from "@/lib/offline/revision-location";
 import { enqueue, queueRows,getCache } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
@@ -642,8 +643,15 @@ export default function RevisionDetailScreen() {
   }
 
   function openAddFinding() {
-    setFindingForm(BLANK_FINDING);
+    setFindingForm({...BLANK_FINDING,...nextFindingLocation(workspace?.workingLocation)});
     setFindingModalOpen(true);
+  }
+
+  async function keepLocation(field:"keepSegment"|"keepLeg",enabled:boolean) {
+    if(!workspace)return;
+    const location=savedFindingLocation({...workspace.workingLocation,keepSegment:workspace.workingLocation?.keepSegment ?? false,keepLeg:workspace.workingLocation?.keepLeg ?? false,segment:"",leg:null,[field]:enabled},findingForm.towerSegment,findingForm.leg);
+    try {setWorkspace(await saveRevisionWorkspace(touchWorkspace({...workspace,workingLocation:location})));}
+    catch(error){Alert.alert("Location preference was not saved",error instanceof Error?error.message:"Please retry.");}
   }
 
   async function saveFinding() {
@@ -714,6 +722,7 @@ export default function RevisionDetailScreen() {
       const next = touchWorkspace({
         ...workspace,
         finalisedAt: null, finaliseRequested: false,
+        workingLocation:savedFindingLocation(workspace.workingLocation,findingForm.towerSegment,findingForm.leg),
         findings: [...workspace.findings, pending],
       });
 
@@ -824,7 +833,7 @@ export default function RevisionDetailScreen() {
 
   async function openLocalPhoto(photo: LocalQualityPhoto, phase: "BEFORE" | "AFTER") {
     try {
-      const ready = await annotateQualityPhoto(photo,{ ...photo.watermarkContext, phase, reference: serverRevision?.revision_number || workspace?.serverRevisionNumber || photo.watermarkContext?.reference || "Pending RECT", tower: tower?.name || photo.watermarkContext?.tower });
+      const ready = await annotateQualityPhoto(photo,{ ...photo.watermarkContext, capturedAt:photo.capturedAt,timeZone:data?.project?.timezone,phase, reference: serverRevision?.revision_number || workspace?.serverRevisionNumber || photo.watermarkContext?.reference || "Pending RECT", tower: tower?.name || photo.watermarkContext?.tower });
       setPreview({ uri: await evidencePreviewUri(ready), name: photo.name });
     } catch(error) { Alert.alert("Could not open photo",error instanceof Error ? error.message : "Evidence annotation failed."); }
   }
@@ -1379,6 +1388,7 @@ export default function RevisionDetailScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <QualityLegField value={findingForm.leg} onChange={leg => setFindingForm(current => ({ ...current, leg }))} />
+            <KeepLocationControl label="Keep Leg for next FLI" checked={workspace?.workingLocation?.keepLeg ?? false} onChange={checked=>void keepLocation("keepLeg",checked)} />
             <Text style={styles.label}>Assigned Flag (optional)</Text>
             <TextInput style={styles.input} value={findingForm.assignedFlag} onChangeText={assignedFlag => setFindingForm(current => ({ ...current, assignedFlag }))} />
             <Text style={styles.label}>
@@ -1423,6 +1433,7 @@ export default function RevisionDetailScreen() {
             ) : null}
 
             <RevisionMemberFields
+              segmentFooter={<KeepLocationControl label="Keep Tower Segment for next FLI" checked={workspace?.workingLocation?.keepSegment ?? false} onChange={checked=>void keepLocation("keepSegment",checked)} />}
               members={availableMembers}
               segment={findingForm.towerSegment}
               memberNumber={findingForm.memberNumber}
@@ -1474,7 +1485,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="Before photos"
-              context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ timeZone:data?.project?.timezone,project:data?.project?.project_number, Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.beforePhotos}
               onChange={(beforePhotos) =>
                 setFindingForm((current) => ({
@@ -1488,7 +1499,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="After photos"
-              context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ timeZone:data?.project?.timezone,project:data?.project?.project_number, Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.afterPhotos}
               onChange={(afterPhotos) =>
                 setFindingForm((current) => ({
@@ -1643,7 +1654,7 @@ export default function RevisionDetailScreen() {
 
               <QualityPhotoPicker
                 label="After photos"
-                context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": clean(rectification.item.fli_number) || "Pending FLI", Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
+                context={{ timeZone:data?.project?.timezone,project:data?.project?.project_number, Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": clean(rectification.item.fli_number) || "Pending FLI", Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
                 photos={
                   rectification.afterPhotos
                 }
@@ -1729,6 +1740,13 @@ export default function RevisionDetailScreen() {
       </Modal>
     </QualityShell>
   );
+}
+
+function KeepLocationControl({label,checked,onChange}:{label:string;checked:boolean;onChange:(checked:boolean)=>void}) {
+  return <Pressable accessibilityRole="checkbox" accessibilityState={{checked}} accessibilityLabel={label} onPress={()=>onChange(!checked)} style={{minHeight:44,flexDirection:"row",alignItems:"center",gap:8}}>
+    <Text style={{fontSize:18,color:checked?"#047857":"#64748b"}}>{checked?"☑":"☐"}</Text>
+    <Text style={{fontSize:12,color:"#475569",flex:1,flexShrink:1}}>{label}</Text>
+  </Pressable>;
 }
 
 const styles = StyleSheet.create({

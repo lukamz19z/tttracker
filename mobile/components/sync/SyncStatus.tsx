@@ -48,7 +48,7 @@ export function SyncStatus({ compact = false }: { compact?: boolean }) {
           failedCount > 0 && styles.warning,
         ]}
       >
-        {label}{lastError ? ` ? ${lastError} ? Tap to retry` : ""}
+        {label}{lastError ? ` · ${lastError} · Tap to retry` : ""}
       </Text>
     </Pressable>
   );

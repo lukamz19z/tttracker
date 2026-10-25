@@ -1,5 +1,6 @@
 
 import { getCache, setCache } from "@/lib/offline/db";
+import type { RevisionWorkingLocation } from "./revision-location";
 import type {
   InspectionStage,
   LocalQualityPhoto,
@@ -37,6 +38,7 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  workingLocation?: RevisionWorkingLocation;
   legacyRouteKeys?:string[];
   syncedAt?:string|null;
   reconciliationStatus?:"pending"|"synced";
@@ -93,7 +95,8 @@ export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<Rev
     const previous = current.find(row => row.routeKey === workspace.routeKey);
     const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
     const reconciledUpdateKeys = [...new Set([...(previous?.reconciledUpdateKeys || []), ...(workspace.reconciledUpdateKeys || [])])];
-    const next = { ...workspace, cachedDetail: workspace.cachedDetail || previous?.cachedDetail, syncedAt: workspace.syncedAt || previous?.syncedAt, reconciliationStatus: workspace.reconciliationStatus || previous?.reconciliationStatus, legacyRouteKeys: [...new Set([...(previous?.legacyRouteKeys || []), ...(workspace.legacyRouteKeys || [])])], serverRevisionNumber: workspace.serverRevisionNumber || previous?.serverRevisionNumber || null, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
+    const workingLocation=(previous?.workingLocation?.updatedAt || "") > (workspace.workingLocation?.updatedAt || "") ? previous?.workingLocation : workspace.workingLocation || previous?.workingLocation;
+    const next = { ...workspace, workingLocation, cachedDetail: workspace.cachedDetail || previous?.cachedDetail, syncedAt: workspace.syncedAt || previous?.syncedAt, reconciliationStatus: workspace.reconciliationStatus || previous?.reconciliationStatus, legacyRouteKeys: [...new Set([...(previous?.legacyRouteKeys || []), ...(workspace.legacyRouteKeys || [])])], serverRevisionNumber: workspace.serverRevisionNumber || previous?.serverRevisionNumber || null, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
       findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
       pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
     };

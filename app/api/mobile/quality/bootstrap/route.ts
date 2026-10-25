@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
       await Promise.all([
         service
           .from("projects")
-          .select("id,name,project_number,status")
+          .select("id,name,project_number,status,timezone")
           .eq("id", projectId)
           .maybeSingle(),
         service

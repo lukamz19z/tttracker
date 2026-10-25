@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 import { qualityDisplayName } from "@/lib/quality/display-name";
+import { formatQualityDateTime, qualityCaptureLabel } from "@/lib/quality/date-time";
+import { browserPhotoCaptureTime } from "@/lib/quality/browser-capture";
 
 import {
   AlertTriangle,
@@ -82,7 +84,7 @@ type QualityFile = {
   file_role: "defect_photo";
   file_name: string;
   mime_type: string | null;
-  captured_at: string | null;
+  captured_at: string | null; created_at?: string | null;
   uploaded_by_label: string | null;
 };
 
@@ -124,6 +126,7 @@ type EditDraft = {
 };
 
 type PhotoView = {
+  recordedAt?: string | null;
   id: string;
   name: string;
   url: string;
@@ -144,13 +147,6 @@ const BLANK_FORM = {
   assigned_to_user_id: "",
   files: [] as File[],
 };
-
-function prettyDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString("en-AU");
-}
 
 function severityClasses(value: DefectRow["severity"]) {
   if (value === "Critical") return "bg-rose-100 text-rose-700";
@@ -205,6 +201,8 @@ export default function TowerDefectsPage() {
   const [photosLoading, setPhotosLoading] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [preview, setPreview] = useState<PhotoView | null>(null);
+  const [projectTimeZone,setProjectTimeZone]=useState<string|null>(null);
+  const prettyDateTime=(value:string|null|undefined)=>formatQualityDateTime(value,projectTimeZone);
 
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -223,7 +221,8 @@ export default function TowerDefectsPage() {
     if (!towerId || !projectId) return;
     setLoading(true);
 
-    const [towerRes, docketRes, defectRes, issueRes, fileRes, memberRes] = await Promise.all([
+    const [projectRes,towerRes, docketRes, defectRes, issueRes, fileRes, memberRes] = await Promise.all([
+      supabase.from("projects").select("timezone").eq("id",projectId).single(),
       supabase.from("towers").select("*").eq("id", towerId).single(),
       supabase
         .from("tower_daily_dockets")
@@ -244,7 +243,7 @@ export default function TowerDefectsPage() {
         .order("name"),
       supabase
         .from("tower_quality_files")
-        .select("id,defect_id,file_role,file_name,mime_type,captured_at,uploaded_by_label")
+        .select("id,defect_id,file_role,file_name,mime_type,captured_at,created_at,uploaded_by_label")
         .eq("tower_id", towerId)
         .eq("file_role", "defect_photo")
         .order("created_at"),
@@ -257,6 +256,8 @@ export default function TowerDefectsPage() {
     ]);
 
     if (towerRes.error) console.error("Tower load error", towerRes.error);
+    if(projectRes.error) throw new Error(projectRes.error.message);
+    setProjectTimeZone(projectRes.data.timezone);
     if (docketRes.error) console.error("Docket load error", docketRes.error);
     if (defectRes.error) console.error("Defect load error", defectRes.error);
     if (issueRes.error) console.error("Issue type load error", issueRes.error);
@@ -376,13 +377,14 @@ export default function TowerDefectsPage() {
 
   async function uploadDefectPhotos(defectId: string, files: File[]) {
     for (const original of files) {
+      const capturedAt=await browserPhotoCaptureTime(original,projectTimeZone);
       const file = await normalisePhoto(original);
       const body = new FormData();
       body.set("projectId", projectId);
       body.set("towerId", towerId);
       body.set("defectId", defectId);
       body.set("fileRole", "defect_photo");
-      body.set("capturedAt", new Date().toISOString());
+      body.set("capturedAt", capturedAt);
       body.set("file", file);
 
       const response = await apiFetch("/api/quality/files/upload", {
@@ -752,7 +754,7 @@ export default function TowerDefectsPage() {
           name: file.file_name,
           url: await fetchQualityFileUrl(file.id),
           source: "sharepoint" as const,
-          capturedAt: file.captured_at,
+          capturedAt: file.captured_at, recordedAt:file.created_at,
           uploadedBy: file.uploaded_by_label,
         })),
       );
@@ -774,7 +776,7 @@ export default function TowerDefectsPage() {
             name: legacy.photo_path.split("/").pop() || "Legacy photo",
             url: data.signedUrl,
             source: "legacy",
-            capturedAt: legacy.created_at,
+            capturedAt: null, recordedAt:legacy.created_at,
             uploadedBy: row.uploaded_by,
           });
         }
@@ -793,7 +795,7 @@ export default function TowerDefectsPage() {
             name: "Legacy photo",
             url: row.photo_url,
             source: "legacy",
-            capturedAt: row.created_at,
+            capturedAt: null, recordedAt:row.created_at,
             uploadedBy: row.uploaded_by,
           });
         } else {
@@ -806,7 +808,7 @@ export default function TowerDefectsPage() {
               name: "Legacy photo",
               url: data.signedUrl,
               source: "legacy",
-              capturedAt: row.created_at,
+              capturedAt: null, recordedAt:row.created_at,
               uploadedBy: row.uploaded_by,
             });
           }
@@ -1158,7 +1160,7 @@ export default function TowerDefectsPage() {
           <div className="mb-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-bold text-slate-900">Add SharePoint evidence</div><div className="text-xs text-slate-500">New photos are stored under 03 Quality → Defects → this tower → this Defect ID.</div></div><label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white"><Camera size={16} />{photoUploading ? "Uploading…" : "Add Photos"}<input type="file" multiple disabled={photoUploading} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addPhotosToOpenDefect(files); }} /></label></div>
           </div>
-          {photosLoading ? <div className="py-12 text-center text-sm text-slate-500">Loading evidence…</div> : <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">{photoViews.map((photo) => <button key={photo.id} type="button" onClick={() => setPreview(photo)} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left"><img src={photo.url} alt={photo.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-xs font-bold text-slate-700">{photo.name}</div><div className="mt-1 text-[10px] text-slate-400">{photo.source === "sharepoint" ? "SharePoint" : "Legacy Supabase"} · {prettyDateTime(photo.capturedAt)}</div></div></button>)}{photoViews.length === 0 ? <div className="col-span-full py-12 text-center text-sm text-slate-500">No photos attached.</div> : null}</div>}
+          {photosLoading ? <div className="py-12 text-center text-sm text-slate-500">Loading evidence…</div> : <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">{photoViews.map((photo) => <button key={photo.id} type="button" onClick={() => setPreview(photo)} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left"><img src={photo.url} alt={photo.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-xs font-bold text-slate-700">{photo.name}</div><div className="mt-1 text-[10px] text-slate-400">{photo.source === "sharepoint" ? "SharePoint" : "Legacy Supabase"} · {qualityCaptureLabel(photo.capturedAt,projectTimeZone,photo.recordedAt)}</div></div></button>)}{photoViews.length === 0 ? <div className="col-span-full py-12 text-center text-sm text-slate-500">No photos attached.</div> : null}</div>}
         </Modal>
       ) : null}
 

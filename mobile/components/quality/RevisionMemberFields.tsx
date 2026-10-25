@@ -1,6 +1,7 @@
 
 import { ChevronDown } from "lucide-react-native";
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -29,11 +30,13 @@ export function RevisionMemberFields({
   drawingNumber,
   onSegmentChange,
   onSelectMember,
+  segmentFooter,
 }: {
   members: QualityMemberCatalogRow[];
   segment: string;
   memberNumber: string;
   drawingNumber: string;
+  segmentFooter?: ReactNode;
   onSegmentChange: (
     segment: string,
     keepCurrentMember: boolean,
@@ -170,6 +173,7 @@ export function RevisionMemberFields({
         </Pressable>
       </View>
 
+      {segmentFooter}
       <View>
         <Text style={styles.label}>
           Member number

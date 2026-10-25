@@ -38,6 +38,7 @@ import {
 } from "react-native";
 
 import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
+import { formatQualityDateTime, qualityCaptureLabel } from "../../../lib/quality/date-time";
 import { QualitySelector } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
@@ -67,14 +68,6 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function prettyDateTime(value: unknown) {
-  const raw = clean(value);
-  if (!raw) return "—";
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime())
-    ? raw
-    : date.toLocaleString("en-AU");
-}
 
 type EditState = {
   leg:string|null;
@@ -813,7 +806,7 @@ function DefectDetailContent() {
                 "Defect photo"}
             </Text>
             <Text style={styles.photoMeta}>
-              {prettyDateTime(file.captured_at)}
+              {qualityCaptureLabel(file.captured_at,data?.project?.timezone,file.created_at)}
             </Text>
           </Pressable>
         ))}
@@ -888,7 +881,7 @@ function DefectDetailContent() {
               {action.action_note}
             </Text>
             <Text style={styles.actionMeta}>
-              {prettyDateTime(action.created_at)}
+              {formatQualityDateTime(action.created_at,data?.project?.timezone)}
               {action.created_by
                 ? ` · ${action.created_by}`
                 : ""}
@@ -1254,7 +1247,7 @@ function DefectDetailContent() {
             {lifecycleMode !== "reopen" ? (
               <>
                 <QualityPhotoPicker
-                  context={{kind:"defect",phase:"AFTER",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
+                  context={{timeZone:data?.project?.timezone,project:data?.project?.project_number,kind:"defect",phase:"AFTER",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
                   label="Close-out / rectification photos (optional)"
                   photos={lifecyclePhotos}
                   onChange={setLifecyclePhotos}
@@ -1333,7 +1326,7 @@ function DefectDetailContent() {
             }
           >
             <QualityPhotoPicker
-              context={{kind:"defect",phase:"BEFORE",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
+              context={{timeZone:data?.project?.timezone,project:data?.project?.project_number,kind:"defect",phase:"BEFORE",leg:defect.leg,reference:defect.defect_number,tower:towerLabel,issue:issueName,segment:defect.segment,member:defect.member_number,drawing:defect.drawing_number,assignedFlag:defect.client_reference}}
               label="Defect photos"
               photos={newPhotos}
               onChange={setNewPhotos}

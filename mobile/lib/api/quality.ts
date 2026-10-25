@@ -3,6 +3,7 @@ import { Image as NativeImage } from "react-native";
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import { offlineFileExists } from "@/lib/offline/files";
 import { reconcileRevisionDetail } from "@/lib/offline/revision-workspaces";
+import { canonicalCaptureTime } from "../../../lib/quality/date-time";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
@@ -465,6 +466,7 @@ export async function uploadQualityPhoto(input: {
   evidencePhase?: string;
 }) {
   if (!offlineFileExists(input.uri)) throw new Error("Local evidence file could not be found.");
+  if(!canonicalCaptureTime(input.capturedAt)) throw new Error("The photo's capture timestamp is missing or invalid. Reopen the evidence before retrying.");
   const original = new File(input.uri);
   const clientMutationId = input.clientMutationId || input.name;
   const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => NativeImage.getSize(input.uri,(width,height)=>resolve({width,height}),reject));

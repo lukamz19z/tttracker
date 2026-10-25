@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),ts=require('typescript'),sharp=require('sharp');
 const {PGlite}=require('@electric-sql/pglite');
-function load(file,mocks={}){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{assert.ok(name in mocks,name);return mocks[name]},exports);return exports;}
+function load(file,mocks={}){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});assert.ok(name in mocks,name);return mocks[name]},exports);return exports;}
 const db=new PGlite(),ids=Array.from({length:6},(_,i)=>`00000000-0000-0000-0000-${String(i+1).padStart(12,'0')}`);
 try {
  await db.exec('create role service_role; create table tower_quality_files(id uuid primary key,revision_item_id uuid,defect_id uuid); create table tower_quality_upload_sessions(id uuid primary key,revision_item_id uuid,defect_id uuid); create table tower_revisions(id uuid primary key,pdf_revision int);');
