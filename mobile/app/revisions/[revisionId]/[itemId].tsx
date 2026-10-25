@@ -376,7 +376,7 @@ export default function RevisionItemScreen() {
           photos={afterPhotos}
           onChange={setAfterPhotos}
           prefix="revision-after"
-          context={{ Tower: tower?.name, "FLI #": item.fli_number || `FLI-${String(item.item_number).padStart(3, "0")}`, Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
+          context={{ Revision: revision.revision_number || revision.fli_number || "Pending RECT", Tower: tower?.name, "FLI #": item.fli_number || "Pending FLI", Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
         />
 
         <Pressable

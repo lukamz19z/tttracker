@@ -81,9 +81,9 @@ export async function POST(request: Request) {
       clean(authUser.user?.email) ||
       "TTTracker user";
 
-    const { data: revision, error } = await service
-      .from("tower_revisions")
-      .insert({
+    // Every attempt is a fresh INSERT using the shared drift-safe DB trigger.
+    // Idempotency wins before/after each attempt; proposed client numbers are ignored.
+    const insert = {
         fli_number: null, // RECT is allocated in revision_number by the shared DB trigger.
         project_id: projectId,
         tower_id: towerId,
@@ -97,18 +97,33 @@ export async function POST(request: Request) {
         created_by: user.id,
         created_by_label: actorLabel,
         mobile_client_mutation_id: clientMutationId || null,
-      })
-      .select("*")
-      .single();
-
-    if (error) {
-      if (error.code === "23505") {
-        const existing = await findExisting();
-        if (existing) return existingResponse(existing);
-        console.warn("Revision identifier conflict", { code: error.code, constraint: error.message.match(/constraint "([^"]+)"/)?.[1] });
-        return NextResponse.json({ error: "The Revision number conflicts with an existing record. Reconcile Quality numbering before retrying.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
+      };
+    let revision: Awaited<ReturnType<typeof findExisting>> = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const result = await service.from("tower_revisions").insert(insert).select("*").single();
+      if (!result.error) { revision = result.data; break; }
+      if (result.error.code !== "23505") throw new Error(result.error.message);
+      const existing = await findExisting();
+      if (existing) return existingResponse(existing);
+      const constraint = result.error.message.match(/constraint "([^"]+)"/)?.[1];
+      if (process.env.NODE_ENV !== "production") {
+        const details = result.error.details || "";
+        const key = details.match(/Key \(([^)]+)\)=\(([^)]+)\)/);
+        const columns = key?.[1].split(",").map(value => value.trim()) || [];
+        const values = key?.[2].split(",").map(value => value.trim()) || [];
+        const index = columns.findIndex(column => ["fli_number","revision_number"].includes(column));
+        let owners = null;
+        if (index >= 0) {
+          let query = service.from("tower_revisions").select("id,project_id,tower_id,sequence_no,revision_number").eq(columns[index],values[index]);
+          if (columns[index] === "revision_number") query = query.eq("project_id",projectId).eq("tower_id",towerId);
+          owners = (await query).data;
+        }
+        console.warn("RECT allocation retry", { attempt: attempt + 1, constraint, conflictingNumber: values[index], owners });
       }
-      throw new Error(error.message);
+      if (!constraint || !/tower_revisions_(fli_number|tower_sequence|project_tower_revision_number)/.test(constraint)) {
+        return NextResponse.json({ error: "This Revision mutation conflicts with another record.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
+      }
+      if (attempt === 3) return NextResponse.json({ error: "Revision numbering is temporarily unavailable. Please retry.", code: "RECT_ALLOCATION_BUSY" }, { status: 503 });
     }
     if (!revision?.id || !revision.revision_number) throw new Error("Revision creation did not return its server ID and RECT number.");
 

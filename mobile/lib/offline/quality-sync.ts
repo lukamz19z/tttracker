@@ -1,3 +1,4 @@
+import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
 import { DependencyBlockedError } from "./sync-errors";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
 import { queueRows, getCache, setCache } from "./db";
@@ -124,6 +125,10 @@ export async function enqueueDefectCreate(
   return clientMutationId;
 }
 
+async function prepareEvidence(photos: LocalQualityPhoto[], phase: "BEFORE" | "AFTER") {
+  return Promise.all(photos.map(photo => annotateQualityPhoto(photo,photoContext(photo.watermarkContext || {},phase,photo.capturedAt))));
+}
+
 export async function enqueueRevisionCreate(
   input: Omit<
     OfflineRevisionCreate,
@@ -138,11 +143,12 @@ export async function enqueueRevisionCreate(
   const clientMutationId =
     input.clientMutationId || mutationId("revision");
 
-  const findings = (input.findings ?? []).map((finding) => ({
+  const findings = await Promise.all((input.findings ?? []).map(async (finding) => ({
     ...finding,
     clientMutationId:
       finding.clientMutationId || mutationId("revision-item"),
-  }));
+    beforePhotos: await prepareEvidence(finding.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(finding.afterPhotos,"AFTER"),
+  })));
 
   await enqueue(
     "quality_revision_create",
@@ -172,6 +178,7 @@ export async function enqueueRevisionItemCreate(
     "quality_revision_item_create",
     {
       ...input,
+      beforePhotos: await prepareEvidence(input.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
       clientMutationId,
     },
     clientMutationId,
@@ -189,6 +196,7 @@ export async function enqueueRevisionItemUpdate(
     "quality_revision_item_update",
     {
       ...input,
+      afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
       clientMutationId,
     },
     clientMutationId,
@@ -201,7 +209,8 @@ export async function cleanupQualityPhotos(
   photos: LocalQualityPhoto[],
 ) {
   for (const photo of photos) {
-    await removeOfflineFile(photo.uri);
+    await removeOfflineFile(photo.originalUri || photo.uri);
+    await removeOfflineFile(photo.annotatedUri);
   }
 }
 
@@ -225,10 +234,20 @@ async function uploadPhotos({
     | "after_photo";
   photos: LocalQualityPhoto[];
 }) {
+  if (!photos.length) return;
+  let context: Record<string,unknown> | null = null;
+  if (revisionId && revisionItemId) {
+    const response = await apiJson<{ evidenceContext: Record<string,unknown> }>(`/api/mobile/quality/revisions/${encodeURIComponent(revisionId)}/items/${encodeURIComponent(revisionItemId)}`, {
+      qualityDiagnostic: { operation: "quality_evidence_context", stage: role, clientMutationId: photos[0]?.id },
+    });
+    context = response.evidenceContext;
+  }
   for (const photo of photos) {
     const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
     if (await getCache<{ id: string }>(receiptKey)) continue;
-    if (!offlineFileExists(photo.uri)) throw new Error("Local evidence file could not be found.");
+    if (context) Object.assign(photo,await annotateQualityPhoto(photo,photoContext(context,role === "after_photo" ? "AFTER" : "BEFORE",photo.capturedAt)));
+    if (context) await persistEvidencePhoto(projectId,photo);
+    if (!offlineFileExists(photo.originalUri || photo.uri)) throw new Error("Local evidence file could not be found.");
     if (__DEV__) console.debug("Quality sync stage", { stage: role, clientMutationId: photo.id, serverRevisionId: revisionId, serverItemId: revisionItemId });
     const uploaded = await uploadQualityPhoto({
       projectId,
@@ -237,7 +256,8 @@ async function uploadPhotos({
       revisionItemId,
       defectId,
       fileRole: role,
-      uri: photo.uri,
+      uri: photo.originalUri || photo.uri,
+      annotatedUri: photo.annotatedUri,
       name: photo.name,
       mimeType: photo.mimeType,
       capturedAt: photo.capturedAt,

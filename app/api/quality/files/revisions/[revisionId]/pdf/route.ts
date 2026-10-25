@@ -1,3 +1,5 @@
+import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
 
@@ -40,11 +42,12 @@ type QualityFileRow = {
   sharepoint_drive_id: string;
   sharepoint_item_id: string;
   annotated_sharepoint_item_id?: string | null;
+  evidence_metadata?: { position?: WatermarkPosition } | null;
   captured_at: string | null;
   uploaded_by_label: string | null;
 };
 
-async function graphFileDataUrl(file: QualityFileRow) {
+async function graphFileDataUrl(file: QualityFileRow, context?: Record<string,unknown>) {
   const token = await getGraphAccessToken();
   const response = await fetch(
     `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(file.annotated_sharepoint_item_id || file.sharepoint_item_id)}/content`,
@@ -62,19 +65,24 @@ async function graphFileDataUrl(file: QualityFileRow) {
     );
   }
 
-  const contentType =
+  let contentType =
     response.headers.get("content-type") || file.mime_type || "image/jpeg";
-  const buffer = Buffer.from(await response.arrayBuffer());
+  let buffer = Buffer.from(await response.arrayBuffer());
+  if (!file.annotated_sharepoint_item_id && context) {
+    const position=file.evidence_metadata?.position;
+    buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},position && WATERMARK_POSITIONS.includes(position) ? position : "bottom-left"));
+    contentType="image/jpeg";
+  }
 
   return `data:${contentType};base64,${buffer.toString("base64")}`;
 }
 
-async function toPdfPhoto(file: QualityFileRow): Promise<RevisionPdfPhoto> {
+async function toPdfPhoto(file: QualityFileRow, context?: Record<string,unknown>): Promise<RevisionPdfPhoto> {
   return {
     id: file.id,
     fileName: file.file_name,
-    mimeType: file.annotated_sharepoint_item_id ? "image/jpeg" : file.mime_type || "image/jpeg",
-    dataUrl: await graphFileDataUrl(file),
+    mimeType: file.annotated_sharepoint_item_id || context ? "image/jpeg" : file.mime_type || "image/jpeg",
+    dataUrl: await graphFileDataUrl(file,context),
     capturedAt: file.captured_at,
     uploadedByLabel: file.uploaded_by_label,
   };
@@ -130,7 +138,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_quality_files")
           .select(
-            "id,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,captured_at,uploaded_by_label",
+            "id,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,uploaded_by_label",
           )
           .eq("revision_id", revision.id)
           .in("file_role", ["before_photo", "after_photo"])
@@ -202,9 +210,10 @@ export async function POST(request: Request, context: RouteContext) {
         (file) => file.revision_item_id === item.id && file.file_role === "after_photo",
       );
 
+      const evidenceContext = revisionEvidenceContext(revision,item,qualityTowerLabel(tower),issueTypeMap.get(item.issue_type_id));
       const [beforePhotos, afterPhotos] = await Promise.all([
-        Promise.all(beforeRows.map(toPdfPhoto)),
-        Promise.all(afterRows.map(toPdfPhoto)),
+        Promise.all(beforeRows.map(file => toPdfPhoto(file,evidenceContext))),
+        Promise.all(afterRows.map(file => toPdfPhoto(file,evidenceContext))),
       ]);
 
       pdfItems.push({

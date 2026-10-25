@@ -1,3 +1,5 @@
+import { loadRevisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { NextResponse } from "next/server";
 
 import {
@@ -26,7 +28,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { data: file, error } = await service
       .from("tower_quality_files")
       .select(
-        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id",
+        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
       )
       .eq("id", fileId)
       .single();
@@ -42,7 +44,7 @@ export async function GET(request: Request, context: RouteContext) {
       projectId: file.project_id,
     });
 
-    const annotated = new URL(request.url).searchParams.get("variant") === "annotated";
+    const annotated = new URL(request.url).searchParams.get("variant") !== "original";
     const itemId = annotated && file.annotated_sharepoint_item_id ? file.annotated_sharepoint_item_id : file.sharepoint_item_id;
     const token = await getGraphAccessToken();
     const response = await fetch(
@@ -61,9 +63,16 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
-    const bytes = await response.arrayBuffer();
+    let bytes = await response.arrayBuffer();
+    const legacyAnnotation = annotated && !file.annotated_sharepoint_item_id && file.revision_id && file.revision_item_id && ["before_photo","after_photo"].includes(file.file_role);
+    if (legacyAnnotation) {
+      const context=await loadRevisionEvidenceContext(service,file.project_id,file.revision_id,file.revision_item_id);
+      const selected=file.evidence_metadata?.position;
+      const position: WatermarkPosition = WATERMARK_POSITIONS.includes(selected) ? selected : "bottom-left";
+      bytes = Uint8Array.from(await annotateEvidence(new Uint8Array(bytes),{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},position)).buffer;
+    }
     const contentType =
-      response.headers.get("content-type") || file.mime_type || "application/octet-stream";
+      (annotated && file.annotated_sharepoint_item_id) || legacyAnnotation ? "image/jpeg" : response.headers.get("content-type") || file.mime_type || "application/octet-stream";
 
     return new Response(bytes, {
       status: 200,

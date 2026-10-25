@@ -213,6 +213,11 @@ export type QualityRevisionDetailPayload = {
 };
 
 export type LocalQualityPhoto = {
+  /** uri remains the original for backward compatibility; never watermark it. */
+  originalUri?: string;
+  annotatedUri?: string;
+  annotationKey?: string;
+  watermarkContext?: Record<string, unknown>;
   width?: number; height?: number;
   watermarkPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
   id: string;

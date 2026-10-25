@@ -11,6 +11,7 @@ export class ApiRequestError extends Error {
 }
 
 export type ApiRequestInit = RequestInit & {
+  qualityDiagnostic?: { operation: string; clientMutationId?: string; stage?: string };
   timeoutMs?: number;
   /** Set false only when two identical GETs must intentionally run separately. */
   dedupe?: boolean;
@@ -69,6 +70,7 @@ async function performFetch(
 ): Promise<Response> {
   const {
     timeoutMs = 30_000,
+    qualityDiagnostic,
     dedupe: _dedupe,
     signal: externalSignal,
     ...requestInit
@@ -125,7 +127,23 @@ async function performFetch(
       response = await fetch(canonicalBase(response.url), options);
     }
     if (__DEV__ && (new URL(url).pathname === "/api/access/me" || /\/api\/(mobile\/)?quality\//.test(new URL(url).pathname))) {
-      console.debug("TTTracker API response", { url: url.split("?")[0], status: response.status, durationMs: Date.now() - startedAt });
+      const path = new URL(url).pathname;
+      const method = String(requestInit.method || "GET").toUpperCase();
+      const ids = path.match(/\/revisions\/([^/]+)(?:\/items\/([^/]+))?/);
+      let mutationId: unknown;
+      if (typeof requestInit.body === "string") {
+        try { mutationId = JSON.parse(requestInit.body).clientMutationId; } catch { /* Not a JSON mutation. */ }
+      } else if (requestInit.body instanceof FormData) mutationId = requestInit.body.get("clientMutationId");
+      const operation = path.endsWith("/files/upload") ? "quality_evidence_upload"
+        : ids?.[2] ? (method === "GET" ? "quality_evidence_context" : "quality_revision_item_update")
+        : path.endsWith("/items") ? "quality_revision_item_create" : "quality_request";
+      // Never log request headers/bodies, credentials, or image bytes.
+      let errorPreview: string | undefined;
+      if (!response.ok) {
+        const raw = await response.clone().text();
+        errorPreview = raw.replace(/Bearer\s+\S+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g, "[redacted]").slice(0, 300);
+      }
+      console.debug("TTTracker API response", { operation, method, path, serverRevisionId: ids?.[1], serverItemId: ids?.[2], clientMutationId: mutationId, ...qualityDiagnostic, status: response.status, allow: response.headers.get("allow"), errorPreview, durationMs: Date.now() - startedAt });
     }
     return response;
   } catch (error) {
@@ -266,7 +284,7 @@ export async function apiJson<T>(
   if (!canDedupe) {
     return jsonBody<T>(
       apiFetch(input, init),
-      "TTTracker request failed.",
+      `${method} ${input.split("?")[0]} failed.`,
     );
   }
 
@@ -287,7 +305,7 @@ export async function apiJson<T>(
 
   const task = jsonBody<T>(
     performFetch(input, init, session),
-    "TTTracker request failed.",
+    `${method} ${input.split("?")[0]} failed.`,
   );
 
   const tracked = task.finally(() => {

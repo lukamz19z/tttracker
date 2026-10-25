@@ -1,3 +1,4 @@
+import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
@@ -82,7 +83,12 @@ export async function POST(request: Request) {
     const watermarkPosition = (field(formData, "watermarkPosition") || "bottom-left") as WatermarkPosition;
     if (!WATERMARK_POSITIONS.includes(watermarkPosition)) return NextResponse.json({ error: "Invalid watermark position." }, { status: 400 });
     const capturedAt = normaliseCapturedAt(field(formData, "capturedAt"));
-    const fileValue = formData.get("file");
+    const displayValue = formData.get("file");
+    const originalValue = formData.get("originalFile");
+    // New mobile uploads carry both; historical clients send only the original.
+    // Canonical server rendering always starts from untouched original bytes.
+    const fileValue = originalValue instanceof File ? originalValue : displayValue;
+    if (originalValue instanceof File && (!(displayValue instanceof File) || !PHOTO_TYPES.has(displayValue.type) || displayValue.size > MAX_FILE_BYTES)) return NextResponse.json({error:"Invalid annotated evidence image."},{status:400});
     const file = fileValue instanceof File && fileValue.size > 0 ? fileValue : null;
 
     if (!projectId || !towerId) {
@@ -244,7 +250,7 @@ export async function POST(request: Request) {
         itemNumber = Number(revisionItem.item_number);
         const issue = revisionItem.issue_type_id ? await service.from("project_field_issue_types").select("name").eq("id", revisionItem.issue_type_id).maybeSingle() : null;
         if (issue?.error) throw new Error(issue.error.message);
-        evidenceContext = { phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", tower: towerLabel, reference: parentReference, fli: revisionItemFli(revisionItem), assignedFlag: revisionItem.assigned_flag, issue: issue?.data?.name || revisionItem.other_issue_text, leg: revisionItem.leg, segment: revisionItem.tower_segment, member: revisionItem.member_number, drawing: revisionItem.drawing_number, capturedAt };
+        evidenceContext = { ...revisionEvidenceContext(revision,revisionItem,towerLabel,issue?.data?.name), phase: fileRole === "before_photo" ? "BEFORE" : "AFTER", capturedAt };
 
 
         folder = await ensureRevisionPhotoFolder({
@@ -275,6 +281,7 @@ export async function POST(request: Request) {
     const keyedName = finalName.replace(/(\.[^.]+)$/, `-${evidenceKey}$1`);
     finalName = keyedName === finalName ? `${finalName}-${evidenceKey}` : keyedName;
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const annotatedBytes = evidenceContext ? await annotateEvidence(bytes,evidenceContext,watermarkPosition) : null;
     const uploaded = await uploadQualityFile({
       driveId: project.sharepoint_drive_id,
       folderId: folder.id,
@@ -287,8 +294,8 @@ export async function POST(request: Request) {
     uploadedItemId = uploaded.id;
 
     let annotatedItemId: string | null = null;
-    if (evidenceContext) {
-      const annotated = await annotateEvidence(bytes, evidenceContext, watermarkPosition);
+    if (annotatedBytes) {
+      const annotated = annotatedBytes;
       const derivative = await uploadQualityFile({ driveId: project.sharepoint_drive_id, folderId: folder.id, fileName: `ANNOTATED-${finalName.replace(/\.[^.]+$/, "")}.jpg`, content: annotated, contentType: "image/jpeg" });
       annotatedItemId = derivative.id; uploadedAnnotatedItemId = derivative.id;
     }

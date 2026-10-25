@@ -1,6 +1,7 @@
+import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
-import { enqueue } from "@/lib/offline/db";
+import { enqueue, queueRows } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
 import { Image } from "expo-image";
@@ -120,7 +121,7 @@ export default function RevisionDetailScreen() {
 
   const { data, loading: metadataLoading } = useQuality();
   const { profile } = useAuth();
-  const { online, syncing, syncNow, refresh: refreshSync } = useSync();
+  const { online, syncing, failedCount, syncNow, refresh: refreshSync } = useSync();
 
   const projectId =
     clean(data?.projectId) || clean(profile?.projectId);
@@ -802,18 +803,22 @@ export default function RevisionDetailScreen() {
     }
   }
 
-  function openLocalPhoto(
-    photo: LocalQualityPhoto,
-  ) {
-    setPreview({
-      uri: photo.uri,
-      name: photo.name,
-    });
+  async function openLocalPhoto(photo: LocalQualityPhoto, phase: "BEFORE" | "AFTER") {
+    try {
+      const ready = await annotateQualityPhoto(photo,{ ...photo.watermarkContext, phase, reference: serverRevision?.revision_number || workspace?.serverRevisionNumber || photo.watermarkContext?.reference || "Pending RECT", tower: tower?.name || photo.watermarkContext?.tower });
+      setPreview({ uri: await evidencePreviewUri(ready), name: photo.name });
+    } catch(error) { Alert.alert("Could not open photo",error instanceof Error ? error.message : "Evidence annotation failed."); }
   }
 
   async function finalise() {
     if (!workspace) return;
     try {
+      const ids = [workspace.routeKey, workspace.serverRevisionId];
+      const unresolved = (await queueRows()).some(row => row.kind.startsWith("quality_") && row.kind !== "quality_revision_finalise" && ids.includes((row.payload as { revisionId?: string }).revisionId || ""));
+      if (syncing || failedCount || unresolved || workspace.findings.length || workspace.pendingUpdates.length || !workspace.serverRevisionId) {
+        Alert.alert("Pending Quality changes", "Sync pending changes before finalising.");
+        return;
+      }
       const next = touchWorkspace({ ...workspace, finaliseRequested: true });
       await saveRevisionWorkspace(next); setWorkspace(next);
       await enqueue("quality_revision_finalise", { revisionId: workspace.serverRevisionId || workspace.routeKey, projectId: workspace.projectId }, `quality-finalise:${workspace.routeKey}`);
@@ -1030,7 +1035,7 @@ export default function RevisionDetailScreen() {
                     key={photo.id}
                     style={styles.photoButton}
                     onPress={() =>
-                      openLocalPhoto(photo)
+                      openLocalPhoto(photo, "BEFORE")
                     }
                   >
                     <Camera
@@ -1050,7 +1055,7 @@ export default function RevisionDetailScreen() {
                     key={photo.id}
                     style={styles.photoButton}
                     onPress={() =>
-                      openLocalPhoto(photo)
+                      openLocalPhoto(photo, "AFTER")
                     }
                   >
                     <Camera
@@ -1205,7 +1210,7 @@ export default function RevisionDetailScreen() {
                     key={photo.id}
                     style={styles.photoButton}
                     onPress={() =>
-                      openLocalPhoto(photo)
+                      openLocalPhoto(photo, "AFTER")
                     }
                   >
                     <Camera
@@ -1428,7 +1433,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="Before photos"
-              context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.beforePhotos}
               onChange={(beforePhotos) =>
                 setFindingForm((current) => ({
@@ -1442,7 +1447,7 @@ export default function RevisionDetailScreen() {
 
             <QualityPhotoPicker
               label="After photos"
-              context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
+              context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": "Pending FLI", Flag: findingForm.assignedFlag, Issue: selectedIssueLabel, Leg: findingForm.leg, Segment: findingForm.towerSegment, Member: findingForm.memberNumber, Drawing: findingForm.drawingNumber }}
               photos={findingForm.afterPhotos}
               onChange={(afterPhotos) =>
                 setFindingForm((current) => ({
@@ -1597,7 +1602,7 @@ export default function RevisionDetailScreen() {
 
               <QualityPhotoPicker
                 label="After photos"
-                context={{ Tower: tower?.name || towerId, Revision: title, "FLI #": clean(rectification.item.fli_number) || `FLI-${String(rectification.item.item_number).padStart(3, "0")}`, Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
+                context={{ Tower: tower?.name || towerId, Revision: serverRevision?.revision_number || workspace?.serverRevisionNumber || serverRevision?.fli_number || "Pending RECT", "FLI #": clean(rectification.item.fli_number) || "Pending FLI", Flag: rectification.item.assigned_flag, Issue: data?.issueTypes.find(issue => issue.id === rectification.item.issue_type_id)?.name || rectification.item.other_issue_text, Leg: rectification.item.leg, Segment: rectification.item.tower_segment, Member: rectification.item.member_number, Drawing: rectification.item.drawing_number }}
                 photos={
                   rectification.afterPhotos
                 }

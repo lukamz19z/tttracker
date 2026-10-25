@@ -1,3 +1,4 @@
+import { QualityEvidenceRenderer } from "@/components/quality/QualityEvidenceRenderer";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import "react-native-gesture-handler";
 import "react-native-url-polyfill/auto";
@@ -19,6 +20,7 @@ export default function RootLayout() {
       <SyncProvider>
         <AccessProvider>
           <PushProvider>
+            <QualityEvidenceRenderer />
             <StatusBar style="dark" />
             <Stack screenOptions={{ headerShown: false }}>
               <Stack.Screen name="index" />

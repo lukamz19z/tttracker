@@ -449,6 +449,7 @@ export async function uploadQualityPhoto(input: {
     | "before_photo"
     | "after_photo";
   uri: string;
+  annotatedUri?: string;
   name: string;
   mimeType: string;
   clientMutationId?: string;
@@ -484,18 +485,20 @@ export async function uploadQualityPhoto(input: {
   form.append(
     "file",
     {
-      uri: input.uri,
-      name: input.name,
-      type: input.mimeType,
+      uri: input.annotatedUri || input.uri,
+      name: input.annotatedUri ? `ANNOTATED-${input.name}.png` : input.name,
+      type: input.annotatedUri ? "image/png" : input.mimeType,
     } as unknown as Blob,
   );
 
+  if (input.annotatedUri) form.append("originalFile",{uri:input.uri,name:input.name,type:input.mimeType} as unknown as Blob);
   const response = await apiFetch(
     "/api/quality/files/upload",
     {
       method: "POST",
       body: form,
       timeoutMs: 120_000,
+      qualityDiagnostic: { operation: "quality_evidence_upload", stage: input.fileRole, clientMutationId: input.clientMutationId },
     },
   );
 
