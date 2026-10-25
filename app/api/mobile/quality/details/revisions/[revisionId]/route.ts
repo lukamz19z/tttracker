@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { qualityTowerDisplay } from "@/lib/quality/tower-label";
 
 import { assertMobileProjectAccess } from "@/lib/mobile/quality";
 import {
@@ -79,7 +80,11 @@ export async function GET(
       );
     }
 
+    const tower=revisionResult.data.tower_id?await service.from("towers").select("name").eq("id",revisionResult.data.tower_id).eq("project_id",projectId).maybeSingle():{data:null,error:null};
+    if(tower.error)throw new Error(tower.error.message);
+    const cachedLabel=filesResult.data?.map(file=>(file.evidence_metadata as Record<string,unknown>|null)?.tower).find(Boolean);
     return NextResponse.json({
+      towerLabel:qualityTowerDisplay(tower.data?.name,cachedLabel),
       projectId,
       generatedAt: new Date().toISOString(),
       revision: revisionResult.data,

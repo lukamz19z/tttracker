@@ -139,6 +139,11 @@ export async function removeQueueRecord(id: string) {
   await db.runAsync("DELETE FROM sync_queue WHERE id = ?", id);
 }
 
+export async function removeCachePrefix(prefix:string) {
+  const db=await database();
+  await db.runAsync("DELETE FROM cache_entries WHERE substr(cache_key,1,?) = ?",prefix.length,prefix);
+}
+
 export async function replaceQueuePayload(id:string,payload:unknown) {
   const db=await database();
   await db.runAsync("UPDATE sync_queue SET payload=?,updated_at=? WHERE id=? AND status!='syncing'",JSON.stringify(payload),new Date().toISOString(),id);

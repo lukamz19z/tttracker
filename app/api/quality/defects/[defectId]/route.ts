@@ -494,8 +494,7 @@ export async function DELETE(
       .from("tower_defects")
       .delete()
       .eq("id", defectId)
-      .eq("project_id", defect.project_id)
-      .eq("tower_id", defect.tower_id);
+      .eq("project_id", defect.project_id);
 
     if (deleteError) {
       throw new Error(`Defect could not be deleted: ${deleteError.message}`);

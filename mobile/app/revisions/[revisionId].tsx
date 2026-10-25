@@ -1,5 +1,7 @@
 import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence";
-import { deleteQualityFinding } from "@/lib/offline/quality-deletion";
+import { deleteQualityFinding, deleteQualityRevision } from "@/lib/offline/quality-deletion";
+import { useAccess } from "@/lib/access";
+import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
 import { nextFindingLocation, savedFindingLocation } from "@/lib/offline/revision-location";
@@ -123,6 +125,10 @@ export default function RevisionDetailScreen() {
   const routeRevisionId = clean(params.revisionId);
 
   const { data, loading: metadataLoading } = useQuality();
+  const {can}=useAccess();
+  const [deleteOpen,setDeleteOpen]=useState(false);
+  const [deleteConfirmation,setDeleteConfirmation]=useState("");
+  const [deleting,setDeleting]=useState(false);
   const { profile } = useAuth();
   const { online, syncing, failedCount, syncNow, refresh: refreshSync } = useSync();
 
@@ -223,7 +229,7 @@ export default function RevisionDetailScreen() {
 
   const title = [
     projectCode,
-    clean(tower?.name) || "Tower",
+    qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel),
     rectCode,
   ]
     .filter(Boolean)
@@ -930,6 +936,21 @@ export default function RevisionDetailScreen() {
     }
   }
 
+  const deleteLabel=serverRevision?rectCode:workspace?.serverRevisionNumber || "Pending Rectification";
+  async function removeRectification() {
+    if(deleteConfirmation!==deleteLabel || deleting || !can("mobile.rectifications"))return;
+    setDeleting(true);
+    try {
+      const result=await deleteQualityRevision({projectId,routeKey:workspace?.routeKey || routeRevisionId,serverRevisionId:serverRevision?.id || workspace?.serverRevisionId,confirm:deleteConfirmation,online});
+      await refreshSync();setDeleteOpen(false);
+      router.replace("/(drawer)/revisions");
+      if(result.warning)Alert.alert("Rectification deleted",result.warning);
+    } catch(error) {
+      Alert.alert("Rectification was not fully deleted",`${error instanceof Error?error.message:"Please retry."}\n\nIf deletion has started, pending changes stay paused. Retry Delete Rectification to finish safely.`);
+      await refreshSync();
+    } finally {setDeleting(false);}
+  }
+
   if (
     workspaceLoading ||
     ((metadataLoading || detailLoading) && !serverRevision && !workspace)
@@ -967,6 +988,19 @@ export default function RevisionDetailScreen() {
       subtitle={`${revisionItems.length + pendingFindingCount} FLI${revisionItems.length + pendingFindingCount === 1 ? "" : "s"} · ${online ? "Online" : "Offline"}`}
     >
       <View style={styles.revisionCard}>
+        {can("mobile.rectifications") ? <Pressable accessibilityLabel="Rectification actions" style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>Alert.alert("Rectification actions",deleteLabel,[{text:"Cancel",style:"cancel"},{text:"Delete Rectification",style:"destructive",onPress:()=>{setDeleteConfirmation("");setDeleteOpen(true);}}])}><Text style={{fontSize:24}}>⋮</Text></Pressable> : null}
+        <Modal visible={deleteOpen} transparent onRequestClose={()=>{if(!deleting)setDeleteOpen(false);}}>
+          <SafeAreaView style={{flex:1,backgroundColor:"rgba(0,0,0,0.65)",justifyContent:"center",padding:20}}>
+            <View style={{backgroundColor:"white",padding:18,borderRadius:14,gap:12}}>
+              <Text style={{fontSize:18,fontWeight:"800"}}>Delete {deleteLabel}?</Text>
+              <Text>This will permanently remove this Rectification, all FLIs, Before/After evidence and generated PDFs.</Text>
+              <Text>Type {deleteLabel} to confirm.</Text>
+              <TextInput accessibilityLabel="Rectification delete confirmation" editable={!deleting} value={deleteConfirmation} onChangeText={setDeleteConfirmation} autoCapitalize="none" style={[styles.input,{minHeight:44}]} />
+              <Pressable disabled={deleting || deleteConfirmation!==deleteLabel} onPress={()=>void removeRectification()} style={{minHeight:44,backgroundColor:deleteConfirmation===deleteLabel?"#be123c":"#cbd5e1",justifyContent:"center",alignItems:"center",borderRadius:10}}><Text style={{color:"white",fontWeight:"800"}}>{deleting?"Deleting...":"Delete Rectification"}</Text></Pressable>
+              <Pressable disabled={deleting} onPress={()=>setDeleteOpen(false)} style={{minHeight:44,justifyContent:"center",alignItems:"center"}}><Text>Cancel</Text></Pressable>
+            </View>
+          </SafeAreaView>
+        </Modal>
         <View style={styles.head}>
           <View style={styles.grow}>
             <Text style={styles.title}>

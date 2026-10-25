@@ -1,5 +1,7 @@
 import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
 import { DependencyBlockedError } from "./sync-errors";
+import { withQualityOperation } from "./quality-operation-lock";
+import { revisionDeletion } from "./revision-deletions";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
 import { queueRows, getCache, setCache,removeCache } from "./db";
 import { apiJson } from "@/lib/api/client";
@@ -129,6 +131,13 @@ export async function enqueueDefectCreate(
   return clientMutationId;
 }
 
+async function enqueueRectOperation<T extends {projectId:string;revisionId?:string;clientMutationId?:string}>(kind:string,payload:T,id:string) {
+  return withQualityOperation(async()=>{
+    if(await revisionDeletion(payload.projectId,payload.revisionId,payload.clientMutationId))return;
+    await enqueue(kind,payload,id);
+  });
+}
+
 async function prepareEvidence(photos: LocalQualityPhoto[], phase: "BEFORE" | "AFTER") {
   return Promise.all(photos.map(photo => annotateQualityPhoto(photo,photoContext(photo.watermarkContext || {},phase,photo.capturedAt))));
 }
@@ -154,8 +163,7 @@ export async function enqueueRevisionCreate(
     beforePhotos: await prepareEvidence(finding.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(finding.afterPhotos,"AFTER"),
   })));
 
-  await enqueue(
-    "quality_revision_create",
+  await enqueueRectOperation("quality_revision_create",
     {
       ...input,
       clientMutationId,
@@ -178,8 +186,7 @@ export async function enqueueRevisionItemCreate(
   const clientMutationId =
     input.clientMutationId || mutationId("revision-item");
 
-  await enqueue(
-    "quality_revision_item_create",
+  await enqueueRectOperation("quality_revision_item_create",
     {
       ...input,
       beforePhotos: await prepareEvidence(input.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
@@ -196,8 +203,7 @@ export async function enqueueRevisionItemUpdate(
 ) {
   const clientMutationId = input.clientMutationId || mutationId("revision-rectification");
 
-  await enqueue(
-    "quality_revision_item_update",
+  await enqueueRectOperation("quality_revision_item_update",
     {
       ...input,
       afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
@@ -503,9 +509,13 @@ export async function cleanupQualityRecord(record: QueueRecord) {
 }
 
 export async function syncQualityQueueRecord(record: QueueRecord) {
+  return withQualityOperation(()=>syncQualityRecord(record));
+}
+async function syncQualityRecord(record:QueueRecord) {
   const payload = record.payload as Partial<OfflineRevisionItemUpdate>;
   const startedAt = Date.now();
   const workspace = (await listRevisionWorkspaces(payload.projectId || "")).find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
+  if(payload.projectId && await revisionDeletion(payload.projectId,payload.revisionId,payload.clientMutationId,workspace?.routeKey,workspace?.serverRevisionId,workspace?.clientMutationId))return;
   const details = { operation: record.kind, clientMutationId: payload.clientMutationId || record.id, localRevisionId: payload.revisionId || workspace?.routeKey, serverRevisionId: workspace?.serverRevisionId, localItemId: payload.itemId, serverItemId: workspace?.serverItems?.[payload.itemId || payload.clientMutationId || ""]?.id, retryCount: record.attempts };
   if (__DEV__) console.debug("Quality sync operation", { ...details, stage: "start" });
   try {

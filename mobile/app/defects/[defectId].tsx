@@ -38,6 +38,7 @@ import {
 } from "react-native";
 
 import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
+import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { formatQualityDateTime, qualityCaptureLabel } from "../../../lib/quality/date-time";
 import { QualitySelector } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
@@ -216,7 +217,7 @@ function DefectDetailContent() {
       towers.find(
         (tower) => clean(tower.id) === towerId,
       )?.name,
-    ) || "Tower";
+    ) || qualityTowerDisplay(detail?.towerLabel);
 
   const issueName =
     clean(

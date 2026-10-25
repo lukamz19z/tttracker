@@ -1,6 +1,7 @@
 
 import { getCache, setCache } from "@/lib/offline/db";
 import type { RevisionWorkingLocation } from "./revision-location";
+import { revisionDeletion } from "./revision-deletions";
 import type {
   InspectionStage,
   LocalQualityPhoto,
@@ -38,6 +39,7 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  towerLabel?:string|null;
   workingLocation?: RevisionWorkingLocation;
   legacyRouteKeys?:string[];
   syncedAt?:string|null;
@@ -91,6 +93,7 @@ export async function listRevisionWorkspaces(projectId: string) {
 let workspaceWrite: Promise<unknown> = Promise.resolve();
 export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<RevisionWorkspace> {
   const task = workspaceWrite.catch(() => undefined).then(async () => {
+    if(await revisionDeletion(workspace.projectId,workspace.routeKey,workspace.serverRevisionId,workspace.clientMutationId)) throw new Error("This Rectification is deleted or pending deletion. Its changes cannot be synced.");
     const current = await listRevisionWorkspaces(workspace.projectId);
     const previous = current.find(row => row.routeKey === workspace.routeKey);
     const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
@@ -111,11 +114,11 @@ export async function removeRevisionWorkspace(
   projectId: string,
   routeKey: string,
 ) {
-  const current = await listRevisionWorkspaces(projectId);
-  await setCache(
-    key(projectId),
-    current.filter((row) => row.routeKey !== routeKey),
-  );
+  const task=workspaceWrite.catch(()=>undefined).then(async()=>{
+    const current=await listRevisionWorkspaces(projectId);
+    await setCache(key(projectId),current.filter(row=>row.routeKey!==routeKey));
+  });
+  workspaceWrite=task;await task;
 }
 
 export async function ensureServerRevisionWorkspace(input: {
@@ -169,7 +172,7 @@ export async function reconcileRevisionDetail(projectId:string,detail:QualityRev
   const revision=detail.revision;
   const existing=(await listRevisionWorkspaces(projectId)).find(row=>row.serverRevisionId===revision.id || row.routeKey===revision.id || Boolean(revision.mobile_client_mutation_id && row.clientMutationId===revision.mobile_client_mutation_id));
   const base=existing || await ensureServerRevisionWorkspace({projectId,revisionId:revision.id,revisionNumber:revision.revision_number,towerId:revision.tower_id,inspectionStage:revision.inspection_stage,inspectionDate:revision.inspection_date,notes:revision.notes,clientInspector:revision.client_inspector,clientCompany:revision.client_company,clientReference:revision.client_reference});
-  return saveRevisionWorkspace({...base,legacyRouteKeys:[...new Set([...(base.legacyRouteKeys || []),...(localRoute?[localRoute]:[])])],clientMutationId:revision.mobile_client_mutation_id || base.clientMutationId,serverRevisionId:revision.id,serverRevisionNumber:revision.revision_number,cachedDetail:detail,syncedAt:new Date().toISOString(),reconciliationStatus:base.findings.length || base.pendingUpdates.length?"pending":"synced"});
+  return saveRevisionWorkspace({...base,towerLabel:(detail.towerLabel && detail.towerLabel!=="Deleted tower"?detail.towerLabel:base.towerLabel) || detail.towerLabel,legacyRouteKeys:[...new Set([...(base.legacyRouteKeys || []),...(localRoute?[localRoute]:[])])],clientMutationId:revision.mobile_client_mutation_id || base.clientMutationId,serverRevisionId:revision.id,serverRevisionNumber:revision.revision_number,cachedDetail:detail,syncedAt:new Date().toISOString(),reconciliationStatus:base.findings.length || base.pendingUpdates.length?"pending":"synced"});
 }
 
 export function createLocalRevisionWorkspace(input: {

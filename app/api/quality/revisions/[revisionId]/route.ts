@@ -1,6 +1,7 @@
 import { revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
 import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
+import { userHasAccess } from "@/lib/access/server";
 
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
 import {
@@ -31,6 +32,7 @@ type QualityFileRow = {
   // Current/expected TTTracker SharePoint metadata names.
   sharepoint_drive_id?: string | null;
   sharepoint_item_id?: string | null;
+  annotated_sharepoint_item_id?: string | null;
 
   // Kept as fallbacks in case an older quality-file row used shorter names.
   drive_id?: string | null;
@@ -124,6 +126,8 @@ export async function DELETE(
     const requestedProjectId = clean(body.projectId);
     const requestedTowerId = clean(body.towerId);
     const confirmation = clean(body.confirm);
+    const allowed=await Promise.all([userHasAccess(service,user.id,"tt.rectifications"),userHasAccess(service,user.id,"mobile.rectifications")]);
+    if(!allowed.some(Boolean))return NextResponse.json({error:"You do not have permission to delete Rectifications."},{status:403});
 
     const { data: revision, error: revisionError } = await service
       .from("tower_revisions")
@@ -134,6 +138,10 @@ export async function DELETE(
     if (revisionError) throw new Error(revisionError.message);
 
     if (!revision) {
+      if(requestedProjectId) {
+        await assertQualityProjectAccess({service,userId:user.id,role,projectId:requestedProjectId});
+        return NextResponse.json({success:true,revisionId,alreadyDeleted:true,warning:null});
+      }
       return NextResponse.json(
         { error: "Revision could not be found." },
         { status: 404 },
@@ -200,8 +208,9 @@ export async function DELETE(
     if (filesError) throw new Error(filesError.message);
 
     const files = (qualityFiles ?? []) as QualityFileRow[];
-    await cleanupQualityUploadSessions(service,{revisionId});
     const sharePointWarnings: string[] = [];
+    try {await cleanupQualityUploadSessions(service,{revisionId});}
+    catch(error) {console.error("Revision pending evidence cleanup failed",{revisionId,error});sharePointWarnings.push("pending evidence transfers");}
 
     /*
      * Remove physical SharePoint files first.
@@ -213,12 +222,12 @@ export async function DELETE(
     for (const file of files) {
       const { driveId, itemId } = sharePointIds(file);
 
-      if (!driveId || !itemId) continue;
+      if (!driveId) continue;
 
-      try {
+      for(const evidenceId of new Set([itemId,clean(file.annotated_sharepoint_item_id)].filter((id):id is string=>Boolean(id)))) try {
         await deleteDriveItem({
           driveId,
-          itemId,
+          itemId:evidenceId,
         });
       } catch (error) {
         console.error(
@@ -230,9 +239,7 @@ export async function DELETE(
           },
         );
 
-        sharePointWarnings.push(
-          clean(file.file_name) || `quality file ${file.id}`,
-        );
+        if(!/\(404\b/.test(error instanceof Error?error.message:""))sharePointWarnings.push(clean(file.file_name) || "unnamed Quality evidence");
       }
     }
 
@@ -284,8 +291,7 @@ export async function DELETE(
       .from("tower_revisions")
       .delete()
       .eq("id", revisionId)
-      .eq("project_id", revision.project_id)
-      .eq("tower_id", revision.tower_id);
+      .eq("project_id", revision.project_id);
 
     if (deleteError) {
       throw new Error(`Revision could not be deleted: ${deleteError.message}`);

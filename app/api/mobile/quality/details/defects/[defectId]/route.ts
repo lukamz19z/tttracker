@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadQualityProject } from "@/lib/quality/server";
 import { qualityTimeZone } from "@/lib/quality/date-time";
+import { qualityTowerDisplay } from "@/lib/quality/tower-label";
 import { qualityDisplayName } from "@/lib/quality/display-name";
 import { defectEvidenceContext } from "@/lib/quality/evidence-context";
 
@@ -52,7 +53,7 @@ export async function GET(
       service
         .from("tower_quality_files")
         .select(
-          "id,project_id,tower_id,defect_id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at",
+          "id,project_id,tower_id,defect_id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at,evidence_metadata",
         )
         .eq("project_id", projectId)
         .eq("defect_id", defectId)
@@ -75,11 +76,12 @@ export async function GET(
     const defect=defectResult.data;
     const project=await loadQualityProject(service,projectId);
     const [tower,issue]=await Promise.all([
-      service.from("towers").select("name").eq("id",defect.tower_id).eq("project_id",projectId).maybeSingle(),
+      defect.tower_id?service.from("towers").select("name").eq("id",defect.tower_id).eq("project_id",projectId).maybeSingle():Promise.resolve({data:null,error:null}),
       defect.issue_type_id ? service.from("project_field_issue_types").select("name").eq("id",defect.issue_type_id).maybeSingle() : Promise.resolve({data:null,error:null}),
     ]);
     if(tower.error || issue.error) throw new Error(tower.error?.message || issue.error?.message);
     return NextResponse.json({
+      towerLabel:qualityTowerDisplay(tower.data?.name,filesResult.data?.map(file=>(file.evidence_metadata as Record<string,unknown>|null)?.tower).find(Boolean)),
       projectId,
       generatedAt: new Date().toISOString(),
       defect: {...defect,assigned_to_label:defect.assigned_to_label ? qualityDisplayName(defect.assigned_to_label):null},

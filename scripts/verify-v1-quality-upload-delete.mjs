@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { PGlite } from "@electric-sql/pglite";
 const require=createRequire(import.meta.url),ts=require("typescript");
-function load(file,mocks) {const exports={};new Function("require","exports",ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});assert.ok(name in mocks,`Missing mock ${name}`);return mocks[name];},exports);return exports;}
+function load(file,mocks) {const exports={};new Function("require","exports",ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("revision-deletions"))return {revisionDeletion:async()=>null,filterDeletedRevisions:async(_project,rows)=>rows};if(name==="./quality-operation-lock")return {withQualityOperation:operation=>operation()};if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});assert.ok(name in mocks,`Missing mock ${name}`);return mocks[name];},exports);return exports;}
 globalThis.__DEV__=false;
 process.env.SUPABASE_SERVICE_ROLE_KEY="test-key-never-a-real-secret";
 const ticketModule=load("lib/quality/upload-ticket.ts",{"node:crypto":require("node:crypto")});

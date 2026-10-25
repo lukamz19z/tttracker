@@ -1,4 +1,5 @@
 import { qualityDisplayName } from "../../../lib/quality/display-name";
+import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
 import { queueRows, cachedValuesWithPrefix, type QueueRecord } from "@/lib/offline/db";
 import type { OfflineDefectCreate } from "@/lib/offline/quality-sync";
@@ -210,9 +211,7 @@ export default function DefectsScreen() {
       new Map(
         towers.map((row) => [
           clean(row.id),
-          clean(row.name) ||
-            clean(row.id) ||
-            "Tower",
+          qualityTowerDisplay(row.name),
         ]),
       ),
     [towers],
@@ -547,7 +546,7 @@ export default function DefectsScreen() {
               <Text style={styles.tower}>
                 {towerById.get(
                   clean(row.tower_id),
-                ) || "Tower"}{" "}
+                ) || "Deleted tower"}{" "}
                 ·{" "}
                 {issueById.get(
                   clean(row.issue_type_id),

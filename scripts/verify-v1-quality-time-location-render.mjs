@@ -57,7 +57,7 @@ const icons=new Proxy({},{get:()=>()=>null});
 function makeScreen(source) {
  const mocks={'react':react,'react/jsx-runtime':jsx,'react-native':native,'react-native-safe-area-context':{SafeAreaView:'View'},'expo-router':{router:{}},'@react-navigation/native':{useFocusEffect:()=>{}},'lucide-react-native':icons,
  '@/contexts/SyncContext':{useSync:()=>scenario.sync},'@/contexts/QualityContext':{useQuality:()=>({data:scenario.data,loading:false,cachedAt:'2026-10-25T05:00:00Z',refreshing:false}),QualityProvider:({children})=>children},'@/contexts/AuthContext':{useAuth:()=>({profile:{}})},
- '@/lib/api/quality':{},'@/lib/offline/revision-workspaces':{},'@/components/common/AppFooter':{AppFooter:()=>null},'@/components/common/PermissionScreen':{PermissionScreen:({children})=>children}};
+ '@/lib/api/quality':{},'@/lib/offline/revision-deletions':{},'@/lib/offline/revision-workspaces':{},'@/components/common/AppFooter':{AppFooter:()=>null},'@/components/common/PermissionScreen':{PermissionScreen:({children})=>children}};
  const load=loader(mocks,source?{[path.resolve('mobile/app/(drawer)/revisions.tsx')]:source}:{});
  mocks['@/components/sync/SyncStatus']=load('mobile/components/sync/SyncStatus.tsx');
  mocks['@/components/quality/QualityShell']=load('mobile/components/quality/QualityShell.tsx');

@@ -1,12 +1,15 @@
 import { cachedValuesWithPrefix, queueRows, enqueue } from "./db";
 import { enqueueRevisionCreate, enqueueRevisionItemCreate, enqueueRevisionItemUpdate } from "./quality-sync";
 import { saveRevisionWorkspace, type RevisionWorkspace } from "./revision-workspaces";
+import { revisionDeletion } from "./revision-deletions";
+import { withQualityOperation } from "./quality-operation-lock";
 
 /** Recover dependencies from durable workspaces even when no detail screen is open. */
 export async function prepareRevisionQueue() {
   const queued = await queueRows();
   const workspaces = await cachedValuesWithPrefix<RevisionWorkspace>("quality:revision-workspaces:");
   for (const workspace of workspaces) {
+    if(await revisionDeletion(workspace.projectId,workspace.routeKey,workspace.serverRevisionId,workspace.clientMutationId))continue;
     const revisionId = workspace.serverRevisionId || workspace.routeKey;
     if (!workspace.serverRevisionId && workspace.clientMutationId) {
       await enqueueRevisionCreate({ ...workspace, findings: [], clientMutationId: workspace.clientMutationId });
@@ -23,8 +26,13 @@ export async function prepareRevisionQueue() {
         update.queuedAt = new Date().toISOString();
       }
     }
-    if (workspace.finaliseRequested && !workspace.finalisedAt) await enqueue("quality_revision_finalise", { revisionId, projectId: workspace.projectId }, `quality-finalise:${workspace.routeKey}`);
-    await saveRevisionWorkspace(workspace);
+    if (workspace.finaliseRequested && !workspace.finalisedAt) await withQualityOperation(async()=>{if(!await revisionDeletion(workspace.projectId,workspace.routeKey,revisionId))await enqueue("quality_revision_finalise", { revisionId, projectId: workspace.projectId }, `quality-finalise:${workspace.routeKey}`);});
+    try {await saveRevisionWorkspace(workspace);}
+    catch(error) {
+      // A delete can win while this planner is awaiting photo preparation.
+      // Skip only that cancelled RECT; keep planning unrelated field work.
+      if(!await revisionDeletion(workspace.projectId,workspace.routeKey,workspace.serverRevisionId,workspace.clientMutationId))throw error;
+    }
   }
 }
 export async function hasRevisionDependencies(revisionId: string, excludingId: string) {

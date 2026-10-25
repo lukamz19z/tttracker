@@ -3,6 +3,7 @@ import { Image as NativeImage } from "react-native";
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import { offlineFileExists } from "@/lib/offline/files";
 import { reconcileRevisionDetail } from "@/lib/offline/revision-workspaces";
+import { filterDeletedRevisions, revisionDeletion } from "@/lib/offline/revision-deletions";
 import { canonicalCaptureTime } from "../../../lib/quality/date-time";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
@@ -222,6 +223,7 @@ export async function listQualityRevisions(input: {
     `/api/mobile/quality/lists/revisions?${params.toString()}`,
     { timeoutMs: 30_000 },
   );
+  payload.rows=await filterDeletedRevisions(input.projectId,payload.rows);
 
   await setCache(
     listKey(
@@ -238,7 +240,7 @@ export async function listQualityRevisions(input: {
   return payload;
 }
 
-export function cachedQualityRevisionList(input: {
+export async function cachedQualityRevisionList(input: {
   projectId: string;
   query?: string;
   status?: string;
@@ -247,7 +249,7 @@ export function cachedQualityRevisionList(input: {
   inspectionStage?: string;
   offset?: number;
 }) {
-  return getCache<QualityListPage<QualityRevisionListRow>>(
+  const cached=await getCache<QualityListPage<QualityRevisionListRow>>(
     listKey(
       "revisions",
       input.projectId,
@@ -261,6 +263,8 @@ export function cachedQualityRevisionList(input: {
       },
     ),
   );
+  if(cached)cached.value.rows=await filterDeletedRevisions(input.projectId,cached.value.rows);
+  return cached;
 }
 
 const defectDetailKey = (
@@ -304,11 +308,14 @@ export async function refreshQualityRevisionDetail(
   projectId: string,
   revisionId: string,
 ) {
+  if((await revisionDeletion(projectId,revisionId))?.state==="deleted")throw new Error("This Rectification has been deleted.");
   const payload =
     await apiJson<QualityRevisionDetailPayload>(
       `/api/mobile/quality/details/revisions/${encodeURIComponent(revisionId)}?projectId=${encodeURIComponent(projectId)}`,
       { timeoutMs: 30_000 },
     );
+
+  if(await revisionDeletion(projectId,revisionId,payload.revision.mobile_client_mutation_id))throw new Error("This Rectification is deleted or pending deletion.");
 
   await setCache(
     revisionDetailKey(projectId, revisionId),
@@ -318,10 +325,11 @@ export async function refreshQualityRevisionDetail(
   return payload;
 }
 
-export function cachedQualityRevisionDetail(
+export async function cachedQualityRevisionDetail(
   projectId: string,
   revisionId: string,
 ) {
+  if((await revisionDeletion(projectId,revisionId))?.state==="deleted")return null;
   return getCache<QualityRevisionDetailPayload>(
     revisionDetailKey(projectId, revisionId),
   );

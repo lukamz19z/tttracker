@@ -1,6 +1,8 @@
 import { useSync } from "@/contexts/SyncContext";
 import { cachedQualityRevisionList,listQualityRevisions } from "@/lib/api/quality";
 import type { QualityRevisionListRow } from "@/types/quality";
+import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
+import { revisionDeletion } from "@/lib/offline/revision-deletions";
 
 import { router, type Href } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -84,7 +86,7 @@ function RevisionsScreenContent() {
       new Map(
         towers.map((row) => [
           clean(row.id),
-          clean(row.name) || clean(row.id) || "Tower",
+          qualityTowerDisplay(row.name),
         ]),
       ),
     [towers],
@@ -150,7 +152,9 @@ function RevisionsScreenContent() {
 
         const seenIds=new Set(revisions.map(row=>row.id));
         const seenMutations=new Set(revisions.map(row=>row.mobile_client_mutation_id).filter(Boolean));
-        setLocalRevisions(rows.filter(row=>!seenIds.has(row.serverRevisionId || "") && !seenMutations.has(row.clientMutationId || "")));
+        void Promise.all(rows.map(row=>revisionDeletion(row.projectId,row.routeKey,row.serverRevisionId,row.clientMutationId))).then(markers=>{
+          if(active)setLocalRevisions(rows.filter((row,index)=>markers[index]?.state!=="deleted" && !seenIds.has(row.serverRevisionId || "") && !seenMutations.has(row.clientMutationId || "")));
+        });
 
       });
 
@@ -248,7 +252,7 @@ function RevisionsScreenContent() {
               <Text style={styles.number}>
                 {[
                   projectCode,
-                  towerById.get(revision.towerId) || "Tower",
+                  qualityTowerDisplay(towerById.get(revision.towerId),revision.towerLabel,revision.cachedDetail?.towerLabel),
                   revision.serverRevisionNumber || "RECT · Pending sync",
                 ]
                   .filter(Boolean)
@@ -286,11 +290,11 @@ function RevisionsScreenContent() {
             <View style={styles.cardHead}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.number}>
-                  {[projectCode, towerById.get(clean(row.tower_id)), clean(row.revision_number) || clean(row.fli_number) || `RECT-${String(Number(row.sequence_no ?? 1)).padStart(2, "0")}`].filter(Boolean).join(" ")}
+                  {[projectCode, qualityTowerDisplay(towerById.get(clean(row.tower_id))), clean(row.revision_number) || clean(row.fli_number) || `RECT-${String(Number(row.sequence_no ?? 1)).padStart(2, "0")}`].filter(Boolean).join(" ")}
                 </Text>
 
                 <Text style={styles.tower}>
-                  {towerById.get(clean(row.tower_id)) || "Tower"} ·{" "}
+                  {qualityTowerDisplay(towerById.get(clean(row.tower_id)))} ·{" "}
                   {clean(row.inspection_stage) || "Inspection"}
                 </Text>
               </View>

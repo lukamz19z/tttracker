@@ -200,6 +200,7 @@ export type QualityListPage<T> = {
 };
 
 export type QualityDefectDetailPayload = {
+  towerLabel?:string;
   projectId: string;
   generatedAt: string;
   defect: QualityDefect;
@@ -207,6 +208,7 @@ export type QualityDefectDetailPayload = {
 };
 
 export type QualityRevisionDetailPayload = {
+  towerLabel?:string;
   projectId: string;
   generatedAt: string;
   revision: QualityRevision;
