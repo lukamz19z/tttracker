@@ -1,7 +1,8 @@
 import { defectEvidenceContext, revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
-import { annotateEvidence, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
+import { annotateEvidence, EVIDENCE_WATERMARK_VERSION, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
+import { qualityEvidenceName } from "@/lib/quality/file-names";
 import { NextResponse } from "next/server";
 
 import {
@@ -19,7 +20,7 @@ import {
   safeQualitySharePointPart,
   uploadQualityFile,
 } from "@/lib/sharepoint/quality";
-import { deleteDriveItem, downloadDriveItemContent, graphRequest } from "@/lib/sharepoint/graph";
+import { deleteDriveItem, downloadDriveItemContent, ensureDriveFolder, graphRequest } from "@/lib/sharepoint/graph";
 import { verifyQualityUpload } from "@/lib/quality/upload-ticket";
 import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
 
@@ -312,18 +313,27 @@ export async function POST(request: Request) {
       }
     }
 
-    // Distinct captures must never overwrite each other when names/timestamps match.
-    // A retry uses the same suffix, preserving SharePoint identity.
-    const evidenceKey = createHash("sha256").update(mutationKey || randomUUID()).digest("hex").slice(0, 16);
-    const keyedName = finalName.replace(/(\.[^.]+)$/, `-${evidenceKey}$1`);
-    finalName = keyedName === finalName ? `${finalName}-${evidenceKey}` : keyedName;
+    let photoNumber:number|null=null;
+    const phase=String(evidenceContext?.phase || "EVIDENCE");
+    if(evidenceContext) {
+      if(!transferId) {
+        const tracked=await service.from("tower_quality_upload_sessions").upsert({idempotency_key:createHash("sha256").update(mutationKey || randomUUID()).digest("hex"),project_id:projectId,tower_id:towerId,user_id:user.id,revision_id:revisionId,revision_item_id:revisionItemId,defect_id:defectId,drive_id:project.sharepoint_drive_id,folder_id:folder.id,staging_name:"Unused multipart staging placeholder"},{onConflict:"idempotency_key"}).select("id").single();
+        if(tracked.error || !tracked.data) throw new Error(tracked.error?.message || "Photo numbering receipt was not saved.");
+        const id=String(tracked.data.id);transferId=id;
+        cleanupTransfer=()=>cleanupQualityUploadSessions(service,{sessionId:id,preservePublished:true});
+      }
+      const number=await service.rpc("claim_v1_quality_photo_number",{target_file:null,target_session:transferId,photo_phase:phase});
+      if(number.error || !number.data) throw new Error(number.error?.message || "Photo number was not allocated.");
+      photoNumber=Number(number.data);
+      finalName=qualityEvidenceName(project.project_number,towerLabel,evidenceContext.reference,evidenceContext.fli,phase,photoNumber);
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     const annotatedBytes = evidenceContext ? await annotateEvidence(bytes,evidenceContext,watermarkPosition) : null;
     console.info("Quality evidence size",{operation:"quality_evidence_upload",fileRole,originalBytes:bytes.byteLength,annotatedBytes:annotatedBytes?.byteLength,transport:staging?"SharePoint upload session":"multipart"});
     const uploaded = await uploadQualityFile({
       driveId: project.sharepoint_drive_id,
-      folderId: folder.id,
-      fileName: finalName,
+      folderId: evidenceContext ? (await ensureDriveFolder({driveId:project.sharepoint_drive_id,parentItemId:folder.id,name:"Originals"})).id : folder.id,
+      fileName: evidenceContext ? `ORIGINAL_${finalName.replace(/\.jpg$/i,file.type==="image/png"?".png":".jpg")}` : finalName,
       content: bytes,
       contentType: file.type || "application/octet-stream",
     });
@@ -333,17 +343,20 @@ export async function POST(request: Request) {
     if(transferId) {const saved=await service.from("tower_quality_upload_sessions").update({published_item_id:uploaded.id}).eq("id",transferId);if(saved.error) throw new Error(saved.error.message);}
 
     let annotatedItemId: string | null = null;
+    let annotatedWebUrl: string | null = null;
     if (annotatedBytes) {
       const annotated = annotatedBytes;
-      const derivative = await uploadQualityFile({ driveId: project.sharepoint_drive_id, folderId: folder.id, fileName: `ANNOTATED-${finalName.replace(/\.[^.]+$/, "")}.jpg`, content: annotated, contentType: "image/jpeg" });
+      const derivative = await uploadQualityFile({ driveId: project.sharepoint_drive_id, folderId: folder.id, fileName: finalName, content: annotated, contentType: "image/jpeg" });
       annotatedItemId = derivative.id; uploadedAnnotatedItemId = derivative.id;
+      annotatedWebUrl = derivative.webUrl || null;
       if(transferId) {const saved=await service.from("tower_quality_upload_sessions").update({annotated_item_id:derivative.id}).eq("id",transferId);if(saved.error) throw new Error(saved.error.message);}
     }
     const { data: savedFile, error: fileError } = await service
       .from("tower_quality_files")
       .insert({
         mobile_client_mutation_id: mutationKey,
-        evidence_metadata: evidenceContext ? { ...evidenceContext, position: watermarkPosition, lines: watermarkLines(evidenceContext) } : null,
+        photo_no:photoNumber,evidence_type:evidenceContext?phase:null,
+        evidence_metadata: evidenceContext ? { ...evidenceContext, watermarkVersion:EVIDENCE_WATERMARK_VERSION,position: watermarkPosition, lines: watermarkLines(evidenceContext) } : null,
         annotated_sharepoint_item_id: annotatedItemId,
         project_id: projectId,
         tower_id: towerId,
@@ -351,13 +364,13 @@ export async function POST(request: Request) {
         revision_id: revisionId,
         revision_item_id: revisionItemId,
         file_role: fileRole,
-        file_name: uploaded.name || finalName,
-        mime_type: file.type || null,
+        file_name: finalName,
+        mime_type: annotatedBytes ? "image/jpeg" : file.type || null,
         sharepoint_site_id: project.sharepoint_site_id,
         sharepoint_drive_id: project.sharepoint_drive_id,
         sharepoint_folder_id: folder.id,
         sharepoint_item_id: uploaded.id,
-        sharepoint_web_url: uploaded.webUrl ?? null,
+        sharepoint_web_url: annotatedWebUrl || uploaded.webUrl || null,
         captured_at: capturedAt,
         uploaded_by: user.id,
         uploaded_by_label: uploadedByLabel,

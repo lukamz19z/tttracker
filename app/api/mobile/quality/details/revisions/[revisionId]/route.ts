@@ -56,7 +56,7 @@ export async function GET(
         service
           .from("tower_quality_files")
           .select(
-            "id,project_id,tower_id,defect_id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at",
+            "id,project_id,tower_id,defect_id,revision_id,revision_item_id,file_role,file_name,mime_type,annotated_sharepoint_item_id,evidence_metadata,photo_no,evidence_type,captured_at,uploaded_by_label,created_at",
           )
           .eq("project_id", projectId)
           .eq("revision_id", revisionId)

@@ -4,6 +4,7 @@ import type {
   InspectionStage,
   LocalQualityPhoto,
   RevisionItemStatus,
+  QualityRevisionDetailPayload,
 } from "@/types/quality";
 
 export type PendingRevisionFinding = {
@@ -36,6 +37,10 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  legacyRouteKeys?:string[];
+  syncedAt?:string|null;
+  reconciliationStatus?:"pending"|"synced";
+  cachedDetail?:QualityRevisionDetailPayload;
   serverItems?: Record<string, { id: string; fli_number: string | null; item_number?: number | null }>;
   reconciledFindingIds?: string[];
   reconciledUpdateKeys?: string[];
@@ -88,7 +93,7 @@ export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<Rev
     const previous = current.find(row => row.routeKey === workspace.routeKey);
     const reconciledFindingIds = [...new Set([...(previous?.reconciledFindingIds || []), ...(workspace.reconciledFindingIds || [])])];
     const reconciledUpdateKeys = [...new Set([...(previous?.reconciledUpdateKeys || []), ...(workspace.reconciledUpdateKeys || [])])];
-    const next = { ...workspace, serverRevisionNumber: workspace.serverRevisionNumber || previous?.serverRevisionNumber || null, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
+    const next = { ...workspace, cachedDetail: workspace.cachedDetail || previous?.cachedDetail, syncedAt: workspace.syncedAt || previous?.syncedAt, reconciliationStatus: workspace.reconciliationStatus || previous?.reconciliationStatus, legacyRouteKeys: [...new Set([...(previous?.legacyRouteKeys || []), ...(workspace.legacyRouteKeys || [])])], serverRevisionNumber: workspace.serverRevisionNumber || previous?.serverRevisionNumber || null, serverItems: { ...previous?.serverItems, ...workspace.serverItems }, serverRevisionId: workspace.serverRevisionId || previous?.serverRevisionId || null, reconciledFindingIds, reconciledUpdateKeys,
       findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
       pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
     };
@@ -154,6 +159,14 @@ export async function ensureServerRevisionWorkspace(input: {
 
   await saveRevisionWorkspace(workspace);
   return workspace;
+}
+
+/** A confirmed server detail is a durable readable cache, never a delete signal. */
+export async function reconcileRevisionDetail(projectId:string,detail:QualityRevisionDetailPayload,localRoute?:string) {
+  const revision=detail.revision;
+  const existing=(await listRevisionWorkspaces(projectId)).find(row=>row.serverRevisionId===revision.id || row.routeKey===revision.id || Boolean(revision.mobile_client_mutation_id && row.clientMutationId===revision.mobile_client_mutation_id));
+  const base=existing || await ensureServerRevisionWorkspace({projectId,revisionId:revision.id,revisionNumber:revision.revision_number,towerId:revision.tower_id,inspectionStage:revision.inspection_stage,inspectionDate:revision.inspection_date,notes:revision.notes,clientInspector:revision.client_inspector,clientCompany:revision.client_company,clientReference:revision.client_reference});
+  return saveRevisionWorkspace({...base,legacyRouteKeys:[...new Set([...(base.legacyRouteKeys || []),...(localRoute?[localRoute]:[])])],clientMutationId:revision.mobile_client_mutation_id || base.clientMutationId,serverRevisionId:revision.id,serverRevisionNumber:revision.revision_number,cachedDetail:detail,syncedAt:new Date().toISOString(),reconciliationStatus:base.findings.length || base.pendingUpdates.length?"pending":"synced"});
 }
 
 export function createLocalRevisionWorkspace(input: {

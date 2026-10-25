@@ -2,6 +2,9 @@ import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
+import sharp from "sharp";
+import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
+import { qualityPdfName } from "@/lib/quality/file-names";
 
 import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
@@ -20,7 +23,6 @@ import {
 } from "@/lib/quality/server";
 import {
   ensureRevisionFolder,
-  safeQualitySharePointPart,
   uploadQualityFile,
 } from "@/lib/sharepoint/quality";
 import { deleteDriveItem, getGraphAccessToken } from "@/lib/sharepoint/graph";
@@ -33,6 +35,7 @@ type RouteContext = {
 };
 
 type QualityFileRow = {
+  project_id:string;tower_id:string;defect_id:string|null;photo_no?:number|null;
   id: string;
   revision_id: string;
   revision_item_id: string | null;
@@ -42,7 +45,7 @@ type QualityFileRow = {
   sharepoint_drive_id: string;
   sharepoint_item_id: string;
   annotated_sharepoint_item_id?: string | null;
-  evidence_metadata?: { position?: WatermarkPosition } | null;
+  evidence_metadata?: Record<string,unknown> | null;
   captured_at: string | null;
   uploaded_by_label: string | null;
 };
@@ -67,10 +70,12 @@ async function graphFileDataUrl(file: QualityFileRow, context?: Record<string,un
 
   let contentType =
     response.headers.get("content-type") || file.mime_type || "image/jpeg";
-  let buffer = Buffer.from(await response.arrayBuffer());
+  let buffer: Buffer = Buffer.from(await response.arrayBuffer());
+  try {buffer=await sharp(buffer).rotate().jpeg({quality:90}).toBuffer();contentType="image/jpeg";}
+  catch {throw new Error(`Evidence image could not be decoded: ${file.file_name}.`);}
   if (!file.annotated_sharepoint_item_id && context) {
     const position=file.evidence_metadata?.position;
-    buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},position && WATERMARK_POSITIONS.includes(position) ? position : "bottom-left"));
+    buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},typeof position === "string" && WATERMARK_POSITIONS.includes(position as WatermarkPosition) ? position as WatermarkPosition : "bottom-left"));
     contentType="image/jpeg";
   }
 
@@ -96,10 +101,14 @@ export async function GET() {
 }
 
 export async function POST(request: Request, context: RouteContext) {
+  let stage="authentication";
+  const started=Date.now();
+  const checkpoint=(value:string)=>{stage=value;if(process.env.NODE_ENV!=="production")console.info("Revision PDF stage",{stage,durationMs:Date.now()-started});};
   try {
     const { revisionId } = await context.params;
     const { service, user, role } = await requireQualityUser(request);
 
+    checkpoint("Revision load");
     const { data: revision, error: revisionError } = await service
       .from("tower_revisions")
       .select(
@@ -119,6 +128,7 @@ export async function POST(request: Request, context: RouteContext) {
       projectId: revision.project_id,
     });
 
+    checkpoint("project, tower, items, issue labels, evidence and branding load");
     const [project, tower, itemResult, issueTypeResult, fileResult, branding] =
       await Promise.all([
         loadQualityProject(service, revision.project_id),
@@ -138,7 +148,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_quality_files")
           .select(
-            "id,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,uploaded_by_label",
+            "id,project_id,tower_id,defect_id,photo_no,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,uploaded_by_label",
           )
           .eq("revision_id", revision.id)
           .in("file_role", ["before_photo", "after_photo"])
@@ -177,14 +187,14 @@ export async function POST(request: Request, context: RouteContext) {
       return !issueSelected || !before || !after;
     });
 
-    if (incomplete.length > 0) {
+    if (incomplete.some(item=>!item.issue_type_id && !String(item.other_issue_text || "").trim())) {
       const labels = incomplete
         .slice(0, 6)
         .map((item) => `Item ${String(item.item_number).padStart(3, "0")}`)
         .join(", ");
       return NextResponse.json(
         {
-          error: `${labels}${incomplete.length > 6 ? " and others" : ""} need a common issue (or Other description), Before photo and After photo before the controlled PDF can be created.`,
+          error: `${labels}${incomplete.length > 6 ? " and others" : ""} need an issue type or Other description before a report can be created.`,
         },
         { status: 409 },
       );
@@ -200,6 +210,7 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    checkpoint("canonical evidence publication, download and image decode");
     const pdfItems: RevisionPdfItem[] = [];
     for (const item of items) {
       const beforeRows = files.filter(
@@ -212,8 +223,8 @@ export async function POST(request: Request, context: RouteContext) {
 
       const evidenceContext = revisionEvidenceContext(revision,item,qualityTowerLabel(tower),issueTypeMap.get(item.issue_type_id));
       const [beforePhotos, afterPhotos] = await Promise.all([
-        Promise.all(beforeRows.map(file => toPdfPhoto(file,evidenceContext))),
-        Promise.all(afterRows.map(file => toPdfPhoto(file,evidenceContext))),
+        Promise.all(beforeRows.map(async file => toPdfPhoto({...file,...await ensurePublishedQualityEvidence(service,file),revision_id:file.revision_id},evidenceContext))),
+        Promise.all(afterRows.map(async file => toPdfPhoto({...file,...await ensurePublishedQualityEvidence(service,file),revision_id:file.revision_id},evidenceContext))),
       ]);
 
       pdfItems.push({
@@ -238,16 +249,21 @@ export async function POST(request: Request, context: RouteContext) {
       });
     }
 
-    const reportRevision = Math.max(1, Number(revision.pdf_revision ?? 0) + 1);
+    const reserved=await service.rpc("reserve_v1_revision_pdf_number",{target_revision:revision.id});
+    if(reserved.error || !reserved.data) throw new Error(reserved.error?.message || "PDF revision could not be reserved.");
+    const reportRevision = Number(reserved.data);
+    const complete=incomplete.length===0;
     const generatedAt = new Date().toISOString();
     const generatedBy = qualityUserLabel(user);
 
+    checkpoint("PDF rendering");
     const pdf = generateRevisionPdf({
       projectName: project.name || "",
       projectNumber: project.project_number || "",
       towerName: qualityTowerLabel(tower),
       fliNumber: revisionReference(revision),
       reportRevision,
+      reportState:complete?"Completed evidence":"Evidence pending — not finalised",
       inspectionStage: revision.inspection_stage,
       inspectionDate: revision.inspection_date,
       clientInspector: revision.client_inspector,
@@ -272,6 +288,7 @@ export async function POST(request: Request, context: RouteContext) {
       items: pdfItems,
     });
 
+    checkpoint("SharePoint folder resolution");
     const revisionFolder = await ensureRevisionFolder({
       driveId: project.sharepoint_drive_id,
       projectFolderId: project.sharepoint_folder_id,
@@ -279,7 +296,8 @@ export async function POST(request: Request, context: RouteContext) {
       fliNumber: revisionReference(revision),
     });
 
-    const fileName = `${safeQualitySharePointPart(revisionReference(revision))}-R${String(reportRevision).padStart(2, "0")}.pdf`;
+    const fileName = qualityPdfName(project.project_number,qualityTowerLabel(tower),revisionReference(revision),reportRevision);
+    checkpoint("SharePoint PDF upload");
     const uploaded = await uploadQualityFile({
       driveId: project.sharepoint_drive_id,
       folderId: revisionFolder.id,
@@ -288,6 +306,7 @@ export async function POST(request: Request, context: RouteContext) {
       contentType: "application/pdf",
     });
 
+    checkpoint("tower_quality_files insert");
     const { data: savedFile, error: saveFileError } = await service
       .from("tower_quality_files")
       .insert({
@@ -319,17 +338,15 @@ export async function POST(request: Request, context: RouteContext) {
       throw new Error(saveFileError?.message || "PDF metadata could not be saved.");
     }
 
+    checkpoint("latest_pdf_file_id and PDF revision update");
     const revisionUpdate = await service
       .from("tower_revisions")
       .update({
         pdf_revision: reportRevision,
         latest_pdf_file_id: savedFile.id,
-        status: "Closed",
-        completed_by: user.id,
-        completed_by_label: generatedBy,
-        completed_at: generatedAt,
+        ...(complete?{status:"Closed",completed_by:user.id,completed_by_label:generatedBy,completed_at:generatedAt}:{}),
       })
-      .eq("id", revision.id);
+      .eq("id", revision.id).or(`pdf_revision.is.null,pdf_revision.lte.${reportRevision}`);
 
     if (revisionUpdate.error) {
       throw new Error(
@@ -338,11 +355,11 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     // Findings represented in a controlled PDF have completed rectification evidence.
-    const itemUpdate = await service
+    const itemUpdate = complete ? await service
       .from("tower_revision_items")
       .update({ status: "Verified" })
       .eq("revision_id", revision.id)
-      .neq("status", "Verified");
+      .neq("status", "Verified") : {error:null};
 
     if (itemUpdate.error) {
       console.error("Revision PDF created but finding verification update failed", itemUpdate.error);
@@ -354,9 +371,9 @@ export async function POST(request: Request, context: RouteContext) {
       file: savedFile,
     });
   } catch (error) {
-    console.error("REVISION PDF ERROR", error);
+    console.error("REVISION PDF ERROR", {stage,durationMs:Date.now()-started,error:error instanceof Error?error.message:"Unknown error"});
 
     const apiError = qualityApiError(error);
-    return NextResponse.json({ error: apiError.message }, { status: apiError.status });
+    return NextResponse.json({ error: apiError.status===500?`Revision PDF failed during ${stage}: ${apiError.message}`:apiError.message }, { status: apiError.status });
   }
 }

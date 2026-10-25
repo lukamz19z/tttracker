@@ -2,6 +2,7 @@ import { fetch as binaryFetch } from "expo/fetch";
 import { Image as NativeImage } from "react-native";
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import { offlineFileExists } from "@/lib/offline/files";
+import { reconcileRevisionDetail } from "@/lib/offline/revision-workspaces";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
@@ -280,6 +281,7 @@ export async function refreshQualityDefectDetail(
     defectDetailKey(projectId, defectId),
     payload,
   );
+  if(payload.defect.mobile_client_mutation_id) await setCache(`quality:defect-mapping:${projectId}:${payload.defect.mobile_client_mutation_id}`,payload.defect);
   return payload;
 }
 
@@ -311,6 +313,7 @@ export async function refreshQualityRevisionDetail(
     revisionDetailKey(projectId, revisionId),
     payload,
   );
+  await reconcileRevisionDetail(projectId,payload);
   return payload;
 }
 

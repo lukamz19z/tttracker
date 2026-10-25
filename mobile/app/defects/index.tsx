@@ -1,6 +1,6 @@
 import { qualityDisplayName } from "../../../lib/quality/display-name";
 import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
-import { queueRows, type QueueRecord } from "@/lib/offline/db";
+import { queueRows, cachedValuesWithPrefix, type QueueRecord } from "@/lib/offline/db";
 import type { OfflineDefectCreate } from "@/lib/offline/quality-sync";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, type Href } from "expo-router";
@@ -44,7 +44,7 @@ import {
   refreshQualityMemberCatalog,
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
-import type { QualityDefectListRow } from "@/types/quality";
+import type { QualityDefect, QualityDefectListRow } from "@/types/quality";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -242,6 +242,11 @@ export default function DefectsScreen() {
     let hadCache = false;
 
     try {
+      // Server-confirmed mappings survive queue removal and failed list refreshes.
+      const mapped=await cachedValuesWithPrefix<QualityDefect>(`quality:defect-mapping:${projectId}:`);
+      const matching=mapped.filter(row=>row.id && (!towerId || row.tower_id===towerId) && (!memberNumber || row.member_number===memberNumber) && (!issueTypeId || row.issue_type_id===issueTypeId) && (status==="All" || row.status===status) && (!debouncedQuery || [row.defect_number,row.description,row.segment,row.member_number,row.drawing_number].join(" ").toLowerCase().includes(debouncedQuery.toLowerCase()))).map(row=>({...row,evidenceCount:0}));
+      const merge=(server:QualityDefectListRow[])=>[...new Map([...matching,...server].map(row=>[row.id,row])).values()];
+      if(matching.length) {hadCache=true;setRows(matching);}
       const cached =
         await cachedQualityDefectList({
           projectId,
@@ -255,7 +260,7 @@ export default function DefectsScreen() {
 
       if (cached?.value) {
         hadCache = true;
-        setRows(cached.value.rows ?? []);
+        setRows(merge(cached.value.rows ?? []));
         setNextOffset(
           cached.value.nextOffset ?? null,
         );
@@ -281,7 +286,7 @@ export default function DefectsScreen() {
         limit: 25,
       });
 
-      setRows(live.rows ?? []);
+      setRows(merge(live.rows ?? []));
       setNextOffset(live.nextOffset ?? null);
     } catch (loadError) {
       if (!hadCache) {
@@ -306,8 +311,8 @@ export default function DefectsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadFirstPage();
-    }, [loadFirstPage]),
+      if(!syncing) void loadFirstPage();
+    }, [loadFirstPage,syncing]),
   );
 
   const loadMore = useCallback(async () => {

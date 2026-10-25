@@ -2,7 +2,7 @@ import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence
 import { deleteQualityFinding } from "@/lib/offline/quality-deletion";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
-import { enqueue, queueRows } from "@/lib/offline/db";
+import { enqueue, queueRows,getCache } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
 import { Image } from "expo-image";
@@ -62,7 +62,7 @@ import {
   ensureServerRevisionWorkspace,
   isLocalRevisionRouteKey,
   listRevisionWorkspaces,
-  removeRevisionWorkspace,
+  reconcileRevisionDetail,
   saveRevisionWorkspace,
   touchWorkspace,
   type PendingRevisionUpdate,
@@ -70,6 +70,7 @@ import {
 } from "@/lib/offline/revision-workspaces";
 import type {
   LocalQualityPhoto,
+  QualityRevision,
   QualityRevisionItem,
 } from "@/types/quality";
 
@@ -217,7 +218,7 @@ export default function RevisionDetailScreen() {
       `RECT-${String(
         Number(serverRevision.sequence_no ?? 1),
       ).padStart(2, "0")}`
-    : "RECT · Pending sync";
+    : clean(workspace?.serverRevisionNumber) || "RECT · Pending sync";
 
   const title = [
     projectCode,
@@ -401,8 +402,24 @@ export default function RevisionDetailScreen() {
 
       let found =
         all.find(
-          (row) => row.routeKey === routeRevisionId,
+          (row) => row.routeKey === routeRevisionId || row.serverRevisionId===routeRevisionId || row.legacyRouteKeys?.includes(routeRevisionId) || row.clientMutationId===clientMutationIdFromRouteKey(routeRevisionId),
         ) ?? null;
+      if(!found && isLocalRevisionRouteKey(routeRevisionId)) {
+        const mutation=clientMutationIdFromRouteKey(routeRevisionId);
+        let mapping=(await getCache<Partial<QualityRevision> & {id:string}>(`quality:parent-mapping:${projectId}:${mutation}`))?.value;
+        if(!mapping && online && mutation) mapping=(await resolveQualityRevision(projectId,mutation)).revision || undefined;
+        if(mapping) {
+          if(mapping.tower_id && mapping.inspection_stage && mapping.inspection_date) {
+            const base=await ensureServerRevisionWorkspace({projectId,revisionId:mapping.id,revisionNumber:mapping.revision_number,towerId:mapping.tower_id,inspectionStage:mapping.inspection_stage,inspectionDate:mapping.inspection_date,notes:mapping.notes,clientInspector:mapping.client_inspector,clientCompany:mapping.client_company,clientReference:mapping.client_reference});
+            found=await saveRevisionWorkspace({...base,clientMutationId:mutation,legacyRouteKeys:[...(base.legacyRouteKeys || []),routeRevisionId]});
+            setWorkspace(found);
+          }
+          const cached=await cachedQualityRevisionDetail(projectId,mapping.id);
+          const readable=cached?.value || (online?await refreshQualityRevisionDetail(projectId,mapping.id):null);
+          if(readable) {found=await reconcileRevisionDetail(projectId,readable,routeRevisionId);setDetail(readable);}
+        }
+      }
+      if(found?.cachedDetail && !serverRevision) setDetail(found.cachedDetail);
 
       if (!found && serverRevision) {
         found = await ensureServerRevisionWorkspace({
@@ -438,6 +455,8 @@ export default function RevisionDetailScreen() {
       }
 
       setWorkspace(found);
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : "Cached Rectification could not be refreshed.");
     } finally {
       setWorkspaceLoading(false);
     }
@@ -445,6 +464,7 @@ export default function RevisionDetailScreen() {
     projectId,
     routeRevisionId,
     serverRevision,
+    online,
   ]);
 
   useEffect(() => {
@@ -592,10 +612,8 @@ export default function RevisionDetailScreen() {
       workspace.findings.length === 0 &&
       workspace.pendingUpdates.length === 0
     ) {
-      void removeRevisionWorkspace(
-        projectId,
-        workspace.routeKey,
-      ).then(() => {
+      if(!workspace.cachedDetail || workspace.cachedDetail.revision.id!==serverRevision.id) return;
+      void reconcileRevisionDetail(projectId,workspace.cachedDetail).then(() => {
         router.replace(
           `/revisions/${encodeURIComponent(
             serverRevision.id,

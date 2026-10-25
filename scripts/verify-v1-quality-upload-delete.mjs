@@ -26,7 +26,7 @@ const api=load("mobile/lib/api/quality.ts",{
   "@/lib/offline/connectivity":{manuallyOffline:()=>false},
   "@/lib/offline/files":{offlineFileExists:()=>true},"expo-file-system":{File:LocalFile,Paths:{}},"expo-sharing":{},
   "@/lib/api/client":{ApiRequestError:class extends Error{},apiJson:async(path,init)=>{const value=JSON.parse(init.body);assert.ok(init.body.length<4000);assert.ok(!init.body.includes("data:image"));if(path.endsWith("upload-session")){assert.equal(value.size,original.length);assert.ok(!value.uri && !value.annotatedUri);return {uploadUrl:"https://upload.example/scoped-secret",ticket:"signed-metadata-only"};}assert.equal(value.ticket,"signed-metadata-only");completed++;return {file:{id:"evidence"}};}},
-  "@/lib/offline/db":{},
+  "@/lib/offline/db":{},"@/lib/offline/revision-workspaces":{},
 });
 assert.equal((await api.uploadQualityPhoto({projectId:"p",towerId:"t",revisionId:"r",revisionItemId:"i",fileRole:"before_photo",uri:"original",annotatedUri:"annotated",name:"photo.jpg",mimeType:"image/jpeg",clientMutationId:"photo-1"})).file.id,"evidence");
 assert.equal(completed,1);assert.equal(puts[0].start,0);assert.equal(puts.at(-1).end+1,original.length);assert.deepEqual(original,saved);
@@ -58,7 +58,7 @@ assert.ok(lines.includes("DEF-012"));assert.ok(lines.includes("AFTER"));assert.o
 console.log("PASS assignment privacy and DEF watermark namespace/AFTER label.");
 
 const sharp=require("sharp");
-const watermarks=load("lib/quality/evidence-watermark.ts",{sharp:{default:sharp},"./evidence-layout":layout});
+const watermarks=load("lib/quality/evidence-watermark.ts",{'node:path':{default:require('node:path')},sharp:{default:sharp},"./evidence-layout":layout});
 const pixels=Buffer.alloc(2600*1950*3);let seed=42;
 for(let i=0;i<pixels.length;i++){seed=(Math.imul(seed,1664525)+1013904223)>>>0;pixels[i]=seed>>>24;}
 const source=await sharp(pixels,{raw:{width:2600,height:1950,channels:3}}).png().toBuffer();

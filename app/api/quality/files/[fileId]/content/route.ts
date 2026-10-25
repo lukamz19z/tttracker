@@ -1,4 +1,5 @@
 import { loadDefectEvidenceContext, loadRevisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
 import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { NextResponse } from "next/server";
 
@@ -25,15 +26,15 @@ export async function GET(request: Request, context: RouteContext) {
     const { fileId } = await context.params;
     const { service, user, role } = await requireQualityUser(request);
 
-    const { data: file, error } = await service
+    const { data: storedFile, error } = await service
       .from("tower_quality_files")
       .select(
-        "id,project_id,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
+        "id,project_id,tower_id,photo_no,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,evidence_metadata",
       )
       .eq("id", fileId)
       .single();
 
-    if (error || !file) {
+    if (error || !storedFile) {
       return NextResponse.json({ error: "Quality file could not be found." }, { status: 404 });
     }
 
@@ -41,10 +42,11 @@ export async function GET(request: Request, context: RouteContext) {
       service,
       userId: user.id,
       role,
-      projectId: file.project_id,
+      projectId: storedFile.project_id,
     });
 
     const annotated = new URL(request.url).searchParams.get("variant") !== "original";
+    const file=annotated?await ensurePublishedQualityEvidence(service,storedFile):storedFile;
     const itemId = annotated && file.annotated_sharepoint_item_id ? file.annotated_sharepoint_item_id : file.sharepoint_item_id;
     const token = await getGraphAccessToken();
     const response = await fetch(

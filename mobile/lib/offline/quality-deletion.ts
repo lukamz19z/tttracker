@@ -68,4 +68,5 @@ export async function deleteQualityDefect(input:{projectId:string;defectId?:stri
   for(const row of matching) await removeQueueRecord(row.id);
   for(const row of matching) await cleanupQualityRecord(row);
   if(defectId) await removeCache(`quality:defect:${input.projectId}:${defectId}`);
+  if(input.clientMutationId) await removeCache(`quality:defect-mapping:${input.projectId}:${input.clientMutationId}`);
 }

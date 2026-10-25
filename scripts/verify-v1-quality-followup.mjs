@@ -12,7 +12,7 @@ const record={id:'U',kind:'quality_revision_item_update',attempts:1,payload:{pro
 await assert.rejects(sync.syncQualityQueueRecord(record),/Local evidence file could not be found\./);assert.equal(workspace.pendingUpdates.length,1);photoExists=true;await sync.syncQualityQueueRecord(record);assert.equal(workspace.pendingUpdates.length,0);assert.equal(workspace.serverItems['revision-item-local'].fli_number,'FLI-027');console.log('PASS actual update endpoint receives mapped server IDs; missing evidence gives exact error and retains pending update; retry reconciles original local key.');
 
 const sharp=require('sharp');
-const watermarks=load('lib/quality/evidence-watermark.ts',{sharp:{default:sharp},'./evidence-layout':load('lib/quality/evidence-layout.ts',{})});
+const watermarks=load('lib/quality/evidence-watermark.ts',{'node:path':{default:require('node:path')},sharp:{default:sharp},'./evidence-layout':load('lib/quality/evidence-layout.ts',{})});
 const original=await sharp({create:{width:1000,height:750,channels:3,background:'#96acbd'}}).jpeg().toBuffer();
 const copy=Buffer.from(original),context={phase:'BEFORE',fli:'FLI-027',tower:'Tower with long identifier',issue:'Long issue label '.repeat(30),member:'LONGMEMBERREFERENCE'.repeat(10),drawing:'LONGDRAWINGREFERENCE'.repeat(10),segment:'Long segment '.repeat(30),leg:'B',assignedFlag:'Flag with long descriptive reference'};
 for(const position of watermarks.WATERMARK_POSITIONS){const annotated=await watermarks.annotateEvidence(original,context,position);const dimensions=await sharp(annotated).metadata();assert.ok(dimensions.height>=750);assert.deepEqual(original,copy);}

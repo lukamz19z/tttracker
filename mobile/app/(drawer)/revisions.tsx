@@ -1,8 +1,11 @@
+import { useSync } from "@/contexts/SyncContext";
+import { cachedQualityRevisionList,listQualityRevisions } from "@/lib/api/quality";
+import type { QualityRevisionListRow } from "@/types/quality";
 
 import { router, type Href } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { ClipboardCheck, Plus, Search } from "lucide-react-native";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -45,7 +48,14 @@ function formatDate(value: unknown) {
 
 function RevisionsScreenContent() {
   const { data, loading } = useQuality();
+  const {online,syncing}=useSync();
+  const [serverRows,setServerRows]=useState<QualityRevisionListRow[]>([]);
+  const [nextOffset,setNextOffset]=useState<number|null>(null);
+  const [listError,setListError]=useState<string|null>(null);
+  const [search,setSearch]=useState("");
   const [query, setQuery] = useState("");
+  useEffect(()=>{const timer=setTimeout(()=>setSearch(query.trim()),300);return()=>clearTimeout(timer);},[query]);
+
   const [status, setStatus] = useState("All");
   const [localRevisions, setLocalRevisions] = useState<RevisionWorkspace[]>([]);
 
@@ -53,17 +63,13 @@ function RevisionsScreenContent() {
     () => (Array.isArray(data?.towers) ? data.towers : []),
     [data?.towers],
   );
-  const revisions = useMemo(
-    () => (Array.isArray(data?.revisions) ? data.revisions : []),
-    [data?.revisions],
-  );
+  const revisions = serverRows;
   const items = useMemo(
     () => (Array.isArray(data?.items) ? data.items : []),
     [data?.items],
   );
   const projectCode =
-    clean((data as Record<string, unknown> | null)?.project && (data as any).project.project_number) ||
-    clean((data as Record<string, unknown> | null)?.project && (data as any).project.name) ||
+    clean(data?.project?.project_number) || clean(data?.project?.name) ||
     "";
 
   const revisionStatuses = Array.isArray(data?.workflow?.revisionStatuses)
@@ -135,32 +141,37 @@ function RevisionsScreenContent() {
         setLocalRevisions([]);
         return;
       }
+      if (syncing) return;
 
       let active = true;
 
       void listRevisionWorkspaces(data.projectId).then((rows) => {
         if (!active) return;
 
-        const serverMutationIds = new Set(
-          revisions
-            .map((row) => clean(row.mobile_client_mutation_id))
-            .filter(Boolean),
-        );
+        const seenIds=new Set(revisions.map(row=>row.id));
+        const seenMutations=new Set(revisions.map(row=>row.mobile_client_mutation_id).filter(Boolean));
+        setLocalRevisions(rows.filter(row=>!seenIds.has(row.serverRevisionId || "") && !seenMutations.has(row.clientMutationId || "")));
 
-        setLocalRevisions(
-          rows.filter(
-            (row) =>
-              row.clientMutationId &&
-              !serverMutationIds.has(row.clientMutationId),
-          ),
-        );
       });
 
       return () => {
         active = false;
       };
-    }, [data?.projectId, revisions]),
+    }, [data?.projectId, revisions, syncing]),
   );
+
+  useFocusEffect(useCallback(()=>{
+    if(!data?.projectId || syncing) return;
+    let active=true;
+    const input={projectId:data.projectId,query:search,status};
+    void (async()=>{
+      const cached=await cachedQualityRevisionList(input);
+      if(active && cached?.value) {setServerRows(cached.value.rows);setNextOffset(cached.value.nextOffset);}
+      if(online) try {const page=await listQualityRevisions(input);if(active){setServerRows(page.rows);setNextOffset(page.nextOffset);setListError(null);}}
+      catch(error){if(active)setListError(error instanceof Error?error.message:"Using cached Rectifications.");}
+    })();
+    return()=>{active=false;};
+  },[data?.projectId,online,search,status,syncing]));
 
   return (
     <QualityShell
@@ -221,7 +232,8 @@ function RevisionsScreenContent() {
         </View>
       ) : null}
 
-      {localRevisions.map((revision) => (
+      {listError ? <Text style={styles.meta}>Using cached Rectifications ? {listError}</Text> : null}
+      {localRevisions.filter(row=>(status==="All" || (row.cachedDetail?.revision.status || "Draft")===status) && (!query || [row.serverRevisionNumber,row.notes,towerById.get(row.towerId)].join(" ").toLowerCase().includes(query.toLowerCase()))).map((revision) => (
         <Pressable
           key={revision.routeKey}
           style={styles.card}
@@ -246,10 +258,10 @@ function RevisionsScreenContent() {
                 {revision.inspectionStage} · Saved offline
               </Text>
             </View>
-            <QualityStatusPill value="Draft" />
+            <QualityStatusPill value={revision.cachedDetail?.revision.status || "Draft"} />
           </View>
           <Text style={styles.meta}>
-            {formatDate(revision.inspectionDate)} · {revision.findings.length} pending FLI
+            {formatDate(revision.inspectionDate)} · {revision.findings.length + (revision.cachedDetail?.items.length || 0)} FLI
             {revision.findings.length === 1 ? "" : "s"}
           </Text>
         </Pressable>
@@ -258,7 +270,7 @@ function RevisionsScreenContent() {
       {rows.map((row) => {
         const rowId = clean(row.id);
         const rowStatus = clean(row.status) || "Unknown";
-        const findingCount = itemCounts.get(rowId) ?? 0;
+        const findingCount = row.itemCount ?? itemCounts.get(rowId) ?? 0;
 
         return (
           <Pressable
@@ -298,7 +310,8 @@ function RevisionsScreenContent() {
             ) : null}
           </Pressable>
         );
-      })}
+      })}      {nextOffset!==null ? <Pressable style={styles.card} onPress={()=>{if(!data?.projectId)return;void(async()=>{try{const page=online?await listQualityRevisions({projectId:data.projectId,query:search,status,offset:nextOffset}):(await cachedQualityRevisionList({projectId:data.projectId,query:search,status,offset:nextOffset}))?.value;if(page){setServerRows(current=>[...new Map([...current,...page.rows].map(row=>[row.id,row])).values()]);setNextOffset(page.nextOffset);}}catch(error){setListError(error instanceof Error?error.message:"More records unavailable.");}})();}}><Text>Load more</Text></Pressable> : null}
+
     </QualityShell>
   );
 }

@@ -5,7 +5,7 @@ import { queueRows, getCache, setCache,removeCache } from "./db";
 import { apiJson } from "@/lib/api/client";
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
 import { removeOfflineFile, offlineFileExists } from "@/lib/offline/files";
-import { uploadQualityPhoto, refreshQualityRevisionDetail, updateDefect } from "@/lib/api/quality";
+import { uploadQualityPhoto, refreshQualityRevisionDetail, refreshQualityDefectDetail, updateDefect } from "@/lib/api/quality";
 import type {
   DefectSeverity,
   InspectionStage,
@@ -305,6 +305,8 @@ async function syncDefect(
     role: "defect_photo",
     photos: payload.photos,
   });
+  try { await refreshQualityDefectDetail(payload.projectId,result.defect.id); }
+  catch (error) { if (__DEV__) console.warn("Defect synced; cached mapping retained",error instanceof Error?error.message:"Detail refresh deferred"); }
 }
 
 async function createRevisionItem(

@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
+import { qualityJsonResponse } from "@/lib/quality/http-response";
 
 import {
   Camera,
@@ -774,11 +775,11 @@ export default function TowerRevisionsPage() {
       const response = await apiFetch(`/api/quality/revisions/${encodeURIComponent(revision.id)}/pdf`, {
         method: "POST",
       });
-      const payload = (await response.json()) as {
+      const payload = await qualityJsonResponse< {
         error?: string;
         report_revision?: number;
         file?: QualityFile;
-      };
+      }>(response,"Revision PDF service");
       if (!response.ok || !payload.file) throw new Error(payload.error || "Revision PDF could not be created.");
       await load();
       setMessage({
@@ -829,7 +830,7 @@ export default function TowerRevisionsPage() {
           if (!response.ok) throw new Error(`Could not load ${file.file_name}.`);
           return {
             id: file.id,
-            name: file.file_name,
+            name: `${file.file_role === "before_photo" ? "Before" : "After"} · ${revisions.find(row=>row.id===item.revision_id)?.revision_number || "RECT"} · ${item.fli_number || `FLI-${String(item.item_number).padStart(3,"0")}`}`,
             role: file.file_role,
             url: URL.createObjectURL(await response.blob()),
             capturedAt: file.captured_at,

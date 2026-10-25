@@ -49,6 +49,7 @@ export type RevisionPdfData = {
   towerName: string;
   fliNumber: string;
   reportRevision: number;
+  reportState?:string;
   inspectionStage: string;
   inspectionDate: string;
   clientInspector?: string | null;
@@ -237,7 +238,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       setText(C.muted);
-      doc.text(title.toLowerCase().includes("after") ? "After evidence pending" : "Before evidence pending", x + width / 2, y + height / 2, { align: "center" });
+      doc.text(title.toLowerCase().includes("after") ? "After evidence pending" : "Before evidence not available", x + width / 2, y + height / 2, { align: "center" });
       return;
     }
 
@@ -263,12 +264,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
         "FAST",
       );
     } catch {
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(7.5);
-      setText(C.muted);
-      doc.text("Photo could not be rendered", x + width / 2, y + height / 2, {
-        align: "center",
-      });
+      throw new Error(`Quality PDF could not render evidence: ${photo.fileName}.`);
     }
   }
 
@@ -290,7 +286,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   setText(C.navy);
-  doc.text("Inspection / Rectification Summary", margin, y);
+  doc.text(`Inspection / Rectification Summary${data.reportState ? ` - ${data.reportState}` : ""}`, margin, y);
   y += 6;
 
   const headers = ["Item", "Issue", "Segment", "Member", "Status"];
@@ -303,6 +299,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
   doc.setFontSize(6.5);
   setText(C.slate);
   headers.forEach((header, index) => {
+    setFill([241, 245, 249]);
     doc.rect(x, y, widths[index], rowHeight, "FD");
     doc.text(header, x + 2, y + 5);
     x += widths[index];
