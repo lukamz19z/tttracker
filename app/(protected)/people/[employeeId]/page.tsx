@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import {PpeRegister} from "@/components/people/ppe-register";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -819,6 +820,12 @@ export default function EmployeeProfilePage() {
     return () => window.clearTimeout(timer);
   }, [loadData]);
 
+  useEffect(()=>{
+    const refreshPpe=()=>{if(!editing)void loadData().catch(error=>setMessage({tone:"error",text:error instanceof Error?error.message:"Unable to refresh employee details."}));};
+    window.addEventListener("focus",refreshPpe);
+    return ()=>window.removeEventListener("focus",refreshPpe);
+  },[editing,loadData]);
+
   function cancelEdit() {
     if (!employee) return;
 
@@ -1318,7 +1325,7 @@ export default function EmployeeProfilePage() {
           />
           <SummaryCard
             icon={<Shirt size={20} />}
-            label="PPE"
+            label="Core PPE sizing"
             value={ppeComplete ? "Complete" : "Incomplete"}
             detail="Operational sizing only"
           />
@@ -1389,7 +1396,7 @@ export default function EmployeeProfilePage() {
             ) : null}
 
             {activeTab === "ppe" ? (
-              <PpeTab editing={editing} form={form} setForm={setForm} />
+              <div className="space-y-5"><PpeTab editing={editing} form={form} setForm={setForm} />{!editing?<PpeRegister employeeId={employee.id} onChanged={loadData} refreshKey={[employee.shirt_size,employee.jacket_size,employee.glove_size,employee.pants_size].join(":")}/>:null}</div>
             ) : null}
 
             {activeTab === "projects" ? (

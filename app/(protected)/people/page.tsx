@@ -610,7 +610,7 @@ export default function PeoplePage() {
       "Jacket Size",
       "Glove Size",
       "Pants Size",
-      "PPE Complete",
+      "Core PPE Sizing Complete",
       "Operational Notes",
     ];
 
@@ -755,7 +755,7 @@ export default function PeoplePage() {
             icon={<UserRoundX size={20} />}
           />
           <KpiCard
-            label="Missing PPE"
+            label="Missing core sizes"
             value={String(missingPpeCount)}
             detail="Incomplete sizing"
             icon={<Shirt size={20} />}
@@ -780,8 +780,9 @@ export default function PeoplePage() {
           <NavigationCard
             icon={<Shirt size={20} />}
             title="PPE Register"
-            description="Current employee sizing is already included in this register and can later receive a dedicated view."
-            disabled
+            description="Review PPE sizes, recorded issues, missing information and quantities to order."
+            href="/people/ppe"
+            label="Open PPE register"
           />
 
           <NavigationCard
@@ -840,8 +841,8 @@ export default function PeoplePage() {
               }
               options={[
                 { value: "all", label: "All PPE records" },
-                { value: "complete", label: "PPE complete" },
-                { value: "missing", label: "PPE missing" },
+                { value: "complete", label: "Core PPE sizes complete" },
+                { value: "missing", label: "Core PPE sizes missing" },
               ]}
             />
 
