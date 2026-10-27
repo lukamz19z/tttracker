@@ -780,7 +780,7 @@ export default function PeoplePage() {
           <NavigationCard
             icon={<Shirt size={20} />}
             title="PPE Register"
-            description="Review PPE sizes, recorded issues, missing information and quantities to order."
+            description="Review employee PPE sizing and missing details."
             href="/people/ppe"
             label="Open PPE register"
           />
