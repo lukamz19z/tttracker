@@ -1,5 +1,6 @@
 import { createSupabaseServer } from "@/lib/supabase-server";
 import { redirect } from "next/navigation";
+import { AccessProvider } from "@/components/access/access-provider";
 
 export default async function ProtectedLayout({
   children,
@@ -16,5 +17,5 @@ export default async function ProtectedLayout({
     redirect("/login");
   }
 
-  return children;
+  return <AccessProvider>{children}</AccessProvider>;
 }
