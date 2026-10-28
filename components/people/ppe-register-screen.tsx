@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { AlertCircle, CheckCircle2, ChevronDown, ClipboardList, Download, LayoutGrid, Package, Printer, RefreshCw, Search, Settings2, ShieldCheck, Users, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronDown, ClipboardList, Download, Package, Printer, RefreshCw, Search, Settings2, ShieldCheck, Users, X } from "lucide-react";
 import type { PpeFilters, PpeLine, PpeReport, PpeSummary } from "@/lib/people/ppe";
 import { PpeCategories, PpeEmpty, PpeLoading, PpeMetric, PpePeople, ppeButton, ppeInput, ppePrimary } from "./ppe-register-views";
 import { PpeRegisterEditor, type PpeEditorProps } from "./ppe-register-editor";
@@ -19,7 +19,7 @@ function FilterSelect({ label, value, onChange, options, className = "" }: { lab
   return <label className={`relative min-w-0 ${className}`}><span className="sr-only">{label}</span><select value={value} onChange={event => onChange(event.target.value)} className={`${ppeInput} appearance-none pr-8`}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute right-3 top-3.5 text-slate-400" /></label>;
 }
 export function PpeRegisterScreen(props: ScreenProps) {
-  const { report, allowed, accessLoading, busy, error, filters, change, reset, tab, setTab, visible, people, limit, more, refresh, exportRows, onSize, onItem, filterDescription, editor } = props;
+  const { report, allowed, accessLoading, busy, error, filters, change, reset, tab, visible, people, limit, more, refresh, exportRows, onSize, onItem, filterDescription, editor } = props;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const initialLoading = accessLoading || (!report && !error);
   const activeFilterCount = [filters.search, filters.crew !== "all", filters.type !== "all", filters.size, filters.active !== (filters.employee ? "all" : "active"), filters.details !== "all"].filter(Boolean).length;
@@ -28,7 +28,7 @@ export function PpeRegisterScreen(props: ScreenProps) {
   return <section className="space-y-3" aria-label="PPE Register">
     <style>{`@media print {body *{visibility:hidden}.ppe-print,.ppe-print *{visibility:visible}.ppe-print{position:absolute;left:0;top:0;width:100%;font-size:10pt}.ppe-no-print{display:none!important}.ppe-print table{width:100%;border-collapse:collapse}.ppe-print th,.ppe-print td{border-bottom:1px solid #ddd;padding:5px;text-align:left}.ppe-print tr{break-inside:avoid}}`}</style>
     <header className="ppe-no-print flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
-      <div><h2 className="text-xl font-black tracking-tight text-slate-950">PPE Register</h2><p className="mt-1 text-sm text-slate-500">Employee PPE sizing and requirements.</p></div>
+      <div><h2 className="text-xl font-black tracking-tight text-slate-950">Employee Size Requirements</h2><p className="mt-1 text-sm text-slate-500">Employee size preferences and missing sizing details.</p></div>
       <div className="flex items-center gap-2">
         <button type="button" className={ppePrimary} disabled={!visible.length} onClick={exportRows}><Download size={15} />Export</button>
         <button type="button" className={ppeButton} disabled={busy || !report} onClick={() => window.print()}><Printer size={15} />Print</button>
@@ -41,11 +41,6 @@ export function PpeRegisterScreen(props: ScreenProps) {
       <PpeMetric label="PPE Details Complete" value={report?.metrics.complete || 0} detail="All sizing details recorded" icon={<CheckCircle2 size={17} />} loading={initialLoading} />
       <PpeMetric label="Missing PPE Details" value={report?.metrics.missing || 0} detail="People needing size details" icon={<ClipboardList size={17} />} loading={initialLoading} />
       <PpeMetric label="PPE Types" value={report?.metrics.types || 0} detail="Active sizing categories" icon={<Package size={17} />} loading={initialLoading} />
-    </div>
-
-    <div className="ppe-no-print flex flex-wrap items-center justify-between gap-2">
-      <div role="tablist" aria-label="PPE views" className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-slate-100/70 p-1">{[{ name: "Overview", icon: LayoutGrid }, { name: "People", icon: Users }].map(({ name, icon: Icon }) => <button type="button" role="tab" aria-selected={tab === name} aria-controls="ppe-view" id={`ppe-tab-${name}`} key={name} onClick={() => setTab(name)} className={`inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 ${tab === name ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-white/60 hover:text-slate-800"}`}><Icon size={14} />{name}</button>)}</div>
-      <p className="hidden text-xs text-slate-400 sm:block">Employee sizing by person and crew</p>
     </div>
 
     <div className="ppe-no-print sticky top-16 z-20 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur-sm">
@@ -62,7 +57,7 @@ export function PpeRegisterScreen(props: ScreenProps) {
 
     {error && !editor ? <div role="alert" className="ppe-no-print flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3"><AlertCircle size={18} className="mt-0.5 shrink-0 text-rose-600" /><div className="min-w-0 flex-1"><p className="text-sm font-bold text-rose-900">PPE data could not be loaded.</p><p className="mt-0.5 text-xs text-rose-700">{report ? "The last loaded register is still shown. " : ""}Please retry. Your existing PPE records have not changed.</p></div><button type="button" onClick={refresh} disabled={busy} className="shrink-0 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-50 disabled:opacity-50">Retry</button></div> : null}
 
-    <div id="ppe-view" role="tabpanel" aria-labelledby={`ppe-tab-${tab}`} className="ppe-no-print">
+    <div id="ppe-view" role="region" aria-label={tab === "Overview" ? "Employee Size Requirements" : "People and Sizes"} className="ppe-no-print">
       {initialLoading ? <PpeLoading /> : !visible.length ? <PpeEmpty title="No PPE records match these filters." description="Try another crew, PPE item or size, or clear the filters." onReset={reset} /> : tab === "Overview" ? <PpeCategories lines={visible} definitions={report?.definitions || []} onSize={onSize} /> : <PpePeople people={people} expanded={expanded} onExpand={togglePerson} onItem={onItem} canEdit={Boolean(report?.canEdit)} limit={limit} onMore={more} /> }
     </div>
     <footer className="ppe-no-print flex justify-between gap-2 px-1 text-[11px] text-slate-400"><span>Counts represent employees with each recorded size.</span>{report ? <span>Updated {new Date(report.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span> : null}</footer>

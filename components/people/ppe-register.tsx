@@ -1,16 +1,27 @@
 "use client";
 import {useCallback,useEffect,useMemo,useState} from "react";
+import {PpeInventory} from "./ppe-inventory";
 import {PpeRegisterScreen} from "./ppe-register-screen";
 import {useAccess} from "@/components/access/access-provider";
 import {ppeRequest} from "./ppe-client";
 import {emptyPpeFilters,ppeCsv,type PpeFilters,type PpeReport,type PpeLine} from "@/lib/people/ppe";
 
 
-export function PpeRegister({employeeId="",refreshKey="",onChanged}:{employeeId?:string;refreshKey?:string;onChanged?:()=>void|Promise<void>}){
+type SizingScope={type:string;size:string};
+type RegisterProps={employeeId?:string;refreshKey?:string;onChanged?:()=>void|Promise<void>};
+export function PpeRegister(props:RegisterProps){
+ const {can}=useAccess();const [tab,setTab]=useState("Overview"),[scope,setScope]=useState<SizingScope|null>(null);
+ const inventory=can("tt.people")&&can("people.view_basic")&&can("people.view_ppe")&&can("people.ppe_inventory.view");
+ return <div className="space-y-3"><div className="ppe-no-print rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"><h2 className="text-xl font-black">PPE Register</h2><p className="mt-1 text-xs text-slate-500">Employee sizing and requirements · physical stock and issues</p><nav aria-label="PPE Register views" className="mt-3 flex flex-wrap gap-1">{["Overview","People & Sizes",...(inventory?["Inventory","Issue History"]:[])].map(value=><button type="button" aria-current={tab===value?"page":undefined} key={value} onClick={()=>{setScope(null);setTab(value);}} className={`rounded-lg px-3 py-2 text-xs font-bold ${tab===value?"bg-slate-900 text-white":"bg-slate-50 text-slate-600 hover:bg-slate-100"}`}>{props.employeeId&&value==="Issue History"?"Issued Items":value}</button>)}</nav></div>
+ {(tab==="Overview"||tab==="People & Sizes")&&<PpeSizingRegister key={tab} {...props} view={tab==="Overview"?"Overview":"People"} initialScope={scope} onDrill={value=>{setScope(value);setTab("People & Sizes");}}/>}
+ {inventory&&(tab==="Overview"||tab==="Inventory"||tab==="Issue History")&&<PpeInventory key={tab} view={tab} employeeId={props.employeeId}/>}
+ </div>;
+}
+function PpeSizingRegister({employeeId="",refreshKey="",onChanged,view="Overview",initialScope,onDrill}:RegisterProps&{view?:string;initialScope?:SizingScope|null;onDrill?:(scope:SizingScope)=>void}){
  const {can,loading:accessLoading}=useAccess();
  const allowed=can("tt.people")&&can("people.view_ppe")&&can("people.view_basic");
- const [filters,setFilters]=useState<PpeFilters>({...emptyPpeFilters,employee:employeeId,active:employeeId?"all":"active"});
- const [tab,setTab]=useState("Overview"),[report,setReport]=useState<PpeReport|null>(null),[error,setError]=useState(""),[busy,setBusy]=useState(false),[limit,setLimit]=useState(100);
+ const [filters,setFilters]=useState<PpeFilters>({...emptyPpeFilters,employee:employeeId,active:employeeId?"all":"active",...initialScope});
+ const [tab,setTab]=useState(view),[report,setReport]=useState<PpeReport|null>(null),[error,setError]=useState(""),[busy,setBusy]=useState(false),[limit,setLimit]=useState(100);
  const [edit,setEdit]=useState<PpeLine|null>(null),[size,setSize]=useState(""),[saving,setSaving]=useState(false);
  const params=useMemo(()=>new URLSearchParams(Object.entries(filters).map(([key,value])=>[key,String(value)])),[filters]);
  const load=useCallback(async(signal?:AbortSignal)=>{
@@ -42,6 +53,7 @@ export function PpeRegister({employeeId="",refreshKey="",onChanged}:{employeeId?
   onItem={row=>void open(row)}
   onSize={row=>{
    setFilters(current=>({...current,type:row.ppe_type_id,size:row.size==="Not recorded"?"__missing__":row.size==="No size required"?"":row.size}));
+   onDrill?.({type:row.ppe_type_id,size:row.size==="Not recorded"?"__missing__":row.size==="No size required"?"":row.size});
    setTab("People");setLimit(100);
   }}
   editor={edit?{

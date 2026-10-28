@@ -22,7 +22,7 @@ View/export/print require `tt.people`, `people.view_basic`, `people.view_ppe`; e
 
 ## Schema and deployment
 
-No new migration is required. Existing issue tables, quantity columns, functions and historical events remain unchanged for a possible later, separate PPE Issue Register. Do not drop or rewrite them. Deploy the V1 website/API together. No mobile or native changes.
+The sizing schema is unchanged. The same PPE Register now also includes a separate physical inventory ledger; see [V1 PPE inventory](v1-ppe-inventory.md) for its new migration and rollout. Existing category-level issue tables, quantity columns, functions and historical events remain unchanged. They are not inferred to be physical inventory receipts or issues. Deploy the V1 website/API together. No mobile or native changes.
 
 ## Validation
 
