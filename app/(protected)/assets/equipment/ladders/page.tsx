@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
 "use client";
 
 import Link from "next/link";
@@ -16,7 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
-import { syncEquipmentSharePointFolderClient } from "@/lib/assets/client-sharepoint";
+import { LadderReplacementLinks } from "@/components/assets/ladder-replacement-links";
+import { duplicateLadderMessage, ladderNumberKey, ladderRelations, ladderStatuses, type Ladder } from "@/lib/assets/ladders";
 import { PageHeader, PageShell, RegisterList } from "../../components";
 
 type Crew = {
@@ -26,21 +25,9 @@ type Crew = {
   active?: boolean | null;
 };
 
-type Ladder = {
-  id: string;
-  ladder_number: string;
-  make: string | null;
-  ladder_type: string | null;
-  height: string | null;
-  crew_id: string | null;
-  status: string | null;
-  last_internal_inspection: string | null;
-  notes: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
-
 type FormState = {
+  ladder_number: string;
+  supersedes_ladder_id: string;
   make: string;
   ladder_type: string;
   height: string;
@@ -51,6 +38,8 @@ type FormState = {
 };
 
 const blankForm: FormState = {
+  ladder_number: "",
+  supersedes_ladder_id: "",
   make: "",
   ladder_type: "Step Ladder",
   height: "",
@@ -68,7 +57,7 @@ const ladderTypeOptions = [
   "Other",
 ];
 
-const statusOptions = ["Active", "Out of Service", "Missing", "Retired"];
+const statusOptions = ladderStatuses;
 
 function clean(value: string | number | null | undefined) {
   return String(value ?? "").trim();
@@ -93,18 +82,6 @@ function formatShortDate(value: string | null) {
   });
 }
 
-function getNextLadderNumber(items: Ladder[]) {
-  const highest = items.reduce((max, item) => {
-    const match = clean(item.ladder_number).match(/^LAD-(\d+)$/i);
-    if (!match) return max;
-
-    const number = Number(match[1]);
-    return Number.isFinite(number) ? Math.max(max, number) : max;
-  }, 0);
-
-  return `LAD-${String(highest + 1).padStart(3, "0")}`;
-}
-
 function statusClass(status: string | null) {
   const value = clean(status).toLowerCase();
 
@@ -120,7 +97,7 @@ function statusClass(status: string | null) {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
 
-  if (value === "retired") {
+  if (value === "retired" || value === "superseded") {
     return "border-slate-200 bg-slate-50 text-slate-700";
   }
 
@@ -191,13 +168,26 @@ export default function LaddersPage() {
 
   const [search, setSearch] = useState("");
   const [crewFilter, setCrewFilter] = useState("All Crews");
-  const [statusFilter, setStatusFilter] = useState("All Statuses");
+  const [statusFilter, setStatusFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All Types");
   const [inspectionFilter, setInspectionFilter] = useState("All Inspections");
 
   const [form, setForm] = useState<FormState>(blankForm);
 
-  const nextNumber = useMemo(() => getNextLadderNumber(items), [items]);
+  const [canEdit, setCanEdit] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [formError, setFormError] = useState("");
+  const [replacementSearch, setReplacementSearch] = useState("");
+  const editingLadder = items.find(item => item.id === editingId);
+  const selectedPrevious = items.find(item => item.id === form.supersedes_ladder_id);
+  const apiRequest = useCallback(async <T,>(url: string, init: RequestInit = {}): Promise<T> => {
+    const { data } = await supabase.auth.getSession();
+    if (!data.session?.access_token) throw new Error("Your session has expired. Sign in again.");
+    const response = await fetch(url, { ...init, headers: { Authorization: `Bearer ${data.session.access_token}`, "Content-Type": "application/json" }, cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Ladder Register request failed.");
+    return result as T;
+  }, [supabase]);
 
   const crewById = useMemo(() => {
     return new Map(crews.map((crew) => [crew.id, crew]));
@@ -205,38 +195,20 @@ export default function LaddersPage() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-
-    const [laddersResult, crewsResult] = await Promise.all([
-      supabase
-        .from("equipment_ladders")
-        .select("*")
-        .order("ladder_number", { ascending: true }),
-      supabase
-        .from("crews")
-        .select("id, crew_number, crew_name, active")
-        .order("crew_number", { ascending: true }),
-    ]);
-
-    if (laddersResult.error) {
-      console.error("Failed to load ladders:", laddersResult.error.message);
-      setItems([]);
-    } else {
-      setItems((laddersResult.data ?? []) as Ladder[]);
-    }
-
-    if (crewsResult.error) {
-      console.error("Failed to load crews:", crewsResult.error.message);
-      setCrews([]);
-    } else {
-      setCrews(
-        ((crewsResult.data ?? []) as Crew[]).filter(
-          (crew) => crew.active !== false,
-        ),
-      );
-    }
-
-    setLoading(false);
-  }, [supabase]);
+    try {
+      const [laddersResult, crewsResult] = await Promise.all([
+        apiRequest<{ items: Ladder[]; canEdit: boolean }>("/api/assets/equipment/ladder"),
+        supabase.from("crews").select("id, crew_number, crew_name, active").order("crew_number", { ascending: true }),
+      ]);
+      if (crewsResult.error) throw new Error(`Ladder crew query failed: ${crewsResult.error.message}`);
+      setItems(laddersResult.items);
+      setCanEdit(laddersResult.canEdit);
+      setCrews(((crewsResult.data ?? []) as Crew[]).filter(crew => crew.active !== false));
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Ladder Register could not be loaded.");
+    } finally { setLoading(false); }
+  }, [supabase, apiRequest]);
 
   useEffect(() => {
     void loadData();
@@ -286,7 +258,7 @@ export default function LaddersPage() {
       return (
         searchable.includes(term) &&
         (crewFilter === "All Crews" || crewText === crewFilter) &&
-        (statusFilter === "All Statuses" || clean(item.status) === statusFilter) &&
+        (statusFilter === "All" || clean(item.status) === statusFilter) &&
         (typeFilter === "All Types" || clean(item.ladder_type) === typeFilter) &&
         (inspectionFilter === "All Inspections" ||
           inspectionStatus === inspectionFilter)
@@ -305,12 +277,18 @@ export default function LaddersPage() {
   function openAddForm() {
     setEditingId(null);
     setForm(blankForm);
+    setFormError("");
+    setReplacementSearch("");
     setShowForm(true);
   }
 
   function openEditForm(item: Ladder) {
     setEditingId(item.id);
+    setFormError("");
+    setReplacementSearch("");
     setForm({
+      ladder_number: item.ladder_number,
+      supersedes_ladder_id: item.supersedes_ladder_id || "",
       make: clean(item.make),
       ladder_type: clean(item.ladder_type) || "Step Ladder",
       height: clean(item.height),
@@ -323,64 +301,46 @@ export default function LaddersPage() {
   }
 
   function closeForm() {
+    if (saving) return;
     setEditingId(null);
     setForm(blankForm);
     setShowForm(false);
   }
 
   async function handleSave() {
+    if (saving) return;
+    setFormError("");
+    const number = form.ladder_number.trim();
+    if (!number || number.length > 120 || /[\x00-\x1f\x7f]/.test(number)) {
+      setFormError("Enter a Ladder Register Number of 1 to 120 characters.");
+      return;
+    }
+    if (items.some(item => item.id !== editingId && item.id !== selectedPrevious?.id && clean(item.status).toLowerCase() !== "superseded" && ladderNumberKey(item.ladder_number) === ladderNumberKey(number))) {
+      setFormError(duplicateLadderMessage(number));
+      return;
+    }
+    if (!editingId && selectedPrevious && !window.confirm(`${selectedPrevious.ladder_number} will be marked as Superseded by ${number}.`)) return;
     setSaving(true);
-
-    const payload = {
-      make: clean(form.make) || null,
-      ladder_type: clean(form.ladder_type) || null,
-      height: clean(form.height) || null,
-      crew_id: clean(form.crew_id) || null,
-      status: clean(form.status) || "Active",
-      last_internal_inspection: clean(form.last_internal_inspection) || null,
-      notes: clean(form.notes) || null,
-      updated_at: new Date().toISOString(),
-    };
-
-    let savedId = editingId;
-
-    if (!editingId) {
-      const { data, error } = await supabase
-        .from("equipment_ladders")
-        .insert({
-          ladder_number: nextNumber,
-          ...payload,
-        })
-        .select("id")
-        .single();
-
-      if (error) {
-        alert(`Failed to save ladder: ${error.message}`);
-        setSaving(false);
-        return;
-      }
-
-      savedId = data?.id ?? null;
-    } else {
-      const { error } = await supabase
-        .from("equipment_ladders")
-        .update(payload)
-        .eq("id", editingId);
-
-      if (error) {
-        alert(`Failed to update ladder: ${error.message}`);
-        setSaving(false);
-        return;
-      }
+    let savedId: string;
+    try {
+      const result = await apiRequest<{ item: Ladder }>("/api/assets/equipment/ladder", {
+        method: editingId ? "PATCH" : "POST",
+        body: JSON.stringify({ ...form, ladder_number: number, id: editingId || undefined,
+          updated_at: editingId ? items.find(item => item.id === editingId)?.updated_at : undefined,
+          confirm_supersedes: !editingId && Boolean(selectedPrevious),
+        }),
+      });
+      if (!result.item?.id) throw new Error("Ladder save succeeded without returning the saved asset ID.");
+      savedId = result.item.id;
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Ladder could not be saved.");
+      setSaving(false);
+      return;
     }
 
     if (savedId) {
       try {
-        await syncEquipmentSharePointFolderClient({
-          supabase,
-          equipmentType: "ladder",
-          equipmentId: savedId,
-        });
+        await apiRequest(`/api/assets/equipment/ladder/${savedId}`, { method: "POST" });
       } catch (sharePointError) {
         alert(
           `Ladder saved, but its SharePoint folder could not be synchronised: ${
@@ -392,7 +352,9 @@ export default function LaddersPage() {
       }
     }
 
-    closeForm();
+    setEditingId(null);
+    setForm(blankForm);
+    setShowForm(false);
     await loadData();
     setSaving(false);
   }
@@ -404,13 +366,10 @@ export default function LaddersPage() {
 
     if (!confirmed) return;
 
-    const { error } = await supabase
-      .from("equipment_ladders")
-      .delete()
-      .eq("id", item.id);
-
-    if (error) {
-      alert(`Failed to delete ladder: ${error.message}`);
+    try {
+      await apiRequest(`/api/assets/equipment/ladder?id=${item.id}`, { method: "DELETE" });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Ladder could not be deleted.");
       return;
     }
 
@@ -419,7 +378,7 @@ export default function LaddersPage() {
 
   function exportCsv() {
     const headers = [
-      "Asset ID",
+      "Ladder Register Number",
       "Make",
       "Ladder Type",
       "Height",
@@ -428,6 +387,8 @@ export default function LaddersPage() {
       "Last Internal Inspection",
       "Inspection Status",
       "Notes",
+      "Supersedes",
+      "Superseded By",
     ];
 
     const rows = filteredItems.map((item) => {
@@ -443,6 +404,8 @@ export default function LaddersPage() {
         clean(item.last_internal_inspection),
         inspectionLabel(item.last_internal_inspection),
         clean(item.notes),
+        ladderRelations(item, items).supersedes?.ladder_number || "",
+        ladderRelations(item, items).supersededBy?.ladder_number || "",
       ];
     });
 
@@ -493,18 +456,19 @@ export default function LaddersPage() {
               Export CSV
             </button>
 
-            <button
+            {canEdit ? <button
               type="button"
               onClick={openAddForm}
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-slate-800"
             >
               <Plus size={16} />
               Add Ladder
-            </button>
+            </button> : null}
           </div>
         }
       />
 
+      {loadError ? <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{loadError}</div> : null}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
@@ -541,7 +505,7 @@ export default function LaddersPage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search LAD number, make, type..."
+                placeholder="Search register number, make, type..."
                 className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
               />
             </div>
@@ -571,8 +535,8 @@ export default function LaddersPage() {
               onChange={(event) => setStatusFilter(event.target.value)}
               className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
             >
-              <option>All Statuses</option>
-              {statusOptions.map((option) => (
+              <option>All</option>
+              {[...statusOptions, "Superseded"].map((option) => (
                 <option key={option}>{option}</option>
               ))}
             </select>
@@ -603,11 +567,9 @@ export default function LaddersPage() {
         getKey={(item) => item.id}
         columns={[
           {
-            label: "Asset ID",
+            label: "Ladder Register Number",
             render: (item) => (
-              <p className="font-black text-slate-950">
-                {item.ladder_number}
-              </p>
+              <div><Link className="font-black text-slate-950 hover:text-blue-700" href={`/assets/equipment/records/ladder/${item.id}`}>{item.ladder_number}</Link><LadderReplacementLinks {...ladderRelations(item, items)} /></div>
             ),
           },
           {
@@ -675,23 +637,23 @@ export default function LaddersPage() {
                   Documents
                 </Link>
 
-                <button
+                {canEdit ? <button
                   type="button"
                   onClick={() => openEditForm(item)}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50"
                 >
                   <Edit size={14} />
                   Edit
-                </button>
+                </button> : null}
 
-                <button
+                {canEdit && !item.supersedes_ladder_id && !items.some(row => row.supersedes_ladder_id === item.id) ? <button
                   type="button"
                   onClick={() => void handleDelete(item)}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 shadow-sm hover:bg-rose-100"
                 >
                   <Trash2 size={14} />
                   Delete
-                </button>
+                </button> : null}
               </div>
             ),
           },
@@ -703,9 +665,8 @@ export default function LaddersPage() {
             <div className="space-y-4 rounded-2xl border border-slate-100 bg-white p-1">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="font-black text-slate-950">
-                    {item.ladder_number}
-                  </p>
+                  <Link className="font-black text-slate-950 hover:text-blue-700" href={`/assets/equipment/records/ladder/${item.id}`}>{item.ladder_number}</Link>
+                  <LadderReplacementLinks {...ladderRelations(item, items)} />
                   <p className="mt-1 text-sm font-semibold text-slate-600">
                     {[clean(item.make), clean(item.ladder_type)]
                       .filter(Boolean)
@@ -772,23 +733,23 @@ export default function LaddersPage() {
                   Documents
                 </Link>
 
-                <button
+                {canEdit ? <button
                   type="button"
                   onClick={() => openEditForm(item)}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700"
                 >
                   <Edit size={14} />
                   Edit
-                </button>
+                </button> : null}
 
-                <button
+                {canEdit && !item.supersedes_ladder_id && !items.some(row => row.supersedes_ladder_id === item.id) ? <button
                   type="button"
                   onClick={() => void handleDelete(item)}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
                 >
                   <Trash2 size={14} />
                   Delete
-                </button>
+                </button> : null}
               </div>
             </div>
           );
@@ -809,13 +770,14 @@ export default function LaddersPage() {
                 <p className="mt-1 text-sm text-slate-600">
                   {editingId
                     ? "Update ladder details, inspection date and allocation."
-                    : `Next asset ID will be ${nextNumber}.`}
+                    : "Enter the register number shown on the physical ladder."}
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={closeForm}
+                disabled={saving}
                 className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
               >
                 <X size={18} />
@@ -823,20 +785,21 @@ export default function LaddersPage() {
             </div>
 
             <div className="grid gap-5 p-5">
+              {formError ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-800">{formError}</p> : null}
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Asset ID
+                    Ladder Register Number *
                     <input
-                      value={
-                        editingId
-                          ? items.find((item) => item.id === editingId)
-                              ?.ladder_number || ""
-                          : nextNumber
-                      }
-                      disabled
-                      className="rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 outline-none"
+                      value={form.ladder_number}
+                      onChange={event => setForm(current => ({ ...current, ladder_number: event.target.value }))}
+                      disabled={Boolean(editingId)}
+                      required
+                      maxLength={120}
+                      placeholder="e.g. LAD-001-R1"
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100 disabled:bg-slate-100"
                     />
+                    <span className="text-xs font-normal text-slate-500">{editingId ? "Register identifiers remain locked after creation." : "Enter the identifier used on the physical ladder / asset register."}</span>
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
@@ -935,11 +898,21 @@ export default function LaddersPage() {
                       }
                       className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                     >
-                      {statusOptions.map((option) => (
+                      {(form.status === "Superseded" ? ["Superseded"] : statusOptions).map((option) => (
                         <option key={option}>{option}</option>
                       ))}
                     </select>
                   </label>
+
+                  {!editingId ? <div className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
+                    <label htmlFor="ladder-supersedes-search">Supersedes (optional)</label>
+                    <input id="ladder-supersedes-search" placeholder="Search an existing ladder number" value={replacementSearch} onChange={event => setReplacementSearch(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium" />
+                    <select aria-label="Supersedes ladder" value={form.supersedes_ladder_id} onChange={event => setForm(current => ({ ...current, supersedes_ladder_id: event.target.value, status: event.target.value ? "Active" : current.status }))} className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium">
+                      <option value="">Does not supersede another ladder</option>
+                      {items.filter(item => !items.some(row => row.supersedes_ladder_id === item.id) && clean(item.status).toLowerCase() !== "superseded" && (item.id === form.supersedes_ladder_id || item.ladder_number.toLowerCase().includes(replacementSearch.trim().toLowerCase()))).map(item => <option key={item.id} value={item.id}>{item.ladder_number} - {item.status || "Active"}</option>)}
+                    </select>
+                    {selectedPrevious ? <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">{selectedPrevious.ladder_number} will be marked as Superseded by {form.ladder_number.trim() || "the new ladder"}. Both records and their histories will be retained.</p> : null}
+                  </div> : <div className="md:col-span-2">{editingLadder ? <LadderReplacementLinks {...ladderRelations(editingLadder, items)} /> : null}</div>}
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
                     Notes
@@ -964,6 +937,7 @@ export default function LaddersPage() {
               <button
                 type="button"
                 onClick={closeForm}
+                disabled={saving}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
               >
                 Cancel

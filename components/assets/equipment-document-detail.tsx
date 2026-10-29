@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { LadderReplacementLinks } from "./ladder-replacement-links";
+import type { LadderReference } from "@/lib/assets/ladders";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import type {
   EquipmentDocumentRow,
@@ -31,6 +33,7 @@ type Payload = {
     sharepoint_web_url?: string | null;
     sharepoint_folder_name?: string | null;
   } | null;
+  ladderRelations?: { supersedes: LadderReference | null; supersededBy: LadderReference | null };
   canManage: boolean;
   error?: string;
 };
@@ -160,6 +163,7 @@ export function EquipmentDocumentDetail() {
           <div>
             <div className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">{titleCase(data.equipmentType)}</div>
             <h1 className="mt-1 text-3xl font-black text-slate-950">{data.label}</h1>
+            {data.equipmentType === "ladder" ? <LadderReplacementLinks {...data.ladderRelations} /> : null}
             <p className="mt-2 text-sm text-slate-500">All equipment attachments are stored in SharePoint. TTTracker only stores the register metadata and SharePoint references.</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -177,7 +181,7 @@ export function EquipmentDocumentDetail() {
         <h2 className="text-lg font-black text-slate-950">Equipment Record</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {Object.entries(data.item)
-            .filter(([key, value]) => !["id", "created_at", "updated_at"].includes(key) && value !== null && value !== "")
+            .filter(([key, value]) => !["id", "created_at", "updated_at", ...(data.equipmentType === "ladder" ? ["supersedes_ladder_id", "created_by_user_id", "superseded_by_user_id"] : [])].includes(key) && value !== null && value !== "")
             .slice(0, 20)
             .map(([key, value]) => <Info key={key} label={titleCase(key)} value={typeof value === "boolean" ? (value ? "Yes" : "No") : clean(value)} />)}
         </div>

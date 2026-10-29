@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { ladderAccess, ladderError } from "@/lib/assets/ladder-server";
 
 import {
   assetApiError,
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(
-  request: Request,
+  request: NextRequest,
   context: { params: Promise<{ equipmentType: string; equipmentId: string }> },
 ) {
   try {
@@ -27,7 +28,8 @@ export async function POST(
     if (!equipmentType) return NextResponse.json({ error: "Unsupported equipment type." }, { status: 400 });
 
     const { service, identity } = await requireAssetUser(request);
-    if (!canManageAssets(identity.role)) throw new Error("ASSET_MANAGE_FORBIDDEN");
+    if (equipmentType === "ladder") await ladderAccess(request, true);
+    else if (!canManageAssets(identity.role)) throw new Error("ASSET_MANAGE_FORBIDDEN");
 
     const formData = await request.formData();
     const file = formData.get("file");
@@ -68,6 +70,7 @@ export async function POST(
 
     return NextResponse.json({ document });
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("LADDER_")) return ladderError(error);
     const apiError = assetApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
   }
