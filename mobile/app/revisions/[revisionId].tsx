@@ -1,3 +1,4 @@
+import { findingReadiness } from "../../../lib/quality/finding-readiness";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
 import { QualityEvidenceGallery, QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { qualityItemMatches } from "../../../lib/quality/punchlist";
@@ -14,8 +15,8 @@ import { useLocalSearchParams, router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   Camera,
+  MoreVertical,
   ChevronDown,
-  ExternalLink,
   Plus,
   Send,
   Wrench,
@@ -54,7 +55,6 @@ import {
   refreshQualityMemberCatalog,
   refreshQualityRevisionDetail,
   resolveQualityRevision,
-  shareQualityFile,
   submitRevisionForReview,
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
@@ -728,9 +728,7 @@ export default function RevisionDetailScreen() {
           clean(
             findingForm.rectificationComment,
           ) || null,
-        status: findingForm.afterPhotos.length
-          ? "Rectified"
-          : "Open",
+        status: "Open",
         beforePhotos: findingForm.beforePhotos,
         afterPhotos: findingForm.afterPhotos,
       });
@@ -766,7 +764,8 @@ export default function RevisionDetailScreen() {
   async function saveRectification() {
     if (!workspace || !rectification) return;
 
-    if (!rectification.afterPhotos.length) {
+    if (!rectification.rectificationComment.trim()) {Alert.alert("Comment Required","Describe the rectification / action taken.");return;}
+    if (!rectification.afterPhotos.length && !(detail?.files || []).some(file=>file.revision_item_id===rectification.item.id && file.file_role==="after_photo")) {
       Alert.alert(
         "After photo required",
         "Capture at least one After photo before marking this FLI Rectified.",
@@ -972,7 +971,7 @@ export default function RevisionDetailScreen() {
     <QualityShell
       permission="mobile.rectifications"
       title={title}
-      virtualRows={serverRevision?.source_type==="punchlist"?revisionItems.filter(item=>qualityItemMatches(item,actionSearch,actionStatus,actionSource)).map(item=>({id:item.id,content:<Pressable style={styles.card} onPress={()=>router.push(`/revisions/${encodeURIComponent(serverRevision.id)}/${encodeURIComponent(item.id)}`)}><Text style={styles.fli}>{["Rectified","Verified"].includes(item.status)?"?":"?"} {item.fli_number} ? {issueName(item)}</Text><Text style={styles.meta}>{[item.external_reference,item.member_number && `Member ${item.member_number}`,item.leg && `Leg ${item.leg}`,item.tower_segment].filter(Boolean).join(" ? ")}</Text><Text>{item.source_type==="punchlist"?"Imported":"Manual"} ? {item.status} ? Action</Text><Pressable accessibilityLabel="Finding actions" onPress={()=>confirmDeleteFinding(item.fli_number || "Finding",item.id,item.mobile_client_mutation_id || undefined)}><Text style={{padding:8}}>?</Text></Pressable></Pressable>})):undefined}
+      virtualRows={serverRevision?.source_type==="punchlist"?revisionItems.filter(item=>qualityItemMatches(item,actionSearch,actionStatus,actionSource)).map(item=>({id:item.id,content:<Pressable style={styles.card} onPress={()=>router.push(`/revisions/${encodeURIComponent(serverRevision.id)}/${encodeURIComponent(item.id)}`)}><Text style={styles.fli}>{item.fli_number}</Text><Text style={styles.fli}>{issueName(item)}</Text><View style={{flexDirection:"row",flexWrap:"wrap",gap:8}}>{[item.external_reference,item.member_number && `Member ${item.member_number}`,item.leg && `Leg ${item.leg}`,item.tower_segment].filter(Boolean).map((value,index)=><Text key={index} style={styles.meta}>{value}</Text>)}</View><View style={{flexDirection:"row",gap:8}}><Text>{item.source_type==="punchlist"?"Punchlist":"Manual"}</Text><Text>{findingReadiness(item,revisionFiles.filter(file=>file.revision_item_id===item.id && file.file_role==="before_photo").length,revisionFiles.filter(file=>file.revision_item_id===item.id && file.file_role==="after_photo").length).workflow}</Text><Text>Action</Text></View><Pressable accessibilityLabel="Finding actions" onPress={()=>confirmDeleteFinding(item.fli_number || "Finding",item.id,item.mobile_client_mutation_id || undefined)}><MoreVertical size={20} color="#334155"/></Pressable></Pressable>})):undefined}
       subtitle={`${revisionItems.length + pendingFindingCount} FLI${revisionItems.length + pendingFindingCount === 1 ? "" : "s"} · ${online ? "Online" : "Offline"}`}
     >
       <View style={styles.revisionCard}>
@@ -1179,7 +1178,7 @@ export default function RevisionDetailScreen() {
               <QualityStatusPill
                 value={
                   pendingUpdate?.status ??
-                  item.status
+                  findingReadiness(item,evidence.filter(file=>file.file_role==="before_photo").length,evidence.filter(file=>file.file_role==="after_photo").length).workflow
                 }
               />
             </View>
@@ -1665,7 +1664,7 @@ export default function RevisionDetailScreen() {
                 <Text
                   style={styles.submitText}
                 >
-                  Save Rectification
+                  Save &amp; Mark Rectified
                 </Text>
               </Pressable>
             </ScrollView>

@@ -1,3 +1,4 @@
+import { qualityDisplayName } from "@/lib/quality/display-name";
 import { defectEvidenceContext, revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { userHasAccess } from "@/lib/access/server";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
@@ -95,6 +96,8 @@ export async function POST(request: Request) {
       const source=await downloadDriveItemContent(staging);
       formData=new FormData();
       for(const key of ["projectId","towerId","defectId","revisionId","revisionItemId","fileRole","clientMutationId","watermarkPosition","capturedAt","evidencePhase"] as const) formData.set(key,ticket[key]);
+      formData.set("capturedBy",ticket.capturedBy || "");
+      formData.set("capturedDate",ticket.capturedDate || "");
       formData.set("file",new File([Buffer.from(source.content)],ticket.name,{type:ticket.mimeType}));
     } else {
       if(Number(request.headers.get("content-length"))>4_000_000) return NextResponse.json({error:"Use the Quality direct upload session for large evidence.",code:"DIRECT_UPLOAD_REQUIRED"},{status:413});
@@ -107,16 +110,18 @@ export async function POST(request: Request) {
     const revisionId = field(formData, "revisionId") || null;
     const revisionItemId = field(formData, "revisionItemId") || null;
     const fileRole = field(formData, "fileRole") as FileRole;
+    if(revisionItemId) {
+      const allowed=await Promise.all([userHasAccess(service,user.id,"tt.rectifications"),userHasAccess(service,user.id,"mobile.rectifications")]);
+      if(!allowed.some(Boolean))return NextResponse.json({error:"You do not have permission to add Rectification evidence."},{status:403});
+    }
     const photoMutationId = field(formData, "clientMutationId");
     const mutationKey = photoMutationId ? `${revisionItemId || defectId}:${fileRole}:${photoMutationId}` : null;
     const watermarkPosition = (field(formData, "watermarkPosition") || "bottom-left") as WatermarkPosition;
     if (!WATERMARK_POSITIONS.includes(watermarkPosition)) return NextResponse.json({ error: "Invalid watermark position." }, { status: 400 });
     const capturedAt = canonicalCaptureTime(field(formData, "capturedAt")) || "";
-    if (["before_photo","after_photo","defect_photo"].includes(fileRole) && !capturedAt) {
-      const imported=revisionItemId && fileRole==="before_photo" && await userHasAccess(service,user.id,"quality.import_punchlist")
-        ? await service.from("tower_revision_items").select("id").eq("id",revisionItemId).eq("project_id",projectId).eq("source_type","punchlist").maybeSingle() : null;
-      if(!imported?.data) return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
-    }
+    if(field(formData,"capturedAt") && !capturedAt)return NextResponse.json({error:"Invalid capture timestamp; include UTC or a timezone offset."},{status:400});
+    const capturedBy=field(formData,"capturedBy"),capturedDate=field(formData,"capturedDate");
+    if(capturedBy.length>200 || capturedBy.includes("@") || (capturedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(capturedDate) || !Number.isFinite(Date.parse(capturedDate)) || new Date(capturedDate).toISOString().slice(0,10)!==capturedDate)))return NextResponse.json({error:"Enter a valid capture date and photographer name (not email)."},{status:400});
     const removed=await service.from("tower_quality_evidence_deletions").select("file_id").eq("project_id",projectId).contains("file_snapshot",{mobile_client_mutation_id:`${revisionItemId || defectId}:${fileRole}:${field(formData,"clientMutationId")}`}).limit(1);
     if(removed.error)throw new Error(removed.error.message);
     if(removed.data?.length)return NextResponse.json({error:"This evidence was deleted and cannot be uploaded again.",code:"EVIDENCE_DELETED"},{status:410});
@@ -194,7 +199,7 @@ export async function POST(request: Request) {
     }
 
     const towerLabel = qualityTowerLabel(tower);
-    const uploadedByLabel = qualityUserLabel(user);
+    const uploadedByLabel = qualityDisplayName(qualityUserLabel(user));
     let folder: { id: string; webUrl?: string };
     let finalName: string;
     let itemNumber: number | null = null;
@@ -333,7 +338,7 @@ export async function POST(request: Request) {
       photoNumber=Number(number.data);
       finalName=qualityEvidenceName(project.project_number,towerLabel,evidenceContext.reference,evidenceContext.fli,phase,photoNumber);
     }
-    if(evidenceContext) evidenceContext.timeZone=qualityTimeZone(project.timezone);
+    if(evidenceContext) {evidenceContext.timeZone=qualityTimeZone(project.timezone);evidenceContext.capturedBy=capturedBy || null;evidenceContext.capturedDate=capturedDate || null;}
     const bytes = new Uint8Array(await file.arrayBuffer());
     const annotatedBytes = evidenceContext ? await annotateEvidence(bytes,evidenceContext,watermarkPosition) : null;
     console.info("Quality evidence size",{operation:"quality_evidence_upload",fileRole,originalBytes:bytes.byteLength,annotatedBytes:annotatedBytes?.byteLength,transport:staging?"SharePoint upload session":"multipart"});
@@ -409,12 +414,12 @@ export async function POST(request: Request) {
 
       if (fileRole === "before_photo") {
         update.before_taken_at = capturedAt || null;
-        update.before_taken_by = user.id;
-        update.before_taken_by_label = uploadedByLabel;
+        update.before_taken_by = null;
+        update.before_taken_by_label = capturedBy || null;
       } else {
         update.after_taken_at = capturedAt || null;
-        update.after_taken_by = user.id;
-        update.after_taken_by_label = uploadedByLabel;
+        update.after_taken_by = null;
+        update.after_taken_by_label = capturedBy || null;
 
 
       }

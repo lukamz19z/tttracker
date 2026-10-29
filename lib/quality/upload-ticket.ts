@@ -8,6 +8,7 @@ export type QualityUploadTicket = {
   driveId: string; folderId: string; stagingName: string;
   name: string; mimeType: string; size: number; expires: number;
   evidencePhase: string;
+  capturedBy?: string; capturedDate?: string;
 };
 function signature(payload: string) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;

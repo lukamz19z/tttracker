@@ -23,7 +23,7 @@ export async function ensurePublishedQualityEvidence<T extends PublishedEvidence
   const base={driveId:project.sharepoint_drive_id,projectFolderId:project.sharepoint_folder_id,towerLabel:qualityTowerLabel(tower)};
   const folder=file.defect_id?await ensureDefectPhotosFolder({...base,defectNumber:String(context.reference)}):await ensureRevisionPhotoFolder({...base,fliNumber:String(context.reference),photoType:phase==="AFTER"?"after":"before"});
   const original=await downloadDriveItemContent({driveId:file.sharepoint_drive_id,itemId:file.sharepoint_item_id});
-  const metadata={...context,project:project.project_number,phase,capturedAt:canonicalCaptureTime(file.captured_at),recordedAt:file.created_at,timeZone:qualityTimeZone(project.timezone),position:file.evidence_metadata?.position || "bottom-left",watermarkVersion:EVIDENCE_WATERMARK_VERSION};
+  const metadata={capturedBy:file.evidence_metadata?.capturedBy || null,capturedDate:file.evidence_metadata?.capturedDate || null,...context,project:project.project_number,phase,capturedAt:canonicalCaptureTime(file.captured_at),recordedAt:file.created_at,timeZone:qualityTimeZone(project.timezone),position:file.evidence_metadata?.position || "bottom-left",watermarkVersion:EVIDENCE_WATERMARK_VERSION};
   const position:WatermarkPosition=WATERMARK_POSITIONS.includes(metadata.position as WatermarkPosition)?metadata.position as WatermarkPosition:"bottom-left";
   const jpeg=await annotateEvidence(original.content,metadata,position);
   const originals=await ensureDriveFolder({driveId:base.driveId,parentItemId:folder.id,name:"Originals"});

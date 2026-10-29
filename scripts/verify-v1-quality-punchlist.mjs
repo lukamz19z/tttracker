@@ -26,8 +26,8 @@ await db.exec('create trigger tower_revisions_assign_number before insert on tow
 const migration=fs.readFileSync('supabase/migrations/20261030120000_v1_quality_punchlists_and_evidence.sql','utf8');
 await db.exec(migration);await db.exec(migration);
 await db.exec(`create trigger item_invalidation after insert or update or delete on tower_revision_items for each row execute function invalidate_v1_revision_finalisation();create trigger file_invalidation after insert or update or delete on tower_quality_files for each row execute function invalidate_v1_revision_finalisation();`);
-const rows=Array.from({length:3},(_,i)=>({rowKey:String(i+2),towerId:tower,tower:'136',externalReference:'TG-'+i,defectType:'Missing member',description:'Member missing',member:'77H',segment:'Peak',leg:'A',drawing:'D-1',inspectorComment:'Replace',sourceDate:'2026-10-28',assignedFlag:'Crew 2',photos:'source.jpg'}));
-const request={sourceKey:'Client punchlist',filename:'punchlist.csv',rows,targets:{[tower]:{revisionId:rect}}};
+const rows=Array.from({length:3},(_,i)=>({rowKey:String(i+2),towerId:tower,tower:'136',externalReference:'TG-'+i,defectType:'Missing member',description:'Member missing',member:'77H',segment:'Peak',leg:'A',drawing:'D-1',inspector:'John Smith',inspectorComment:'Replace',sourceDate:'2026-10-28',assignedFlag:'Crew 2',photos:'source.jpg'}));
+const request={importedByLabel:'Luka Zetovic',sourceKey:'Client punchlist',filename:'punchlist.csv',rows,targets:{[tower]:{revisionId:rect}}};
 const batch='00000000-0000-0000-0000-000000000010';
 const runImport=(id,req=request)=>db.query('select import_v1_quality_punchlist($1,$2,$3,$4) result',[project,actor,id,req]).then(r=>r.rows[0].result);
 const imported=await runImport(batch);assert.equal(imported.length,3);assert.deepEqual(imported.map(r=>r.item.fli_number),['FLI-001','FLI-002','FLI-003']);assert.ok(imported.every(r=>r.item.source_type==='punchlist'));
@@ -38,10 +38,12 @@ const manual=(await db.query('select create_v1_revision_item_atomic($1,$2,$3,$4,
 await assert.rejects(db.exec(`insert into tower_revisions(project_id,tower_id,status)values('${project}','${tower}','Draft')`),/already has RECT-01/);
 const newParent=await db.query(`insert into tower_revisions(project_id,tower_id,status,additional_rect_confirmed)values('${project}','${tower}','Draft',true) returning revision_number`);assert.equal(newParent.rows[0].revision_number,'RECT-02');
 const item=imported[0].item;
+assert.equal(item.inspector_name,'John Smith');assert.equal(item.imported_by_label,'Luka Zetovic');assert.equal((await db.query('select imported_by from tower_quality_import_batches where id=$1',[batch])).rows[0].imported_by,actor);
 const edit=(version,id,patch)=>db.query('select update_v1_quality_item($1,$2,$3,$4,$5,$6) result',[item.id,actor,version,id,patch,'Field User']).then(r=>r.rows[0].result);
 await assert.rejects(edit(1,'no-evidence',{status:'Rectified',rectification_comment:'Member replaced'}),/Before and After/);
 const insertPhoto=role=>db.query('insert into tower_quality_files(project_id,revision_id,revision_item_id,file_role,mobile_client_mutation_id)values($1,$2,$3,$4,$5) returning *',[project,rect,item.id,role,role+':stable']).then(r=>r.rows[0]);
 await insertPhoto('before_photo');const after=await insertPhoto('after_photo');
+await assert.rejects(edit(1,'no-comment',{status:'Rectified',rectification_comment:''}),/action taken/);
 const completed=await edit(1,'phone-A',{status:'Rectified',rectification_comment:'Member replaced'});assert.equal(completed.record_version,2);assert.equal(completed.actioned_by_user_id,actor);
 assert.deepEqual(await edit(1,'phone-A',{status:'Rectified',rectification_comment:'Member replaced'}),completed);
 await assert.rejects(edit(1,'phone-B',{rectification_comment:'Stale edits'}),/changed on another device/);
@@ -54,6 +56,9 @@ assert.ok((await db.query('select file_snapshot,completed_at from tower_quality_
 await assert.rejects(insertPhoto('after_photo'),/cannot be resurrected/);
 assert.deepEqual((await db.query('select begin_v1_quality_photo_delete($1,$2,$3) result',[after.id,actor,'retry'])).rows[0].result.file_snapshot,deleted.file_snapshot);
 await assert.rejects(edit(3,'still-missing',{status:'Rectified',rectification_comment:'Done'}),/Before and After/);
+const scaleRows=Array.from({length:200},(_,i)=>({...rows[0],rowKey:String(i+2),externalReference:`SCALE-${i}`}));
+const scale=await runImport('00000000-0000-0000-0000-000000000013',{...request,sourceKey:'Scale batch',rows:scaleRows});assert.equal(scale.length,200);assert.equal(new Set(scale.map(result=>result.item.fli_number)).size,200);assert.ok(scale.every(result=>result.item.inspector_name==='John Smith'));
+console.log('PASS 200-row atomic SQL import with inspector attribution and separate authenticated importer.');
 console.log('PASS import canonical allocation, duplicate retry, changed-source retention, manual coexistence, existing RECT confirmation, stale edit rejection, command retry, deletion audit/tombstone, last-evidence invalidation, finalisation gate.');
 console.log('PGlite serialises execution. Independent PostgreSQL sessions and physical phones still require deployment-environment testing. No remote migration applied.');
 }finally{await db.close();}

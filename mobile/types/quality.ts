@@ -114,6 +114,8 @@ export type QualityRevisionItem = {
   record_version?: number;
   source_type?: "manual" | "punchlist" | null;
   external_reference?: string | null;
+  inspector_name?: string | null;
+  imported_by_label?: string | null;
   inspector_comment?: string | null;
   actioned_by_label?: string | null;
   actioned_at?: string | null;

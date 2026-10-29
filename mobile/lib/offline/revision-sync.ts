@@ -56,7 +56,7 @@ export async function syncRevisionQueueRecord(record: QueueRecord) {
     towerSegment: payload.towerSegment || null, memberNumber: payload.memberNumber || null,
     drawingNumber: payload.drawingNumber || null, finding: payload.finding,
     rectificationComment: payload.rectificationComment || null,
-    status: photos.some(photo => photo.role === "after_photo") ? "Rectified" : "Open",
+    status: "Open",
     beforePhotos: photos.filter(photo => photo.role === "before_photo"),
     afterPhotos: photos.filter(photo => photo.role === "after_photo"),
   };

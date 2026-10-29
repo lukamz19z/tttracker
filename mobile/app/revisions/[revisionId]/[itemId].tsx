@@ -1,3 +1,5 @@
+import { findingReadiness } from "../../../../lib/quality/finding-readiness";
+import { qualityDisplayName } from "../../../../lib/quality/display-name";
 import { useFocusEffect } from "@react-navigation/native";
 import { QualityEvidenceGallery } from "@/components/quality/QualityEvidenceGallery";
 import { router, type Href, useLocalSearchParams } from "expo-router";
@@ -181,8 +183,9 @@ export default function RevisionItemScreen() {
     );
   }
 
-  async function rectify() {
-    if (!comment.trim()) {
+  async function rectify(markRectified=true) {
+    if(markRectified && !files.some(file=>file.file_role==="before_photo"))return Alert.alert("Before photo required","Add Before evidence before marking Rectified.");
+    if (markRectified && !comment.trim()) {
       return Alert.alert(
         "Comment required",
         "Describe the rectification completed.",
@@ -190,7 +193,7 @@ export default function RevisionItemScreen() {
     }
 
     if (
-      afterPhotos.length === 0 &&
+      markRectified && afterPhotos.length === 0 &&
       afterFiles.length === 0
     ) {
       return Alert.alert(
@@ -209,7 +212,7 @@ export default function RevisionItemScreen() {
         projectId: revision!.project_id,
         towerId: revision!.tower_id,
         rectificationComment: comment.trim(),
-        status: "Rectified",
+        status: markRectified ? "Rectified" : item!.status,
         afterPhotos,
       });
 
@@ -268,10 +271,10 @@ export default function RevisionItemScreen() {
     >
       <View style={q.card}>
         <Text style={q.cardTitle}>FLI # {item.fli_number || `FLI-${String(item.item_number).padStart(3, "0")}`}</Text>
-        <Text style={q.muted}>{[item.assigned_flag && `Flag ${item.assigned_flag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" ? ")}</Text>
+        <View style={{flexDirection:"row",flexWrap:"wrap",gap:10}}>{[item.assigned_flag && `Flag ${item.assigned_flag}`,item.leg && `Leg ${item.leg}`].filter(Boolean).map(value=><Text key={String(value)} style={q.muted}>{value}</Text>)}</View>
         <View style={q.row}>
           <QualityStatusPill
-            value={item.status}
+            value={findingReadiness(item,files.filter(file=>file.file_role==="before_photo").length,afterFiles.length).workflow}
           />
           <Text
             style={[
@@ -311,11 +314,14 @@ export default function RevisionItemScreen() {
 
       <View style={q.card}>
         <Text style={q.cardTitle}>Before / After Evidence</Text>
-        <QualityEvidenceGallery files={files} locked={Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"} onChanged={()=>void refreshQualityRevisionDetail(projectId,revisionId).then(setDetail).catch(()=>undefined)}/>
-        <Text style={q.muted}>{item.source_type==="punchlist"?"Imported":item.source_type==="manual"?"Manual":"Legacy"}{item.external_reference?` ? ${item.external_reference}`:""}</Text>
+        <QualityEvidenceGallery files={files} locked={Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"} onChanged={deletedId=>{if(deletedId)setDetail(current=>current?{...current,files:current.files.filter(file=>file.id!==deletedId)}:current);if(online)void refreshQualityRevisionDetail(projectId,revisionId).then(setDetail).catch(()=>undefined);}}/>
+        <View style={{flexDirection:"row",flexWrap:"wrap",gap:10}}><Text style={q.muted}>{item.source_type==="punchlist"?"Punchlist":"Manual"}</Text><Text style={q.muted}>{item.external_reference}</Text></View>
+        {item.source_type==="punchlist"?<><Text>Inspector: {item.inspector_name || "Not supplied"}</Text><Text>Imported By: {qualityDisplayName(item.imported_by_label)}</Text></>:null}
+        <Text>{findingReadiness(item,files.filter(file=>file.file_role==="before_photo").length,afterFiles.length).photosComplete?"Photos Complete":"Photos Incomplete"}</Text>
+        {!comment.trim()?<Text>Comment Required</Text>:null}
         {item.inspector_comment?<Text>{item.inspector_comment}</Text>:null}
         <Text style={q.fieldLabel}>
-          Rectification Comment *
+          Rectification / Action Taken
         </Text>
         <TextInput
           value={comment}
@@ -332,6 +338,7 @@ export default function RevisionItemScreen() {
           context={{ Revision: revision.revision_number || revision.fli_number || "Pending RECT", Tower: tower?.name, "FLI #": item.fli_number || "Pending FLI", Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
         />
 
+        <Pressable disabled={saving || Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"} style={q.primary} onPress={()=>void rectify(false)}><Text style={q.primaryText}>Save Only</Text></Pressable>
         <Pressable
           disabled={saving || Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"}
           style={q.primary}
@@ -341,8 +348,8 @@ export default function RevisionItemScreen() {
             {saving
               ? "Saving…"
               : online
-                ? "Mark Rectified"
-                : "Save Rectification Offline"}
+                ? "Save & Mark Rectified"
+                : "Save & Mark Rectified Offline"}
           </Text>
         </Pressable>
       </View>

@@ -140,11 +140,11 @@ export function QualityPhotoPicker({
             <Image source={{ uri: photo.annotatedUri || photo.originalUri || photo.uri }} style={StyleSheet.absoluteFillObject} contentFit="contain" allowDownscaling />
           </Pressable>
           {context ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>{(["top-left","top-right","bottom-left","bottom-right"] as const).map(corner => <Pressable key={corner} onPress={() => onChange(photos.map(row => row.id === photo.id ? { ...row, watermarkPosition: corner } : row))} style={{ minHeight: 44, padding: 8, justifyContent: "center", borderRadius: 8, backgroundColor: corner === position ? "#dbeafe" : "#f1f5f9" }}><Text>{corner.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join(" ")}</Text></Pressable>)}</View> : null}
-          <View style={styles.photoRow}><Text style={styles.photoName} >{phase} ? {index + 1} of {photos.length} ? {photo.name}</Text><Pressable hitSlop={12} disabled={busy} accessibilityLabel="Delete Photo" onPress={() => remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
+          <View style={styles.photoRow}><View style={{flex:1,gap:4}}><View style={{flexDirection:"row",gap:8}}><Text>{phase}</Text><Text>{index + 1} of {photos.length}</Text></View><Text style={styles.photoName}>{photo.name}</Text></View><Pressable hitSlop={12} disabled={busy} accessibilityLabel="Delete Photo" onPress={() => remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
           <Text style={styles.photoName}>{qualityCaptureLabel(photo.capturedAt,zone)}</Text>
         </View>;
       })}
-      {busy ? <Text style={styles.required}>Preparing evidence image?</Text> : null}
+      {busy ? <Text style={styles.required}>Preparing evidence image...</Text> : null}
       {error ? <Text style={styles.required}>{error}</Text> : null}
       <Modal visible={capturePrompt!==null} transparent onRequestClose={cancelCaptureTime}>
         <SafeAreaView style={{flex:1,backgroundColor:"rgba(0,0,0,0.6)",justifyContent:"center",padding:20}}>

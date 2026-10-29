@@ -290,9 +290,7 @@ export default function NewFindingScreen() {
         finding: finding.trim(),
         rectificationComment:
           rectification.trim() || null,
-        status: afterPhotos.length
-          ? "Rectified"
-          : "Open",
+        status: "Open",
         beforePhotos,
         afterPhotos,
       });

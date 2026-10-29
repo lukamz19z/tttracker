@@ -18,13 +18,16 @@ export async function POST(request: Request) {
     const projectId=text("projectId"),towerId=text("towerId"),defectId=text("defectId"),revisionId=text("revisionId"),revisionItemId=text("revisionItemId"),fileRole=text("fileRole");
     const size=Number(body.size),mimeType=text("mimeType");
     const capturedAt=canonicalCaptureTime(text("capturedAt"));
-    if(!capturedAt) {
-      const imported=fileRole==="before_photo" && revisionItemId && await userHasAccess(service,user.id,"quality.import_punchlist") ? await service.from("tower_revision_items").select("id").eq("id",revisionItemId).eq("project_id",projectId).eq("source_type","punchlist").maybeSingle():null;
-      if(!imported?.data)return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
-    }
+    if(text("capturedAt") && !capturedAt)return NextResponse.json({error:"Invalid capture timestamp; include UTC or a timezone offset."},{status:400});
+    const capturedBy=text("capturedBy"),capturedDate=text("capturedDate");
+    if(capturedBy.length>200 || capturedBy.includes("@") || (capturedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(capturedDate) || !Number.isFinite(Date.parse(capturedDate)) || new Date(capturedDate).toISOString().slice(0,10)!==capturedDate)))return NextResponse.json({error:"Enter a valid capture date and photographer name (not email)."},{status:400});
     if (!projectId || !towerId || !text("clientMutationId") || !["image/jpeg","image/png"].includes(mimeType) || !Number.isSafeInteger(size) || size < 1) return NextResponse.json({error:"Invalid Quality photo upload."},{status:400});
     if (size>25*1024*1024) return NextResponse.json({error:"Original photo exceeds the 25 MB evidence limit. Choose a smaller photo; the original has been retained locally."},{status:413});
     await assertQualityProjectAccess({service,userId:user.id,role,projectId});
+    if(revisionItemId) {
+      const allowed=await Promise.all([userHasAccess(service,user.id,"tt.rectifications"),userHasAccess(service,user.id,"mobile.rectifications")]);
+      if(!allowed.some(Boolean))return NextResponse.json({error:"You do not have permission to add Rectification evidence."},{status:403});
+    }
     const mutationKey=`${revisionItemId || defectId}:${fileRole}:${text("clientMutationId")}`;
     const deleted=await service.from("tower_quality_evidence_deletions").select("file_id").eq("project_id",projectId).contains("file_snapshot",{mobile_client_mutation_id:mutationKey}).limit(1);
     if(deleted.error)throw new Error(deleted.error.message);
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
     if(tracked.error || !tracked.data) throw new Error(tracked.error?.message || "Evidence transfer receipt was not saved.");
     const session=await graphRequest<{uploadUrl:string;expirationDateTime:string}>(`/drives/${encodeURIComponent(base.driveId)}/items/${encodeURIComponent(folder.id)}:/${encodeURIComponent(stagingName)}:/createUploadSession`,{method:"POST",body:JSON.stringify({item:{"@microsoft.graph.conflictBehavior":"replace",name:stagingName}})});
     if(!session.uploadUrl?.startsWith("https://") || !Number.isFinite(Date.parse(session.expirationDateTime))) throw new Error("Evidence provider did not return a valid expiring upload session.");
-    const ticket=signQualityUpload({sessionId:tracked.data.id,userId:user.id,projectId,towerId,defectId,revisionId,revisionItemId,fileRole,evidencePhase:["BEFORE","AFTER","EVIDENCE"].includes(text("evidencePhase"))?text("evidencePhase"):"EVIDENCE",clientMutationId:text("clientMutationId"),watermarkPosition:text("watermarkPosition")||"bottom-left",capturedAt:capturedAt || "",driveId:base.driveId,folderId:folder.id,stagingName,name:text("name"),mimeType,size,expires:Math.min(Date.now()+60*60*1000,Date.parse(session.expirationDateTime))});
+    const ticket=signQualityUpload({sessionId:tracked.data.id,userId:user.id,projectId,towerId,defectId,revisionId,revisionItemId,fileRole,evidencePhase:["BEFORE","AFTER","EVIDENCE"].includes(text("evidencePhase"))?text("evidencePhase"):"EVIDENCE",clientMutationId:text("clientMutationId"),watermarkPosition:text("watermarkPosition")||"bottom-left",capturedAt:capturedAt || "",capturedBy,capturedDate,driveId:base.driveId,folderId:folder.id,stagingName,name:text("name"),mimeType,size,expires:Math.min(Date.now()+60*60*1000,Date.parse(session.expirationDateTime))});
     // uploadUrl is a short-lived capability for this one file, not a Graph token.
     return NextResponse.json({uploadUrl:session.uploadUrl,ticket},{headers:{"Cache-Control":"no-store"}});
   } catch(error) { const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status}); }

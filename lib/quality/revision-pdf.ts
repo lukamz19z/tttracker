@@ -22,13 +22,19 @@ export type RevisionPdfPhoto = {
   dataUrl: string;
   capturedAt?: string | null;
   recordedAt?: string | null;
+  capturedBy?:string|null; capturedDate?:string|null;
   uploadedByLabel?: string | null;
 };
+
+function photoCaptureLabel(photo:RevisionPdfPhoto|undefined,timeZone?:unknown) {
+  return !photo?.capturedAt && photo?.capturedDate ? `Captured ${photo.capturedDate} (time unknown)` : qualityCaptureLabel(photo?.capturedAt,timeZone,photo?.recordedAt);
+}
 
 export type RevisionPdfItem = {
   sourceType?: string | null;
   externalReference?: string | null;
   inspectorComment?: string | null;
+  inspectorName?:string|null; importedByLabel?:string|null;
   actionedBy?: string | null;
   actionedAt?: string | null;
   assignedFlag?: string | null;
@@ -272,7 +278,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
         "FAST",
       );
       doc.setFont("helvetica","normal"); doc.setFontSize(6); setText(C.slate);
-      doc.text(doc.splitTextToSize(qualityCaptureLabel(photo.capturedAt,data.timeZone,photo.recordedAt),width-6),x+3,y+height-6);
+      doc.text(doc.splitTextToSize(photoCaptureLabel(photo,data.timeZone),width-6),x+3,y+height-6);
     } catch {
       throw new Error(`Quality PDF could not render evidence: ${photo.fileName}.`);
     }
@@ -389,10 +395,10 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     doc.setFontSize(8);
     doc.text([item.itemReference && `FLI # ${item.itemReference}`, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
     iy += 3;
-    const audit=[item.sourceType==="punchlist"?"Punchlist":item.sourceType==="manual"?"Manual":"Legacy",item.externalReference && `External: ${item.externalReference}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
+    const audit=[item.sourceType==="punchlist"?"Punchlist":"Manual",item.externalReference && `External: ${item.externalReference}`,item.inspectorName && `Inspector: ${item.inspectorName}`,item.importedByLabel && `Imported By: ${item.importedByLabel}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
     const auditLines=doc.splitTextToSize(audit,contentWidth) as string[];doc.text(auditLines,margin,iy);iy+=auditLines.length*3.5+5;
-    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, `BEFORE ? ${item.beforePhotos.length?1:0} of ${item.beforePhotos.length}`);
-    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, `AFTER ? ${item.afterPhotos.length?1:0} of ${item.afterPhotos.length}`);
+    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, `BEFORE - ${item.beforePhotos.length?1:0} of ${item.beforePhotos.length}`);
+    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, `AFTER - ${item.afterPhotos.length?1:0} of ${item.afterPhotos.length}`);
     iy += 84;
 
     doc.setFont("helvetica", "bold");
@@ -403,8 +409,8 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.2);
     setText(C.slate);
-    const beforeCaption=doc.splitTextToSize(`${qualityCaptureLabel(item.beforePhotos[0]?.capturedAt,data.timeZone,item.beforePhotos[0]?.recordedAt)} · ${text(item.beforeTakenByLabel) || "-"}`,88) as string[];
-    const afterCaption=doc.splitTextToSize(`${qualityCaptureLabel(item.afterPhotos[0]?.capturedAt,data.timeZone,item.afterPhotos[0]?.recordedAt)} · ${text(item.afterTakenByLabel) || "-"}`,88) as string[];
+    const beforeCaption=doc.splitTextToSize(`${photoCaptureLabel(item.beforePhotos[0],data.timeZone)} · ${text(item.beforePhotos[0]?.capturedBy) || "Unknown photographer"}`,88) as string[];
+    const afterCaption=doc.splitTextToSize(`${photoCaptureLabel(item.afterPhotos[0],data.timeZone)} · ${text(item.afterPhotos[0]?.capturedBy) || "Unknown photographer"}`,88) as string[];
     doc.text(
       beforeCaption,
       margin,
@@ -446,8 +452,8 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
         margin,
         43,
       );
-      drawPhoto(extraBefore[index], margin, 55, 88, 165, extraBefore[index]?`BEFORE ? ${index+2} of ${item.beforePhotos.length}`:"BEFORE ? no additional photo");
-      drawPhoto(extraAfter[index], margin + 96, 55, 88, 165, extraAfter[index]?`AFTER ? ${index+2} of ${item.afterPhotos.length}`:"AFTER ? no additional photo");
+      drawPhoto(extraBefore[index], margin, 55, 88, 165, extraBefore[index]?`BEFORE - ${index+2} of ${item.beforePhotos.length}`:"BEFORE - no additional photo");
+      drawPhoto(extraAfter[index], margin + 96, 55, 88, 165, extraAfter[index]?`AFTER - ${index+2} of ${item.afterPhotos.length}`:"AFTER - no additional photo");
     }
   }
 

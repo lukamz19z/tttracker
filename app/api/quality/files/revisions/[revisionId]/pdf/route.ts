@@ -77,7 +77,7 @@ async function graphFileDataUrl(file: QualityFileRow, context?: Record<string,un
   catch {throw new Error(`Evidence image could not be decoded: ${file.file_name}.`);}
   if (!file.annotated_sharepoint_item_id && context) {
     const position=file.evidence_metadata?.position;
-    buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at},typeof position === "string" && WATERMARK_POSITIONS.includes(position as WatermarkPosition) ? position as WatermarkPosition : "bottom-left"));
+    buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at,capturedBy:file.evidence_metadata?.capturedBy,capturedDate:file.evidence_metadata?.capturedDate},typeof position === "string" && WATERMARK_POSITIONS.includes(position as WatermarkPosition) ? position as WatermarkPosition : "bottom-left"));
     contentType="image/jpeg";
   }
 
@@ -92,6 +92,7 @@ async function toPdfPhoto(file: QualityFileRow, context?: Record<string,unknown>
     dataUrl: await graphFileDataUrl(file,context),
     capturedAt: file.captured_at,
     recordedAt: file.created_at,
+    capturedBy:String(file.evidence_metadata?.capturedBy || ""),capturedDate:String(file.evidence_metadata?.capturedDate || ""),
     uploadedByLabel: file.uploaded_by_label,
   };
 }
@@ -139,7 +140,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,source_type,external_reference,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,source_type,external_reference,inspector_name,imported_by_label,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
@@ -187,7 +188,7 @@ export async function POST(request: Request, context: RouteContext) {
       const issueSelected = Boolean(
         item.issue_type_id || String(item.other_issue_text ?? "").trim(),
       );
-      return !issueSelected || !before || !after;
+      return !issueSelected || !before || !after || !item.rectification_comment?.trim() || !["Rectified","Verified"].includes(item.status);
     });
 
     if (incomplete.some(item=>!item.issue_type_id && !String(item.other_issue_text || "").trim())) {
@@ -240,7 +241,7 @@ export async function POST(request: Request, context: RouteContext) {
         towerSegment: item.tower_segment,
         memberNumber: item.member_number,
         drawingNumber: item.drawing_number,
-        sourceType:item.source_type,externalReference:item.external_reference,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
+        inspectorName:item.inspector_name,importedByLabel:item.imported_by_label,sourceType:item.source_type,externalReference:item.external_reference,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
         finding: String(item.finding ?? ""),
         rectificationComment: String(item.rectification_comment ?? ""),
         status: item.status,
@@ -267,7 +268,7 @@ export async function POST(request: Request, context: RouteContext) {
       towerName: qualityTowerLabel(tower),
       fliNumber: revisionReference(revision),
       reportRevision,
-      reportState:complete?"Completed evidence":"Evidence pending — not finalised",
+      reportState:complete?"Rectified":"Rectification pending - not finalised",
       inspectionStage: revision.inspection_stage,
       inspectionDate: revision.inspection_date,
       clientInspector: revision.client_inspector,

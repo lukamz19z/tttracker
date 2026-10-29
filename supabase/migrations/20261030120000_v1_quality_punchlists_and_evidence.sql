@@ -6,6 +6,7 @@ alter table public.tower_revisions add column if not exists source_type text,
 alter table public.tower_revision_items add column if not exists source_type text,
  add column if not exists external_reference text, add column if not exists import_source_key text,
  add column if not exists source_batch_id uuid, add column if not exists source_payload jsonb,
+ add column if not exists inspector_name text, add column if not exists imported_by_label text,
  add column if not exists inspector_comment text, add column if not exists source_date date,
  add column if not exists record_version bigint not null default 1,
  add column if not exists actioned_by_user_id uuid references auth.users(id) on delete set null,
@@ -71,10 +72,12 @@ begin
  if parent.finalised_at is not null or parent.status not in ('Draft','Open','In Progress') or item.status='Verified' then raise exception 'This controlled finding is locked.';end if;
  if p_version is null or p_version<>item.record_version then raise exception using errcode='P0001',message='This FLI changed on another device. Refresh and reconcile your pending changes.';end if;
  if p_patch ? 'status' and p_patch->>'status' not in ('Open','Rectified','Verified') then raise exception 'Choose Open or Rectified.';end if;
- if p_patch->>'status' in ('Rectified','Verified') then
+ if coalesce(p_patch->>'status',item.status) in ('Rectified','Verified') then
   if not exists(select 1 from tower_quality_files where revision_item_id=p_item and file_role='before_photo' and not deletion_pending)
   or not exists(select 1 from tower_quality_files where revision_item_id=p_item and file_role='after_photo' and not deletion_pending) then raise exception 'Before and After evidence must sync before marking Rectified.';end if;
-  if nullif(btrim(coalesce(p_patch->>'rectification_comment',item.rectification_comment)),'') is null then raise exception 'Describe the rectification / action taken.';end if;
+  if nullif(btrim(case when p_patch ? 'rectification_comment' then p_patch->>'rectification_comment' else item.rectification_comment end),'') is null then raise exception 'Describe the rectification / action taken.';end if;
+  if (case when p_patch ? 'issue_type_id' then nullif(p_patch->>'issue_type_id','') else item.issue_type_id::text end) is null
+   and nullif(btrim(case when p_patch ? 'other_issue_text' then p_patch->>'other_issue_text' else item.other_issue_text end),'') is null then raise exception 'Select an issue before marking Rectified.';end if;
  end if;
  update tower_revision_items set
  finding=case when p_patch ? 'finding' then p_patch->>'finding' else finding end,
@@ -134,7 +137,7 @@ begin
   end if;
   update tower_revisions set source_type='punchlist' where id=parent.id and source_type is distinct from 'punchlist';
   allocated:=create_v1_revision_item_atomic(parent.id,p_project,p_actor,'import:'||p_batch||':'||(entry->>'rowKey'),jsonb_build_object('otherIssueText',entry->>'defectType','finding',entry->>'description','leg',entry->>'leg','assignedFlag',entry->>'assignedFlag','towerSegment',entry->>'segment','memberNumber',entry->>'member','drawingNumber',entry->>'drawing'));
-  update tower_revision_items set source_type='punchlist',external_reference=btrim(entry->>'externalReference'),import_source_key=source_key,source_batch_id=p_batch,source_payload=entry,inspector_comment=entry->>'inspectorComment',source_date=nullif(entry->>'sourceDate','')::date where id=(allocated->'item'->>'id')::uuid returning * into item;
+  update tower_revision_items set source_type='punchlist',external_reference=btrim(entry->>'externalReference'),import_source_key=source_key,source_batch_id=p_batch,source_payload=entry,inspector_name=nullif(btrim(entry->>'inspector'),''),imported_by_label=p_request->>'importedByLabel',inspector_comment=entry->>'inspectorComment',source_date=nullif(entry->>'sourceDate','')::date where id=(allocated->'item'->>'id')::uuid returning * into item;
   results:=results||jsonb_build_array(jsonb_build_object('item',to_jsonb(item),'disposition','created'));
  end loop;
  update tower_quality_import_batches set result=results where id=p_batch;
