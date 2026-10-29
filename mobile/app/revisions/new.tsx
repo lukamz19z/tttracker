@@ -1,3 +1,4 @@
+import { apiJson, ApiRequestError } from "@/lib/api/client";
 
 import { router } from "expo-router";
 import { ChevronDown, Save } from "lucide-react-native";
@@ -28,6 +29,7 @@ import {
 import { enqueueRevisionCreate } from "@/lib/offline/quality-sync";
 import {
   createLocalRevisionWorkspace,
+  listRevisionWorkspaces,
   saveRevisionWorkspace,
 } from "@/lib/offline/revision-workspaces";
 
@@ -157,14 +159,14 @@ export default function NewRevisionScreen() {
     return (
       <QualityShell
         permission="mobile.rectifications"
-        title="New Revision"
+        title="Manual Rectification"
       >
         <ActivityIndicator />
       </QualityShell>
     );
   }
 
-  async function createRevision() {
+  async function createRevision(additionalRectConfirmed=false) {
     const current = draft;
     if (!current) return;
 
@@ -187,11 +189,18 @@ export default function NewRevisionScreen() {
     setSaving(true);
 
     try {
+      if(!additionalRectConfirmed){
+        const cached=(await listRevisionWorkspaces(projectId)).filter(row=>row.towerId===current.towerId && !["Closed"].includes(row.cachedDetail?.revision.status || "Draft")).map(row=>({id:row.serverRevisionId || row.routeKey,revision_number:row.serverRevisionNumber || "Pending RECT",openCount:(row.cachedDetail?.items || []).filter(item=>!["Rectified","Verified"].includes(item.status)).length+row.findings.length}));
+        const conflicts=online?(await apiJson<{revisions:typeof cached}>(`/api/quality/revisions/conflicts?projectId=${encodeURIComponent(projectId)}&towerId=${encodeURIComponent(current.towerId)}`)).revisions:cached;
+        if(conflicts.length){const existing=conflicts[0];Alert.alert("Existing Rectification",`Tower ${selectedTower?.name || ""} already has ${existing.revision_number} with ${existing.openCount} open FLIs.`,[{text:"Cancel",style:"cancel"},{text:`Open ${existing.revision_number}`,onPress:()=>router.push(`/revisions/${encodeURIComponent(existing.id)}`)},{text:"Create another anyway",onPress:()=>void createRevision(true)}]);return;}
+      }
+
       const clientMutationId = `revision-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}`;
 
       const payload = {
+        additionalRectConfirmed,
         projectId: current.projectId,
         towerId: current.towerId,
         inspectionStage: current.inspectionStage,
@@ -214,7 +223,8 @@ export default function NewRevisionScreen() {
             `/revisions/${encodeURIComponent(result.revision.id)}`,
           );
           return;
-        } catch {
+        } catch(error) {
+          if(error instanceof ApiRequestError && error.status>=400 && error.status<500)throw error;
           // Fall through to offline queue. The user can continue
           // working on the Revision immediately.
         }
@@ -251,7 +261,7 @@ export default function NewRevisionScreen() {
   return (
     <QualityShell
       permission="mobile.rectifications"
-      title="New Revision"
+      title="Manual Rectification"
       subtitle={`Create the RECT record first. ${saveState}. Findings are added from the Revision after it is created.`}
     >
       <View style={styles.card}>

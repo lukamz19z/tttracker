@@ -10,6 +10,7 @@ type Renderer = (job: RasterJob) => Promise<string>;
 let renderer: Renderer | null = null;
 const ready: (() => void)[] = [];
 let serial: Promise<unknown> = Promise.resolve();
+export async function waitQualityAnnotations(){await serial.catch(()=>undefined);}
 export function registerEvidenceRenderer(value: Renderer) {
   renderer = value; ready.splice(0).forEach(resolve => resolve());
   return () => { if (renderer === value) renderer = null; };
@@ -46,16 +47,16 @@ export async function annotateQualityPhoto(photo: LocalQualityPhoto, context = p
     const dimensions = photo.width && photo.height ? { width: photo.width, height: photo.height } : await new Promise<{width:number;height:number}>((resolve,reject) => Image.getSize(originalUri,(width,height)=>resolve({width,height}),reject));
     const scale = Math.min(1,1800/Math.max(dimensions.width,dimensions.height));
     const layout = evidenceLayout(Math.round(dimensions.width*scale),Math.round(dimensions.height*scale),context,position);
-    // SVG's Android Image only sends onLoad after decoding. A unique temporary
-    // source prevents a warm Fresco cache from bypassing that completion event.
+    // Preserve the original until the bounded native snapshot has completed.
     const renderSource = new File(Paths.cache,`quality-render-${Date.now()}-${Math.random().toString(36).slice(2)}.${photo.mimeType === "image/png" ? "png" : "jpg"}`);
     new File(originalUri).copy(renderSource);
-    let png: string;
-    try { png = await renderer({ source: renderSource.uri, layout }); }
+    let rendered: string;
+    try { rendered = await renderer({ source: renderSource.uri, layout }); }
     finally { if (renderSource.exists) renderSource.delete(); }
-    if (!png) throw new Error("Evidence annotation could not be rasterised.");
-    const destination = new File(getOfflineDirectoryUri(),`annotated-${photo.id}-${Date.now()}-${Math.random().toString(36).slice(2,8)}.png`);
-    destination.create({intermediates:true}); destination.write(png,{encoding:"base64"});
+    if (!rendered) throw new Error("Evidence annotation could not be rasterised.");
+    const destination = new File(getOfflineDirectoryUri(),`annotated-${photo.id}-${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`);
+    new File(rendered).copy(destination);
+    if(new File(rendered).exists)new File(rendered).delete();
     const result = { ...photo, uri: originalUri, originalUri, annotatedUri: destination.uri, annotationKey, watermarkContext: context };
     await setCache(`quality:photo-annotation:${photo.id}`,result);
     return result;

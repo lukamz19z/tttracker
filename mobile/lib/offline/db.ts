@@ -4,9 +4,7 @@ let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 async function database() {
   if (!databasePromise) {
-    databasePromise = SQLite.openDatabaseAsync("tttracker-mobile.db");
-  }
-  const db = await databasePromise;
+    databasePromise = SQLite.openDatabaseAsync("tttracker-mobile.db").then(async db => {
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS cache_entries (
@@ -25,7 +23,10 @@ async function database() {
       updated_at TEXT NOT NULL
     );
   `);
-  return db;
+      return db;
+    }).catch(error=>{databasePromise=null;throw error;});
+  }
+  return databasePromise;
 }
 
 export async function setCache<T>(key: string, value: T) {

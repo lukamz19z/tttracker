@@ -1,4 +1,5 @@
 import { defectEvidenceContext, revisionEvidenceContext } from "@/lib/quality/evidence-context";
+import { userHasAccess } from "@/lib/access/server";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { createHash, randomUUID } from "node:crypto";
 import { annotateEvidence, EVIDENCE_WATERMARK_VERSION, watermarkLines, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
@@ -81,6 +82,7 @@ export async function POST(request: Request) {
       await assertQualityProjectAccess({service,userId:user.id,role,projectId:ticket.projectId});
       const existing=await service.from("tower_quality_files").select("*").eq("project_id",ticket.projectId).eq("mobile_client_mutation_id",`${ticket.revisionItemId || ticket.defectId}:${ticket.fileRole}:${ticket.clientMutationId}`).maybeSingle();
       if(existing.error) throw new Error(existing.error.message);
+      if(existing.data?.deletion_pending)return NextResponse.json({error:"Evidence is pending deletion.",code:"EVIDENCE_DELETED"},{status:410});
       if(existing.data) return NextResponse.json({success:true,file:existing.data});
       const transfer=await service.from("tower_quality_upload_sessions").select("id").eq("id",ticket.sessionId).eq("user_id",user.id).eq("project_id",ticket.projectId).maybeSingle();
       if(transfer.error) throw new Error(transfer.error.message);
@@ -110,7 +112,14 @@ export async function POST(request: Request) {
     const watermarkPosition = (field(formData, "watermarkPosition") || "bottom-left") as WatermarkPosition;
     if (!WATERMARK_POSITIONS.includes(watermarkPosition)) return NextResponse.json({ error: "Invalid watermark position." }, { status: 400 });
     const capturedAt = canonicalCaptureTime(field(formData, "capturedAt")) || "";
-    if (["before_photo","after_photo","defect_photo"].includes(fileRole) && !capturedAt) return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
+    if (["before_photo","after_photo","defect_photo"].includes(fileRole) && !capturedAt) {
+      const imported=revisionItemId && fileRole==="before_photo" && await userHasAccess(service,user.id,"quality.import_punchlist")
+        ? await service.from("tower_revision_items").select("id").eq("id",revisionItemId).eq("project_id",projectId).eq("source_type","punchlist").maybeSingle() : null;
+      if(!imported?.data) return NextResponse.json({error:"A valid evidence capture timestamp including UTC or timezone offset is required."},{status:400});
+    }
+    const removed=await service.from("tower_quality_evidence_deletions").select("file_id").eq("project_id",projectId).contains("file_snapshot",{mobile_client_mutation_id:`${revisionItemId || defectId}:${fileRole}:${field(formData,"clientMutationId")}`}).limit(1);
+    if(removed.error)throw new Error(removed.error.message);
+    if(removed.data?.length)return NextResponse.json({error:"This evidence was deleted and cannot be uploaded again.",code:"EVIDENCE_DELETED"},{status:410});
     const displayValue = formData.get("file");
     const originalValue = formData.get("originalFile");
     // Legacy multipart clients may carry both; direct sessions carry only
@@ -165,6 +174,7 @@ export async function POST(request: Request) {
     if (mutationKey) {
       const existing = await service.from("tower_quality_files").select("*").eq("project_id", projectId).eq("mobile_client_mutation_id", mutationKey).maybeSingle();
       if (existing.error) throw new Error(existing.error.message);
+      if(existing.data?.deletion_pending)return NextResponse.json({error:"Evidence is pending deletion.",code:"EVIDENCE_DELETED"},{status:410});
       if (existing.data) return NextResponse.json({ success: true, file: existing.data });
     }
 
@@ -398,25 +408,15 @@ export async function POST(request: Request) {
       const update: Record<string, unknown> = {};
 
       if (fileRole === "before_photo") {
-        update.before_taken_at = capturedAt;
+        update.before_taken_at = capturedAt || null;
         update.before_taken_by = user.id;
         update.before_taken_by_label = uploadedByLabel;
       } else {
-        update.after_taken_at = capturedAt;
+        update.after_taken_at = capturedAt || null;
         update.after_taken_by = user.id;
         update.after_taken_by_label = uploadedByLabel;
 
-        const { data: item } = await service
-          .from("tower_revision_items")
-          .select("rectification_comment")
-          .eq("id", revisionItemId)
-          .maybeSingle();
 
-        if (String(item?.rectification_comment ?? "").trim()) {
-          const before=await service.from("tower_quality_files").select("id").eq("revision_item_id",revisionItemId).eq("file_role","before_photo").limit(1);
-          if(before.error) throw new Error(before.error.message);
-          if(before.data?.length) update.status = "Rectified";
-        }
       }
 
       const itemUpdate = await service

@@ -21,6 +21,10 @@ export async function POST(request:Request,context:{params:Promise<{revisionId:s
     const fields=Object.fromEntries(["issueTypeId","otherIssueText","leg","assignedFlag","towerSegment","memberNumber","drawingNumber","finding","rectificationComment"].map(key=>[key,typeof body[key]==="string"?body[key].trim():null]));
     const {data,error}=await service.rpc("create_v1_revision_item_atomic",{p_revision_id:revisionId,p_project_id:parent.data.project_id,p_actor_id:user.id,p_mutation_id:body.clientMutationId.trim(),p_fields:fields});
     if(error){const result=atomicQualityError(error);console.warn("FLI allocation failed",{revisionId,code:error.code,duration:Date.now()-started});return NextResponse.json({error:result.message},{status:result.status});}
+    if(data?.item?.id && !data.item.source_type) {
+      const tagged=await service.from("tower_revision_items").update({source_type:"manual"}).eq("id",data.item.id);if(tagged.error)throw new Error(tagged.error.message);
+      data.item.source_type="manual";
+    }
     if(!data?.item?.id || !data.item.fli_number)throw new Error("Atomic finding creation returned no canonical FLI.");
     if(process.env.NODE_ENV!=="production")console.debug("FLI allocated",{revisionId,clientMutationId:body.clientMutationId,allocatorScope:revisionId,itemNumber:data.item.item_number,fli:data.item.fli_number,idempotentHit:data.idempotentHit,duration:Date.now()-started});
     return NextResponse.json(data);

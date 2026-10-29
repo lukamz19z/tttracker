@@ -1,10 +1,11 @@
+import { qualityWorkflowAccess } from "@/lib/quality/workflow-access";
+import { atomicQualityError } from "@/lib/quality/atomic-error";
 import { NextResponse } from "next/server";
 
 import { notifyRevisionEvent } from "@/lib/quality/revision-notifications";
 import {
   assertQualityProjectAccess,
   qualityApiError,
-  requireQualityUser,
 } from "@/lib/quality/server";
 
 export const runtime = "nodejs";
@@ -39,7 +40,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const { service, user, role } = await requireQualityUser(request);
+    const { service, user, role, label } = await qualityWorkflowAccess(request, projectId);
     await assertQualityProjectAccess({
       service,
       userId: user.id,
@@ -74,16 +75,13 @@ export async function POST(request: Request) {
     const existing = await findExisting();
     if (existing) return existingResponse(existing);
 
-    const { data: authUser } = await service.auth.admin.getUserById(user.id);
-    const actorLabel =
-      clean(authUser.user?.user_metadata?.full_name) ||
-      clean(authUser.user?.user_metadata?.name) ||
-      clean(authUser.user?.email) ||
-      "TTTracker user";
+    const actorLabel = label;
 
     // Every attempt is a fresh INSERT using the shared drift-safe DB trigger.
     // Idempotency wins before/after each attempt; proposed client numbers are ignored.
     const insert = {
+        source_type: "manual",
+        additional_rect_confirmed: body.additionalRectConfirmed === true,
         fli_number: null, // RECT is allocated in revision_number by the shared DB trigger.
         project_id: projectId,
         tower_id: towerId,
@@ -102,7 +100,7 @@ export async function POST(request: Request) {
     for (let attempt = 0; attempt < 4; attempt++) {
       const result = await service.from("tower_revisions").insert(insert).select("*").single();
       if (!result.error) { revision = result.data; break; }
-      if (result.error.code !== "23505") throw new Error(result.error.message);
+      if (result.error.code !== "23505") { const error=atomicQualityError(result.error); return NextResponse.json({error:error.message,code:"RECONCILIATION_REQUIRED"},{status:error.status}); }
       const existing = await findExisting();
       if (existing) return existingResponse(existing);
       const constraint = result.error.message.match(/constraint "([^"]+)"/)?.[1];

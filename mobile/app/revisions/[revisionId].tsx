@@ -1,4 +1,7 @@
-import { annotateQualityPhoto, evidencePreviewUri } from "@/lib/quality-evidence";
+import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
+import { QualityEvidenceGallery, QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
+import { qualityItemMatches } from "../../../lib/quality/punchlist";
+import { evidencePreviewUri } from "@/lib/quality-evidence";
 import { deleteQualityFinding, deleteQualityRevision } from "@/lib/offline/quality-deletion";
 import { useAccess } from "@/lib/access";
 import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
@@ -9,7 +12,6 @@ import { enqueue, queueRows,getCache } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
-import { Image } from "expo-image";
 import {
   Camera,
   ChevronDown,
@@ -49,7 +51,6 @@ import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityMemberCatalog,
   cachedQualityRevisionDetail,
-  downloadQualityFile,
   refreshQualityMemberCatalog,
   refreshQualityRevisionDetail,
   resolveQualityRevision,
@@ -127,6 +128,7 @@ export default function RevisionDetailScreen() {
 
   const { data, loading: metadataLoading } = useQuality();
   const {can}=useAccess();
+  const [actionSearch,setActionSearch]=useState(""),[actionStatus,setActionStatus]=useState("All"),[actionSource,setActionSource]=useState("All");
   const [deleteOpen,setDeleteOpen]=useState(false);
   const [deleteConfirmation,setDeleteConfirmation]=useState("");
   const [deleting,setDeleting]=useState(false);
@@ -161,10 +163,8 @@ export default function RevisionDetailScreen() {
   const [submitBusy, setSubmitBusy] =
     useState(false);
 
-  const [preview, setPreview] =
-    useState<{ uri: string; name: string } | null>(null);
-  const [openingId, setOpeningId] =
-    useState<string | null>(null);
+  const [localGallery,setLocalGallery]=useState<{photos:GalleryPhoto[];index:number}|null>(null);
+
   const wasSyncingRef = useRef(false);
 
   const towers = useMemo(
@@ -780,6 +780,7 @@ export default function RevisionDetailScreen() {
       const update: PendingRevisionUpdate = {
         leg: rectification.item.leg, assignedFlag: rectification.item.assigned_flag,
         itemId: rectification.item.id,
+        expectedVersion: rectification.item.record_version,
         rectificationComment:
           clean(
             rectification.rectificationComment,
@@ -819,39 +820,15 @@ export default function RevisionDetailScreen() {
     }
   }
 
-  async function openServerPhoto(file: {
-    id: string;
-    file_name: string;
-  }) {
-    setOpeningId(file.id);
-
+  async function openLocalPhoto(photo:LocalQualityPhoto,phase:"BEFORE"|"AFTER") {
     try {
-      const uri = await downloadQualityFile(
-        file.id,
-        file.file_name,
-      );
-
-      setPreview({
-        uri,
-        name: file.file_name || "Evidence",
-      });
-    } catch (error) {
-      Alert.alert(
-        "Could not open photo",
-        error instanceof Error
-          ? error.message
-          : "Please try again.",
-      );
-    } finally {
-      setOpeningId(null);
-    }
-  }
-
-  async function openLocalPhoto(photo: LocalQualityPhoto, phase: "BEFORE" | "AFTER") {
-    try {
-      const ready = await annotateQualityPhoto(photo,{ ...photo.watermarkContext, capturedAt:photo.capturedAt,timeZone:data?.project?.timezone,phase, reference: serverRevision?.revision_number || workspace?.serverRevisionNumber || photo.watermarkContext?.reference || "Pending RECT", tower: tower?.name || photo.watermarkContext?.tower });
-      setPreview({ uri: await evidencePreviewUri(ready), name: photo.name });
-    } catch(error) { Alert.alert("Could not open photo",error instanceof Error ? error.message : "Evidence annotation failed."); }
+      const finding=workspace?.findings.find(row=>[...row.beforePhotos,...row.afterPhotos].some(value=>value.id===photo.id));
+      const update=workspace?.pendingUpdates.find(row=>row.afterPhotos.some(value=>value.id===photo.id));
+      const before=finding?.beforePhotos || [],after=finding?.afterPhotos || update?.afterPhotos || (phase==="AFTER"?[photo]:[]);
+      const combined=[...(before.length?before:phase==="BEFORE"?[photo]:[]).map(row=>({photo:row,role:"before_photo"})),...after.map(row=>({photo:row,role:"after_photo"}))];
+      const photos:GalleryPhoto[]=[];for(const value of combined)photos.push({id:value.photo.id,role:value.role,uri:await evidencePreviewUri(value.photo)});
+      setLocalGallery({photos,index:photos.findIndex(row=>row.id===photo.id)});
+    }catch(error){Alert.alert("Photo unavailable",error instanceof Error?error.message:"Retry this photo.");}
   }
 
   async function finalise() {
@@ -995,6 +972,7 @@ export default function RevisionDetailScreen() {
     <QualityShell
       permission="mobile.rectifications"
       title={title}
+      virtualRows={serverRevision?.source_type==="punchlist"?revisionItems.filter(item=>qualityItemMatches(item,actionSearch,actionStatus,actionSource)).map(item=>({id:item.id,content:<Pressable style={styles.card} onPress={()=>router.push(`/revisions/${encodeURIComponent(serverRevision.id)}/${encodeURIComponent(item.id)}`)}><Text style={styles.fli}>{["Rectified","Verified"].includes(item.status)?"?":"?"} {item.fli_number} ? {issueName(item)}</Text><Text style={styles.meta}>{[item.external_reference,item.member_number && `Member ${item.member_number}`,item.leg && `Leg ${item.leg}`,item.tower_segment].filter(Boolean).join(" ? ")}</Text><Text>{item.source_type==="punchlist"?"Imported":"Manual"} ? {item.status} ? Action</Text><Pressable accessibilityLabel="Finding actions" onPress={()=>confirmDeleteFinding(item.fli_number || "Finding",item.id,item.mobile_client_mutation_id || undefined)}><Text style={{padding:8}}>?</Text></Pressable></Pressable>})):undefined}
       subtitle={`${revisionItems.length + pendingFindingCount} FLI${revisionItems.length + pendingFindingCount === 1 ? "" : "s"} · ${online ? "Online" : "Offline"}`}
     >
       <View style={styles.revisionCard}>
@@ -1058,7 +1036,7 @@ export default function RevisionDetailScreen() {
       >
         <Plus size={18} color="#fff" />
         <Text style={styles.addFindingText}>
-          Add Finding / FLI
+          Add Manual FLI
         </Text>
       </Pressable>
 
@@ -1161,7 +1139,8 @@ export default function RevisionDetailScreen() {
         ),
       )}
 
-      {revisionItems.map((item, index) => {
+      {serverRevision?.source_type==="punchlist"?<View style={styles.card}><Text style={styles.fli}>{revisionItems.filter(item=>["Rectified","Verified"].includes(item.status)).length} of {revisionItems.length} rectified</Text><TextInput style={styles.input} value={actionSearch} onChangeText={setActionSearch} placeholder="Search FLI, reference, member, segment, leg"/><View style={{flexDirection:"row",flexWrap:"wrap",gap:8}}>{["All","Open","Rectified"].map(value=><Pressable key={value} onPress={()=>setActionStatus(value)}><Text style={{padding:8,fontWeight:actionStatus===value?"900":"400"}}>{value}</Text></Pressable>)}{["All","Imported","Manual"].map(value=><Pressable key={value} onPress={()=>setActionSource(value)}><Text style={{padding:8,fontWeight:actionSource===value?"900":"400"}}>{value}</Text></Pressable>)}</View></View>:null}
+      {revisionItems.filter(()=>serverRevision?.source_type!=="punchlist").map((item, index) => {
         const fli =
           clean(item.fli_number) ||
           `FLI-${String(
@@ -1239,60 +1218,8 @@ export default function RevisionDetailScreen() {
               </Text>
             ) : null}
 
+            <QualityEvidenceGallery files={evidence} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review","Closed"].includes(serverRevision?.status || "") || item.status==="Verified"} onChanged={()=>void reloadDetail(online)}/>
             <View style={styles.evidenceRow}>
-              {evidence.map((file) => (
-                <View
-                  key={file.id}
-                  style={styles.evidenceActions}
-                >
-                  <Pressable
-                    style={styles.photoButton}
-                    onPress={() =>
-                      void openServerPhoto({
-                        id: file.id,
-                        file_name:
-                          file.file_name,
-                      })
-                    }
-                  >
-                    {openingId === file.id ? (
-                      <ActivityIndicator
-                        size="small"
-                      />
-                    ) : (
-                      <Camera
-                        size={14}
-                        color="#0f172a"
-                      />
-                    )}
-
-                    <Text
-                      style={styles.photoText}
-                    >
-                      {file.file_role ===
-                      "after_photo"
-                        ? "After"
-                        : "Before"}
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.shareButton}
-                    onPress={() =>
-                      void shareQualityFile(
-                        file.id,
-                        file.file_name,
-                      )
-                    }
-                  >
-                    <ExternalLink
-                      size={14}
-                      color="#475569"
-                    />
-                  </Pressable>
-                </View>
-              ))}
-
               {pendingUpdate?.afterPhotos.map(
                 (photo, photoIndex) => (
                   <Pressable
@@ -1406,7 +1333,7 @@ export default function RevisionDetailScreen() {
           <View style={styles.modalHeader}>
             <View style={styles.grow}>
               <Text style={styles.modalTitle}>
-                Add Finding / FLI
+                Add Manual FLI
               </Text>
               <Text style={styles.modalSub}>
                 Saved independently against {rectCode}
@@ -1746,37 +1673,7 @@ export default function RevisionDetailScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal
-        visible={Boolean(preview)}
-        transparent
-        animationType="fade"
-        onRequestClose={() =>
-          setPreview(null)
-        }
-      >
-        <View style={styles.previewModal}>
-          <Pressable
-            style={styles.previewClose}
-            onPress={() =>
-              setPreview(null)
-            }
-          >
-            <X size={25} color="#fff" />
-          </Pressable>
-
-          {preview ? (
-            <Image
-              source={{ uri: preview.uri }}
-              style={styles.previewImage}
-              contentFit="contain"
-            />
-          ) : null}
-
-          <Text style={styles.previewName}>
-            {preview?.name}
-          </Text>
-        </View>
-      </Modal>
+      {localGallery?<QualitySwipeViewer photos={localGallery.photos} initialIndex={localGallery.index} onDelete={id=>{const photo=[...(workspace?.findings.flatMap(row=>[...row.beforePhotos,...row.afterPhotos]) || []),...(workspace?.pendingUpdates.flatMap(row=>row.afterPhotos) || [])].find(row=>row.id===id);if(photo)void deleteLocalQualityPhoto(photo).then(async()=>{setLocalGallery(null);await reloadDetail(online);await refreshSync();}).catch(error=>Alert.alert("Photo deletion failed",String(error)));}} onClose={()=>setLocalGallery(null)}/>:null}
     </QualityShell>
   );
 }

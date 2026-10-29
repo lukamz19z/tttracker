@@ -1,3 +1,4 @@
+import { withoutDeletedPhotos } from "@/lib/offline/quality-photo-tombstones";
 import { fetch as binaryFetch } from "expo/fetch";
 import { Image as NativeImage } from "react-native";
 import { manuallyOffline } from "@/lib/offline/connectivity";
@@ -317,6 +318,7 @@ export async function refreshQualityRevisionDetail(
 
   if(await revisionDeletion(projectId,revisionId,payload.revision.mobile_client_mutation_id))throw new Error("This Rectification is deleted or pending deletion.");
 
+  payload.files=await withoutDeletedPhotos(payload.files);
   await setCache(
     revisionDetailKey(projectId, revisionId),
     payload,
@@ -330,9 +332,9 @@ export async function cachedQualityRevisionDetail(
   revisionId: string,
 ) {
   if((await revisionDeletion(projectId,revisionId))?.state==="deleted")return null;
-  return getCache<QualityRevisionDetailPayload>(
-    revisionDetailKey(projectId, revisionId),
-  );
+  const cached=await getCache<QualityRevisionDetailPayload>(revisionDetailKey(projectId,revisionId));
+  if(cached)cached.value.files=await withoutDeletedPhotos(cached.value.files);
+  return cached;
 }
 
 export async function resolveQualityRevision(
@@ -513,9 +515,13 @@ export async function uploadQualityPhoto(input: {
 export async function shareQualityFile(
   fileId: string,
   fileName: string,
+  preview = false,
 ) {
+  const cacheKey=`quality:${preview?"preview":"file"}:${fileId}`;
+  const cached=(await getCache<string>(cacheKey))?.value;
+  if(cached && new File(cached).exists)return cached;
   const response = await apiFetch(
-    `/api/quality/files/${encodeURIComponent(fileId)}/content`,
+    `/api/quality/files/${encodeURIComponent(fileId)}/content${preview?"?preview=1":""}`,
     { timeoutMs: 120_000 },
   );
 
@@ -533,7 +539,7 @@ export async function shareQualityFile(
   ).replace(/[^a-zA-Z0-9._-]/g, "_");
   const file = new File(
     Paths.cache,
-    `${Date.now()}-${safe}`,
+    `quality-${preview?"preview":"file"}-${fileId}-${safe}`,
   );
 
   file.create({
@@ -570,9 +576,13 @@ export async function submitRevisionForReview(
 export async function downloadQualityFile(
   fileId: string,
   fileName: string,
+  preview = false,
 ) {
+  const cacheKey=`quality:${preview?"preview":"file"}:${fileId}`;
+  const cached=(await getCache<string>(cacheKey))?.value;
+  if(cached && new File(cached).exists)return cached;
   const response = await apiFetch(
-    `/api/quality/files/${encodeURIComponent(fileId)}/content`,
+    `/api/quality/files/${encodeURIComponent(fileId)}/content${preview?"?preview=1":""}`,
     { timeoutMs: 120_000 },
   );
 
@@ -590,7 +600,7 @@ export async function downloadQualityFile(
   ).replace(/[^a-zA-Z0-9._-]/g, "_");
   const file = new File(
     Paths.cache,
-    `${Date.now()}-${safe}`,
+    `quality-${preview?"preview":"file"}-${fileId}-${safe}`,
   );
 
   file.create({
@@ -598,6 +608,7 @@ export async function downloadQualityFile(
     intermediates: true,
   });
   file.write(bytes);
+  await setCache(cacheKey,file.uri);
   return file.uri;
 }
 

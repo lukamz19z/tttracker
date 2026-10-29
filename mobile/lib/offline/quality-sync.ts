@@ -1,3 +1,5 @@
+import { syncQualityPhotoDelete } from "./quality-photo-deletion";
+import { photoDeleted, withoutDeletedPhotos } from "./quality-photo-tombstones";
 import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
 import { DependencyBlockedError } from "./sync-errors";
 import { withQualityOperation } from "./quality-operation-lock";
@@ -42,6 +44,7 @@ export async function enqueueDefectUpdate(input:OfflineDefectUpdate) {
 }
 
 export type OfflineRevisionCreate = {
+  additionalRectConfirmed?: boolean;
   clientMutationId: string;
   projectId: string;
   towerId: string;
@@ -104,6 +107,7 @@ export type OfflineRevisionItemCreate = {
 };
 
 export type OfflineRevisionItemUpdate = {
+  expectedVersion?: number;
   workspaceCreatedAt?: string;
   clientMutationId: string;
   revisionId: string;
@@ -257,6 +261,7 @@ async function uploadPhotos({
     context=response.evidenceContext;
   }
   for (const photo of photos) {
+    if(await photoDeleted(photo.id))continue;
     const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
     if (await getCache<{ id: string }>(receiptKey)) continue;
     if (context) Object.assign(photo,await annotateQualityPhoto(photo,photoContext(context,role === "after_photo" || photo.watermarkContext?.phase === "AFTER" ? "AFTER" : "BEFORE",photo.capturedAt)));
@@ -281,6 +286,7 @@ async function uploadPhotos({
     });
     if (!uploaded.file?.id) throw new Error("Evidence upload returned no server file ID.");
     await setCache(receiptKey, uploaded.file);
+    await setCache(`quality:photo-server:${photo.id}`,{...uploaded.file,project_id:projectId,revision_id:revisionId,revision_item_id:revisionItemId});
   }
 
   // Cleanup happens only after the whole operation and workspace reconciliation.
@@ -362,7 +368,7 @@ async function createRevisionItem(
     role: "after_photo",
     photos: payload.afterPhotos,
   });
-  if (payload.status === "Rectified") await apiJson(`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(result.item.id)}`, { method: "PATCH", body: JSON.stringify({ status: "Rectified", rectificationComment: payload.rectificationComment }) });
+  if (payload.status === "Rectified") await apiJson(`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(result.item.id)}`, { method: "PATCH", body: JSON.stringify({ expectedVersion: 1, clientMutationId: `${payload.clientMutationId}:complete`, status: "Rectified", rectificationComment: payload.rectificationComment }) });
 
 }
 
@@ -411,32 +417,21 @@ async function syncRevision(
 async function syncRevisionItemUpdate(
   payload: OfflineRevisionItemUpdate,
 ) {
-  await apiJson(`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`, { method: "PATCH", body: JSON.stringify({ leg: payload.leg, assignedFlag: payload.assignedFlag, rectificationComment: payload.rectificationComment }) });
-  await uploadPhotos({
-    projectId: payload.projectId,
-    towerId: payload.towerId,
-    revisionId: payload.revisionId,
-    revisionItemId: payload.itemId,
-    role: "after_photo",
-    photos: payload.afterPhotos,
-  });
-  await apiJson<{ item: { id: string } }>(
-    `/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify({
-        leg: payload.leg, assignedFlag: payload.assignedFlag,
-        rectificationComment:
-          payload.rectificationComment,
-        status: payload.status,
-      }),
-    },
-  );
-
+  // Save details with the version captured by the editor, never a freshly fetched version.
+  // Stable command IDs make both phases safe after an uncertain network response.
+  const endpoint=`/api/mobile/quality/revisions/${encodeURIComponent(payload.revisionId)}/items/${encodeURIComponent(payload.itemId)}`;
+  const details=await apiJson<{item:{record_version:number}}>(endpoint,{method:"PATCH",body:JSON.stringify({
+    expectedVersion:payload.expectedVersion,clientMutationId:`${payload.clientMutationId}:details`,
+    leg:payload.leg,assignedFlag:payload.assignedFlag,rectificationComment:payload.rectificationComment,
+  })});
+  await uploadPhotos({projectId:payload.projectId,towerId:payload.towerId,revisionId:payload.revisionId,revisionItemId:payload.itemId,role:"after_photo",photos:payload.afterPhotos});
+  await apiJson(endpoint,{method:"PATCH",body:JSON.stringify({expectedVersion:details.item.record_version,clientMutationId:`${payload.clientMutationId}:status`,status:payload.status})});
 
 }
 
 async function applyQualityQueueRecord(record: QueueRecord) {
+  if(record.kind==="quality_evidence_delete"){await syncQualityPhotoDelete(record.payload as {fileId:string});return;}
+  record={...record,payload:await withoutDeletedPhotos(record.payload)};
   const payload = { ...(record.payload as OfflineRevisionItemCreate & OfflineRevisionItemUpdate) };
   const workspaces = await listRevisionWorkspaces(payload.projectId);
   const workspace = workspaces.find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);

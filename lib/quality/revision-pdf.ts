@@ -26,6 +26,11 @@ export type RevisionPdfPhoto = {
 };
 
 export type RevisionPdfItem = {
+  sourceType?: string | null;
+  externalReference?: string | null;
+  inspectorComment?: string | null;
+  actionedBy?: string | null;
+  actionedAt?: string | null;
   assignedFlag?: string | null;
   leg?: string | null;
   itemReference?: string | null;
@@ -375,7 +380,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
       margin + 4,
       iy + 24,
       "Client Finding",
-      text(item.finding) || "No additional client comment.",
+      [text(item.finding),text(item.inspectorComment)].filter(Boolean).join(" / ") || "No additional client comment.",
       82,
     );
     keyValue(margin + 96, iy + 24, "Status", item.status, 70);
@@ -383,9 +388,11 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
 
     doc.setFontSize(8);
     doc.text([item.itemReference && `FLI # ${item.itemReference}`, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
-    iy += 8;
-    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, "BEFORE");
-    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, "AFTER");
+    iy += 3;
+    const audit=[item.sourceType==="punchlist"?"Punchlist":item.sourceType==="manual"?"Manual":"Legacy",item.externalReference && `External: ${item.externalReference}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
+    const auditLines=doc.splitTextToSize(audit,contentWidth) as string[];doc.text(auditLines,margin,iy);iy+=auditLines.length*3.5+5;
+    drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, `BEFORE ? ${item.beforePhotos.length?1:0} of ${item.beforePhotos.length}`);
+    drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, `AFTER ? ${item.afterPhotos.length?1:0} of ${item.afterPhotos.length}`);
     iy += 84;
 
     doc.setFont("helvetica", "bold");
@@ -439,8 +446,8 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
         margin,
         43,
       );
-      drawPhoto(extraBefore[index], margin, 55, 88, 165, "Additional Before");
-      drawPhoto(extraAfter[index], margin + 96, 55, 88, 165, "Additional After");
+      drawPhoto(extraBefore[index], margin, 55, 88, 165, extraBefore[index]?`BEFORE ? ${index+2} of ${item.beforePhotos.length}`:"BEFORE ? no additional photo");
+      drawPhoto(extraAfter[index], margin + 96, 55, 88, 165, extraAfter[index]?`AFTER ? ${index+2} of ${item.afterPhotos.length}`:"AFTER ? no additional photo");
     }
   }
 

@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const REVISION_FIELDS =
-  "id,project_id,tower_id,sequence_no,revision_number,fli_number,inspection_stage,inspection_date,client_inspector,client_company,client_reference,notes,status,created_by_label,completed_by_label,completed_at,submitted_for_review_at,submitted_for_review_by,pdf_revision,latest_pdf_file_id,created_at,updated_at,mobile_client_mutation_id";
+  "id,source_type,project_id,tower_id,sequence_no,revision_number,fli_number,inspection_stage,inspection_date,client_inspector,client_company,client_reference,notes,status,created_by_label,completed_by_label,completed_at,submitted_for_review_at,submitted_for_review_by,pdf_revision,latest_pdf_file_id,created_at,updated_at,mobile_client_mutation_id";
 
 const SEARCH_FIELDS = [
   "revision_number",

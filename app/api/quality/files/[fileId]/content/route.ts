@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { loadDefectEvidenceContext, loadRevisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
 import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
@@ -31,6 +32,7 @@ export async function GET(request: Request, context: RouteContext) {
       .select(
         "id,project_id,tower_id,photo_no,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,defect_id,revision_id,revision_item_id,file_role,captured_at,created_at,evidence_metadata",
       )
+      .eq("deletion_pending", false)
       .eq("id", fileId)
       .single();
 
@@ -76,10 +78,12 @@ export async function GET(request: Request, context: RouteContext) {
     const contentType =
       (annotated && file.annotated_sharepoint_item_id) || legacyAnnotation ? "image/jpeg" : response.headers.get("content-type") || file.mime_type || "application/octet-stream";
 
+    const preview = new URL(request.url).searchParams.get("preview") === "1" && contentType.startsWith("image/");
+    if(preview) bytes=Uint8Array.from(await sharp(Buffer.from(bytes)).resize({width:960,height:960,fit:"inside",withoutEnlargement:true}).jpeg({quality:78}).toBuffer()).buffer;
     return new Response(bytes, {
       status: 200,
       headers: {
-        "Content-Type": contentType,
+        "Content-Type": preview ? "image/jpeg" : contentType,
         "Content-Disposition": `inline; filename="${safeHeaderFileName(file.file_name)}"`,
         "Cache-Control": "private, no-store, max-age=0",
       },

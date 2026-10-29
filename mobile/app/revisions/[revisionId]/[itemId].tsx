@@ -1,6 +1,10 @@
+import { useFocusEffect } from "@react-navigation/native";
+import { QualityEvidenceGallery } from "@/components/quality/QualityEvidenceGallery";
 import { router, type Href, useLocalSearchParams } from "expo-router";
 import {
   useEffect,
+  useCallback,
+  useRef,
   useMemo,
   useState,
 } from "react";
@@ -26,7 +30,6 @@ import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityRevisionDetail,
   refreshQualityRevisionDetail,
-  shareQualityFile,
 } from "@/lib/api/quality";
 import { enqueueRevisionItemUpdate } from "@/lib/offline/quality-sync";
 import type { LocalQualityPhoto } from "@/types/quality";
@@ -44,7 +47,7 @@ export default function RevisionItemScreen() {
 
   const { data } = useQuality();
   const { profile } = useAuth();
-  const { online, syncNow } = useSync();
+  const { online, syncNow, syncing } = useSync();
 
   const projectId =
     clean(data?.projectId) ||
@@ -99,7 +102,7 @@ export default function RevisionItemScreen() {
     return () => {
       active = false;
     };
-  }, [online, projectId, revisionId]);
+  }, [online, projectId, revisionId, syncing]);
 
   const revision = detail?.revision ?? null;
   const item =
@@ -132,21 +135,22 @@ export default function RevisionItemScreen() {
     [detail?.files, itemId],
   );
 
-  const beforeFiles = files.filter(
-    (row) => row.file_role === "before_photo",
-  );
   const afterFiles = files.filter(
     (row) => row.file_role === "after_photo",
   );
 
   const [comment, setComment] = useState("");
+  const [editVersion,setEditVersion]=useState<number|undefined>();
+  const dirty=useRef(false);
+  useFocusEffect(useCallback(()=>{if(online)void refreshQualityRevisionDetail(projectId,revisionId).then(setDetail).catch(()=>undefined);},[online,projectId,revisionId]));
   const [afterPhotos, setAfterPhotos] =
     useState<LocalQualityPhoto[]>([]);
   const [saving, setSaving] =
     useState(false);
 
   useEffect(() => {
-    if (item) {
+    if (item && !dirty.current) {
+      setEditVersion(item.record_version);
       setComment(
         item.rectification_comment ?? "",
       );
@@ -201,6 +205,7 @@ export default function RevisionItemScreen() {
       await enqueueRevisionItemUpdate({
         revisionId: revision!.id,
         itemId: item!.id,
+        expectedVersion: editVersion,
         projectId: revision!.project_id,
         towerId: revision!.tower_id,
         rectificationComment: comment.trim(),
@@ -225,7 +230,7 @@ export default function RevisionItemScreen() {
           ? "Rectification saved"
           : "Saved offline",
         online
-          ? "The finding has been marked Rectified."
+          ? "Saved to the sync queue. Check Sync status for confirmation or conflicts."
           : "The rectification will sync automatically when TTTracker reconnects.",
         [
           {
@@ -305,68 +310,16 @@ export default function RevisionItemScreen() {
       </View>
 
       <View style={q.card}>
-        <Text style={q.cardTitle}>
-          Before Evidence
-        </Text>
-
-        {beforeFiles.map((file) => (
-          <Pressable
-            key={file.id}
-            style={styles.file}
-            onPress={() =>
-              void shareQualityFile(
-                file.id,
-                file.file_name,
-              )
-            }
-          >
-            <Text style={styles.fileName}>
-              {file.file_name}
-            </Text>
-            <Text style={styles.open}>
-              Open
-            </Text>
-          </Pressable>
-        ))}
-
-        {!beforeFiles.length ? (
-          <Text style={q.muted}>
-            No synced before evidence.
-          </Text>
-        ) : null}
-      </View>
-
-      <View style={q.card}>
-        <Text style={q.cardTitle}>
-          After Evidence
-        </Text>
-
-        {afterFiles.map((file) => (
-          <Pressable
-            key={file.id}
-            style={styles.file}
-            onPress={() =>
-              void shareQualityFile(
-                file.id,
-                file.file_name,
-              )
-            }
-          >
-            <Text style={styles.fileName}>
-              {file.file_name}
-            </Text>
-            <Text style={styles.open}>
-              Open
-            </Text>
-          </Pressable>
-        ))}
-
+        <Text style={q.cardTitle}>Before / After Evidence</Text>
+        <QualityEvidenceGallery files={files} locked={Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"} onChanged={()=>void refreshQualityRevisionDetail(projectId,revisionId).then(setDetail).catch(()=>undefined)}/>
+        <Text style={q.muted}>{item.source_type==="punchlist"?"Imported":item.source_type==="manual"?"Manual":"Legacy"}{item.external_reference?` ? ${item.external_reference}`:""}</Text>
+        {item.inspector_comment?<Text>{item.inspector_comment}</Text>:null}
         <Text style={q.fieldLabel}>
           Rectification Comment *
         </Text>
         <TextInput
           value={comment}
-          onChangeText={setComment}
+          onChangeText={value=>{dirty.current=true;setComment(value);}}
           multiline
           style={[q.input, styles.textarea]}
         />
@@ -374,13 +327,13 @@ export default function RevisionItemScreen() {
         <QualityPhotoPicker
           label="Add after photos"
           photos={afterPhotos}
-          onChange={setAfterPhotos}
+          onChange={value=>{dirty.current=true;setAfterPhotos(value);}}
           prefix="revision-after"
           context={{ Revision: revision.revision_number || revision.fli_number || "Pending RECT", Tower: tower?.name, "FLI #": item.fli_number || "Pending FLI", Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
         />
 
         <Pressable
-          disabled={saving}
+          disabled={saving || Boolean(revision.finalised_at) || !["Draft","Open","In Progress"].includes(revision.status) || item.status==="Verified"}
           style={q.primary}
           onPress={() => void rectify()}
         >

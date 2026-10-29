@@ -1,3 +1,4 @@
+import { withoutDeletedPhotos } from "./quality-photo-tombstones";
 
 import { getCache, setCache } from "@/lib/offline/db";
 import type { RevisionWorkingLocation } from "./revision-location";
@@ -28,6 +29,7 @@ export type PendingRevisionFinding = {
 };
 
 export type PendingRevisionUpdate = {
+  expectedVersion?: number;
   itemId: string;
   leg?: string | null;
   assignedFlag?: string | null;
@@ -39,6 +41,7 @@ export type PendingRevisionUpdate = {
 };
 
 export type RevisionWorkspace = {
+  additionalRectConfirmed?: boolean;
   towerLabel?:string|null;
   workingLocation?: RevisionWorkingLocation;
   legacyRouteKeys?:string[];
@@ -87,7 +90,7 @@ export function clientMutationIdFromRouteKey(value: string) {
 
 export async function listRevisionWorkspaces(projectId: string) {
   const cached = await getCache<RevisionWorkspace[]>(key(projectId));
-  return cached?.value ?? [];
+  return withoutDeletedPhotos(cached?.value ?? []);
 }
 
 let workspaceWrite: Promise<unknown> = Promise.resolve();
@@ -103,8 +106,9 @@ export function saveRevisionWorkspace(workspace: RevisionWorkspace): Promise<Rev
       findings: [...new Map([...(previous?.findings || []), ...workspace.findings].map(row => [row.clientMutationId, row])).values()].filter(row => !reconciledFindingIds.includes(row.clientMutationId)),
       pendingUpdates: [...new Map([...(previous?.pendingUpdates || []), ...workspace.pendingUpdates].map(row => [`${row.itemId}:${row.createdAt}`, row])).values()].filter(row => !reconciledUpdateKeys.includes(`${row.itemId}:${row.createdAt}`)),
     };
-    await setCache(key(workspace.projectId), [next, ...current.filter(row => row.routeKey !== workspace.routeKey)]);
-    return next;
+    const filtered=await withoutDeletedPhotos(next);
+    await setCache(key(workspace.projectId), [filtered, ...current.filter(row => row.routeKey !== workspace.routeKey)]);
+    return filtered;
   });
   workspaceWrite = task;
   return task;
@@ -176,6 +180,7 @@ export async function reconcileRevisionDetail(projectId:string,detail:QualityRev
 }
 
 export function createLocalRevisionWorkspace(input: {
+  additionalRectConfirmed?: boolean;
   projectId: string;
   towerId: string;
   clientMutationId: string;
@@ -188,6 +193,7 @@ export function createLocalRevisionWorkspace(input: {
 }) {
   const now = new Date().toISOString();
   return {
+    additionalRectConfirmed: input.additionalRectConfirmed,
     routeKey: localRevisionRouteKey(input.clientMutationId),
     projectId: input.projectId,
     towerId: input.towerId,

@@ -1,3 +1,4 @@
+import { withoutDeletedPhotos } from "./quality-photo-tombstones";
 import { cachedValuesWithPrefix, queueRows, enqueue } from "./db";
 import { enqueueRevisionCreate, enqueueRevisionItemCreate, enqueueRevisionItemUpdate } from "./quality-sync";
 import { saveRevisionWorkspace, type RevisionWorkspace } from "./revision-workspaces";
@@ -7,7 +8,7 @@ import { withQualityOperation } from "./quality-operation-lock";
 /** Recover dependencies from durable workspaces even when no detail screen is open. */
 export async function prepareRevisionQueue() {
   const queued = await queueRows();
-  const workspaces = await cachedValuesWithPrefix<RevisionWorkspace>("quality:revision-workspaces:");
+  const workspaces = await withoutDeletedPhotos(await cachedValuesWithPrefix<RevisionWorkspace>("quality:revision-workspaces:"));
   for (const workspace of workspaces) {
     if(await revisionDeletion(workspace.projectId,workspace.routeKey,workspace.serverRevisionId,workspace.clientMutationId))continue;
     const revisionId = workspace.serverRevisionId || workspace.routeKey;

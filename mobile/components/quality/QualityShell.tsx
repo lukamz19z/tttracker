@@ -1,8 +1,10 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
-import type { PropsWithChildren } from "react";
+import type { PropsWithChildren, ReactNode } from "react";
 import {
+  FlatList,
+  View,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -23,23 +25,18 @@ export function QualityShell({
   subtitle,
   root = false,
   children,
+  virtualRows,
 }: PropsWithChildren<{
   permission: "mobile.defects" | "mobile.rectifications";
   title: string;
   subtitle?: string;
   root?: boolean;
+  virtualRows?: {id:string;content:ReactNode}[];
 }>) {
   const { profile } = useAuth();
   const { refreshing, refresh, cachedAt, error, data } = useQuality();
 
-  return (
-    <PermissionScreen permission={permission}>
-      <SafeAreaView style={styles.safe}>
-        <ScrollView
-          contentContainerStyle={styles.content}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
-          keyboardShouldPersistTaps="handled"
-        >
+  const content=<View style={{gap:10}}>
           {!root ? (
             <Pressable style={styles.back} onPress={() => router.back()}>
               <ArrowLeft size={16} color="#334155" />
@@ -58,11 +55,10 @@ export function QualityShell({
           ) : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {children}
-          <AppFooter />
-        </ScrollView>
-      </SafeAreaView>
-    </PermissionScreen>
-  );
+  </View>;
+  return <PermissionScreen permission={permission}><SafeAreaView style={styles.safe}>
+    {virtualRows?<FlatList data={virtualRows} keyExtractor={row=>row.id} renderItem={({item})=><View style={{marginBottom:8}}>{item.content}</View>} contentContainerStyle={styles.content} ListHeaderComponent={content} ListFooterComponent={<AppFooter/>} initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>}/>:<ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} keyboardShouldPersistTaps="handled">{content}<AppFooter/></ScrollView>}
+  </SafeAreaView></PermissionScreen>;
 }
 
 export const qualityStyles = StyleSheet.create({

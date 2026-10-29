@@ -139,7 +139,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,source_type,external_reference,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
@@ -152,7 +152,7 @@ export async function POST(request: Request, context: RouteContext) {
           .from("tower_quality_files")
           .select(
             "id,project_id,tower_id,defect_id,photo_no,revision_id,revision_item_id,file_role,file_name,mime_type,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id,evidence_metadata,captured_at,created_at,uploaded_by_label",
-          )
+          ).eq("deletion_pending",false)
           .eq("revision_id", revision.id)
           .in("file_role", ["before_photo", "after_photo"])
           .order("created_at"),
@@ -240,6 +240,7 @@ export async function POST(request: Request, context: RouteContext) {
         towerSegment: item.tower_segment,
         memberNumber: item.member_number,
         drawingNumber: item.drawing_number,
+        sourceType:item.source_type,externalReference:item.external_reference,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
         finding: String(item.finding ?? ""),
         rectificationComment: String(item.rectification_comment ?? ""),
         status: item.status,

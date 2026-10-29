@@ -83,6 +83,7 @@ export type QualityDefect = {
 };
 
 export type QualityRevision = {
+  source_type?: "manual" | "punchlist" | null;
   finalised_at?: string | null;
   id: string;
   project_id: string;
@@ -110,6 +111,12 @@ export type QualityRevision = {
 };
 
 export type QualityRevisionItem = {
+  record_version?: number;
+  source_type?: "manual" | "punchlist" | null;
+  external_reference?: string | null;
+  inspector_comment?: string | null;
+  actioned_by_label?: string | null;
+  actioned_at?: string | null;
   leg?: string | null;
   assigned_flag?: string | null;
   id: string;
@@ -136,6 +143,8 @@ export type QualityRevisionItem = {
 };
 
 export type QualityFile = {
+  deletion_pending?: boolean;
+  is_outdated?: boolean;
   id: string;
   project_id: string;
   tower_id: string;
