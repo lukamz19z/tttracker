@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { flushSync } from "react-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
   Edit,
   FileText,
   Plus,
+  Printer,
   RefreshCw,
   Save,
   Search,
@@ -15,7 +17,8 @@ import {
 } from "lucide-react";
 import { createSupabaseBrowser } from "../../../../../lib/supabase";
 import { LadderReplacementLinks } from "@/components/assets/ladder-replacement-links";
-import { duplicateLadderMessage, ladderNumberKey, ladderRelations, ladderStatuses, type Ladder } from "@/lib/assets/ladders";
+import { LadderPrintRegister } from "@/components/assets/ladder-print-register";
+import { defaultLadderHeightMeasurement, filterLadders, ladderCsv, ladderHeightLabel, ladderHeightMeasurements, ladderMeasurementLabel, duplicateLadderMessage, ladderNumberKey, ladderRelations, ladderStatuses, type Ladder } from "@/lib/assets/ladders";
 import { PageHeader, PageShell, RegisterList } from "../../components";
 
 type Crew = {
@@ -27,6 +30,8 @@ type Crew = {
 
 type FormState = {
   ladder_number: string;
+  serial_number: string;
+  height_measurement_type: string;
   supersedes_ladder_id: string;
   make: string;
   ladder_type: string;
@@ -39,6 +44,8 @@ type FormState = {
 
 const blankForm: FormState = {
   ladder_number: "",
+  serial_number: "",
+  height_measurement_type: defaultLadderHeightMeasurement,
   supersedes_ladder_id: "",
   make: "",
   ladder_type: "Step Ladder",
@@ -65,11 +72,6 @@ function clean(value: string | number | null | undefined) {
 
 function crewLabel(crew: Crew) {
   return `${crew.crew_number}${crew.crew_name ? ` - ${crew.crew_name}` : ""}`;
-}
-
-function csvSafe(value: string | number | null | undefined) {
-  const text = String(value ?? "");
-  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function formatShortDate(value: string | null) {
@@ -172,6 +174,7 @@ export default function LaddersPage() {
   const [typeFilter, setTypeFilter] = useState("All Types");
   const [inspectionFilter, setInspectionFilter] = useState("All Inspections");
 
+  const [printedAt, setPrintedAt] = useState("");
   const [form, setForm] = useState<FormState>(blankForm);
 
   const [canEdit, setCanEdit] = useState(false);
@@ -233,46 +236,30 @@ export default function LaddersPage() {
     ];
   }, [items]);
 
-  const filteredItems = useMemo(() => {
-    const term = search.trim().toLowerCase();
-
-    return items.filter((item) => {
-      const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-      const crewText = crew ? crewLabel(crew) : "Unallocated";
-      const inspectionStatus = inspectionLabel(item.last_internal_inspection);
-
-      const searchable = [
-        item.ladder_number,
-        item.make,
-        item.ladder_type,
-        item.height,
-        item.status,
-        item.notes,
-        item.last_internal_inspection,
-        crewText,
-        inspectionStatus,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return (
-        searchable.includes(term) &&
-        (crewFilter === "All Crews" || crewText === crewFilter) &&
-        (statusFilter === "All" || clean(item.status) === statusFilter) &&
-        (typeFilter === "All Types" || clean(item.ladder_type) === typeFilter) &&
-        (inspectionFilter === "All Inspections" ||
-          inspectionStatus === inspectionFilter)
-      );
-    });
-  }, [
-    items,
-    search,
-    crewFilter,
-    statusFilter,
-    typeFilter,
-    inspectionFilter,
-    crewById,
-  ]);
+  const ladderCrewLabel = useCallback((item: Ladder) => {
+    const crew = item.crew_id ? crewById.get(item.crew_id) : null;
+    return crew ? crewLabel(crew) : "Unallocated";
+  }, [crewById]);
+  const filteredItems = useMemo(() => filterLadders(items, {
+    search, crew: crewFilter, status: statusFilter, type: typeFilter, inspection: inspectionFilter,
+  }, ladderCrewLabel, inspectionLabel), [items, search, crewFilter, statusFilter, typeFilter, inspectionFilter, ladderCrewLabel]);
+  const printFilterSummary = [
+    search ? `Search: ${search}` : null,
+    crewFilter !== "All Crews" ? `Crew: ${crewFilter}` : null,
+    statusFilter !== "All" ? `Status: ${statusFilter}` : null,
+    typeFilter !== "All Types" ? `Type: ${typeFilter}` : null,
+    inspectionFilter !== "All Inspections" ? `Inspection: ${inspectionFilter}` : null,
+  ].filter(Boolean).join(" \u00b7 ");
+  useEffect(() => {
+    const beforePrint = () => flushSync(() => setPrintedAt(new Date().toLocaleString("en-AU", {
+      day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+    })));
+    window.addEventListener("beforeprint", beforePrint);
+    return () => window.removeEventListener("beforeprint", beforePrint);
+  }, []);
+  function printFilteredRegister() {
+    window.print();
+  }
 
   function openAddForm() {
     setEditingId(null);
@@ -288,9 +275,11 @@ export default function LaddersPage() {
     setReplacementSearch("");
     setForm({
       ladder_number: item.ladder_number,
+      serial_number: clean(item.serial_number),
+      height_measurement_type: clean(item.height_measurement_type),
       supersedes_ladder_id: item.supersedes_ladder_id || "",
       make: clean(item.make),
-      ladder_type: clean(item.ladder_type) || "Step Ladder",
+      ladder_type: clean(item.ladder_type),
       height: clean(item.height),
       crew_id: clean(item.crew_id),
       status: clean(item.status) || "Active",
@@ -377,42 +366,7 @@ export default function LaddersPage() {
   }
 
   function exportCsv() {
-    const headers = [
-      "Ladder Register Number",
-      "Make",
-      "Ladder Type",
-      "Height",
-      "Crew",
-      "Status",
-      "Last Internal Inspection",
-      "Inspection Status",
-      "Notes",
-      "Supersedes",
-      "Superseded By",
-    ];
-
-    const rows = filteredItems.map((item) => {
-      const crew = item.crew_id ? crewById.get(item.crew_id) : null;
-
-      return [
-        clean(item.ladder_number),
-        clean(item.make),
-        clean(item.ladder_type),
-        clean(item.height),
-        crew ? crewLabel(crew) : "Unallocated",
-        clean(item.status) || "Active",
-        clean(item.last_internal_inspection),
-        inspectionLabel(item.last_internal_inspection),
-        clean(item.notes),
-        ladderRelations(item, items).supersedes?.ladder_number || "",
-        ladderRelations(item, items).supersededBy?.ladder_number || "",
-      ];
-    });
-
-    const csv = [
-      headers.map(csvSafe).join(","),
-      ...rows.map((row) => row.map(csvSafe).join(",")),
-    ].join("\n");
+    const csv = ladderCsv(filteredItems, items, ladderCrewLabel, inspectionLabel);
 
     const blob = new Blob([csv], {
       type: "text/csv;charset=utf-8;",
@@ -431,6 +385,7 @@ export default function LaddersPage() {
 
   return (
     <PageShell>
+      <div className="ladder-screen-only space-y-5">
       <PageHeader
         eyebrow="Equipment Register"
         title="Ladders"
@@ -456,6 +411,10 @@ export default function LaddersPage() {
               Export CSV
             </button>
 
+            <button type="button" onClick={printFilteredRegister} disabled={loading || !filteredItems.length}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+              <Printer size={16} />Print PDF
+            </button>
             {canEdit ? <button
               type="button"
               onClick={openAddForm}
@@ -505,7 +464,7 @@ export default function LaddersPage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search register number, make, type..."
+                placeholder="Search register number, serial, make, type..."
                 className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
               />
             </div>
@@ -569,7 +528,7 @@ export default function LaddersPage() {
           {
             label: "Ladder Register Number",
             render: (item) => (
-              <div><Link className="font-black text-slate-950 hover:text-blue-700" href={`/assets/equipment/records/ladder/${item.id}`}>{item.ladder_number}</Link><LadderReplacementLinks {...ladderRelations(item, items)} /></div>
+              <div><Link className="font-black text-slate-950 hover:text-blue-700" href={`/assets/equipment/records/ladder/${item.id}`}>{item.ladder_number}</Link><p className="mt-1 text-xs text-slate-500">Serial: {clean(item.serial_number) || "\u2014"}</p><LadderReplacementLinks {...ladderRelations(item, items)} /></div>
             ),
           },
           {
@@ -587,7 +546,7 @@ export default function LaddersPage() {
           },
           {
             label: "Height",
-            render: (item) => clean(item.height) || "—",
+            render: (item) => <div>{ladderHeightLabel(item.height)}<p className="mt-1 text-xs text-slate-500">{ladderMeasurementLabel(item.height_measurement_type)}</p></div>,
           },
           {
             label: "Crew",
@@ -666,6 +625,7 @@ export default function LaddersPage() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <Link className="font-black text-slate-950 hover:text-blue-700" href={`/assets/equipment/records/ladder/${item.id}`}>{item.ladder_number}</Link>
+                  <p className="mt-1 text-xs text-slate-500">Serial: {clean(item.serial_number) || "\u2014"}</p>
                   <LadderReplacementLinks {...ladderRelations(item, items)} />
                   <p className="mt-1 text-sm font-semibold text-slate-600">
                     {[clean(item.make), clean(item.ladder_type)]
@@ -686,8 +646,9 @@ export default function LaddersPage() {
                     Height
                   </p>
                   <p className="font-semibold text-slate-800">
-                    {clean(item.height) || "—"}
+                    {ladderHeightLabel(item.height)}
                   </p>
+                  <p className="mt-1 text-xs text-slate-500">{ladderMeasurementLabel(item.height_measurement_type)}</p>
                 </div>
 
                 <div>
@@ -803,6 +764,11 @@ export default function LaddersPage() {
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Serial Number
+                    <input value={form.serial_number} maxLength={500} onChange={event => setForm(current => ({ ...current, serial_number: event.target.value }))} placeholder="Manufacturer / supplier serial (optional)" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
                     Make
                     <input
                       value={form.make}
@@ -829,7 +795,8 @@ export default function LaddersPage() {
                       }
                       className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                     >
-                      {ladderTypeOptions.map((option) => (
+                      <option value="">Not specified</option>
+                      {Array.from(new Set([...ladderTypeOptions, form.ladder_type].filter(Boolean))).map((option) => (
                         <option key={option}>{option}</option>
                       ))}
                     </select>
@@ -845,9 +812,16 @@ export default function LaddersPage() {
                           height: event.target.value,
                         }))
                       }
-                      placeholder="e.g. 2.4m"
+                      placeholder="e.g. 1.8 m"
                       className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
                     />
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Height Measurement
+                    <input list="ladder-height-measurements" value={form.height_measurement_type} maxLength={120} onChange={event => setForm(current => ({ ...current, height_measurement_type: event.target.value }))} placeholder="Not specified" className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                    <datalist id="ladder-height-measurements">{ladderHeightMeasurements.map(value => <option key={value} value={value} />)}</datalist>
+                    <span className="text-xs font-normal text-slate-500">Choose a measurement basis or enter another. Include units in Height, e.g. 1.8 m.</span>
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
@@ -872,21 +846,6 @@ export default function LaddersPage() {
                   </label>
 
                   <label className="grid gap-2 text-sm font-bold text-slate-700">
-                    Last Internal Inspection
-                    <input
-                      type="date"
-                      value={form.last_internal_inspection}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          last_internal_inspection: event.target.value,
-                        }))
-                      }
-                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
-                    />
-                  </label>
-
-                  <label className="grid gap-2 text-sm font-bold text-slate-700">
                     Status
                     <select
                       value={form.status}
@@ -902,6 +861,21 @@ export default function LaddersPage() {
                         <option key={option}>{option}</option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="grid gap-2 text-sm font-bold text-slate-700">
+                    Last Internal Inspection
+                    <input
+                      type="date"
+                      value={form.last_internal_inspection}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          last_internal_inspection: event.target.value,
+                        }))
+                      }
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-100"
+                    />
                   </label>
 
                   {!editingId ? <div className="grid gap-2 text-sm font-bold text-slate-700 md:col-span-2">
@@ -960,6 +934,8 @@ export default function LaddersPage() {
           </div>
         </div>
       ) : null}
+      </div>
+      <LadderPrintRegister items={filteredItems} allItems={items} crewLabel={ladderCrewLabel} inspectionLabel={inspectionLabel} printedAt={printedAt} filterSummary={printFilterSummary} />
     </PageShell>
   );
 }

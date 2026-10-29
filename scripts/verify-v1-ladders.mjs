@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import {createRequire} from 'node:module';
 import {PGlite} from '@electric-sql/pglite';
 
@@ -13,6 +14,7 @@ function load(file,mocks={}) {
 }
 const db=new PGlite(),actor='00000000-0000-0000-0000-000000000001';
 const migration=fs.readFileSync('supabase/migrations/20261029120000_v1_ladder_manual_numbers_and_replacements.sql','utf8');
+const metadataMigration=fs.readFileSync('supabase/migrations/20261029130000_v1_ladder_serial_height_measurement.sql','utf8');
 const model=load('lib/assets/ladders.ts');
 let permissions=new Set(['tt.assets','tt.assets.equipment','assets.view','assets.edit']);
 try {
@@ -23,12 +25,14 @@ try {
     create table effective_user_permissions(user_id uuid,code text,allowed boolean);
     -- Simulate an existing V1 installation: no existing value may be rewritten.
     create table equipment_ladders(id uuid primary key default gen_random_uuid(),ladder_number text not null,make text,ladder_type text,height text,crew_id uuid references crews(id),status text default 'Active',last_internal_inspection date,notes text,created_at timestamptz default now(),updated_at timestamptz default now());
-    insert into equipment_ladders(ladder_number,make,status,last_internal_inspection,notes) values('LAD-001','Bailey','Active','2026-10-01','Original ladder inspection history');
+    insert into equipment_ladders(ladder_number,make,status,last_internal_inspection,notes,height) values('LAD-001','Bailey','Active','2026-10-01','Original ladder inspection history','2.4m');
     create table equipment_documents(id uuid primary key default gen_random_uuid(),equipment_type text,equipment_id uuid,title text,created_at timestamptz default now());
     create table equipment_sharepoint_links(id uuid primary key default gen_random_uuid(),equipment_type text,equipment_id uuid,sharepoint_web_url text);
   `);
   await db.exec(migration);await db.exec(migration);
+  await db.exec(metadataMigration);await db.exec(metadataMigration);
   const first=(await db.query("select * from equipment_ladders where ladder_number='LAD-001'")).rows[0];
+  assert.equal(first.serial_number,null);assert.equal(first.height_measurement_type,null);assert.equal(first.height,'2.4m');
   await db.query("insert into equipment_documents(equipment_type,equipment_id,title)values('ladder',$1,'Original inspection certificate')",[first.id]);
   await db.query("insert into equipment_sharepoint_links(equipment_type,equipment_id,sharepoint_web_url)values('ladder',$1,'https://example.test/original')",[first.id]);
   async function row(id){return (await db.query('select to_jsonb(l) item from equipment_ladders l where id=$1',[id])).rows[0]?.item;}
@@ -82,7 +86,16 @@ try {
   const server=load('lib/assets/ladder-server.ts',{...responseMock,'./ladders':model,'@/lib/access/server':{getRequestUser:async()=>({id:actor}),createServiceClient:()=>service,userHasAccess:async(_s,_u,code)=>permissions.has(code)}});
   const route=load('app/api/assets/equipment/ladder/route.ts',{...responseMock,'@/lib/assets/ladder-server':server});
   const req=body=>({json:async()=>body});
-  const apiNew=await route.POST(req({ladder_number:'  API-LAD-R1 ',status:'Active'}));assert.equal(apiNew.status,200);assert.equal(apiNew.body.item.ladder_number,'API-LAD-R1');
+  const standard=await route.POST(req({ladder_number:'LAD-004',serial_number:' SN458392 ',make:'Bailey',ladder_type:'Platform Ladder',height:'1.8 m',height_measurement_type:'Platform Height',status:'Active'}));
+  assert.equal(standard.status,200);assert.equal(standard.body.item.serial_number,'SN458392');assert.equal(standard.body.item.height,'1.8 m');assert.equal(standard.body.item.height_measurement_type,'Platform Height');
+  const overall=await route.POST(req({ladder_number:'LAD-005',serial_number:'SN458392',height:'3.0 m',height_measurement_type:'Overall Height',status:'Active'}));assert.equal(overall.status,200);assert.equal(overall.body.item.height_measurement_type,'Overall Height');
+  const custom=await route.POST(req({ladder_number:'LAD-006',height_measurement_type:' Custom rail height ',status:'Active'}));assert.equal(custom.status,200);assert.equal(custom.body.item.height_measurement_type,'Custom rail height');
+  const legacyEdit={...standard.body.item,notes:'Older client note update'};delete legacyEdit.serial_number;delete legacyEdit.height_measurement_type;
+  const compatible=await route.PATCH(req(legacyEdit));assert.equal(compatible.status,200);assert.equal(compatible.body.item.serial_number,'SN458392');assert.equal(compatible.body.item.height_measurement_type,'Platform Height');
+  const cleared=await route.PATCH(req({...compatible.body.item,serial_number:null,height_measurement_type:null}));assert.equal(cleared.status,200);assert.equal(cleared.body.item.serial_number,null);assert.equal(cleared.body.item.height_measurement_type,null);
+  assert.equal((await route.POST(req({ladder_number:'INVALID-SERIAL',serial_number:123,status:'Active'}))).status,400);
+  assert.equal((await route.POST(req({ladder_number:'INVALID-BASIS',height_measurement_type:'x'.repeat(121),status:'Active'}))).status,400);
+  const apiNew=await route.POST(req({ladder_number:'  API-LAD-R1 ',status:'Active'}));assert.equal(apiNew.status,200);assert.equal(apiNew.body.item.ladder_number,'API-LAD-R1');assert.equal(apiNew.body.item.height_measurement_type,null);assert.equal(apiNew.body.item.serial_number,null);
   const apiDuplicate=await route.POST(req({ladder_number:'api-lad-r1',status:'Active'}));assert.equal(apiDuplicate.status,400);assert.equal(apiDuplicate.body.error,'A ladder with register number api-lad-r1 already exists.');assert.doesNotMatch(apiDuplicate.body.error,/duplicate key|constraint/i);
   const apiBlank=await route.POST(req({ladder_number:' '}));assert.equal(apiBlank.status,400);
   const unconfirmed=await route.POST(req({ladder_number:'API-LAD-R2',status:'Active',supersedes_ladder_id:apiNew.body.item.id}));assert.equal(unconfirmed.status,400);assert.match(unconfirmed.body.error,/Confirm/);
@@ -98,6 +111,7 @@ try {
   const oldDetail=await detailRoute.GET({}, {params:Promise.resolve({equipmentId:first.id})});assert.equal(oldDetail.status,200);assert.equal(oldDetail.body.ladderRelations.supersededBy.id,next.id);assert.equal(oldDetail.body.documents[0].title,'Original inspection certificate');
   const newDetail=await detailRoute.GET({}, {params:Promise.resolve({equipmentId:next.id})});assert.equal(newDetail.body.ladderRelations.supersedes.id,first.id);assert.equal(newDetail.body.documents.length,0);assert.equal(newDetail.body.item.last_internal_inspection,'2026-10-29');
   console.log('PASS actual API controlled duplicates/blank/confirmation/errors, manual values, replacement save, identifier lock, safe deletion, dynamic permission denials, old/new clickable detail data and saved-number SharePoint labels.');
+  console.log('PASS nullable serial/basis migration twice; standard LAD-004/API serial roundtrip; duplicate serials allowed; Overall/custom bases retained; older-client edits preserve metadata; explicit clears and validation.');
 } finally {await db.close();}
 
 // The inspected V1 project has no ladder table: verify the guarded bootstrap
@@ -109,7 +123,7 @@ try {
     create function auth.uid() returns uuid language sql stable as $$select null::uuid$$;
     create table crews(id uuid primary key);
     create table effective_user_permissions(user_id uuid,code text,allowed boolean);`);
-  await fresh.exec(migration);await fresh.exec(migration);
+  await fresh.exec(migration);await fresh.exec(migration);await fresh.exec(metadataMigration);await fresh.exec(metadataMigration);
   assert.equal((await fresh.query('select count(*)::int n from equipment_ladders')).rows[0].n,0);
   await fresh.query("insert into equipment_ladders(ladder_number)values('LAD-001')");
   // Legacy duplicate data is never silently renamed or deleted by a migration.
@@ -128,3 +142,32 @@ const source=fs.readFileSync('app/(protected)/assets/equipment/ladders/page.tsx'
 assert.equal(model.ladderNumberKey(' lad-001-r1 '),'LAD-001-R1');
 for(const term of ['001','LAD-001-R1','R1'])assert.ok('LAD-001-R1'.toLowerCase().includes(term.toLowerCase()));
 console.log('PASS rendered bidirectional stable-ID links, empty manual number input/helper, explicit replacement confirmation, generation removed and partial number search.');
+
+// Exercise the same data projection used by the real register, CSV and print view.
+const base={make:'Bailey',ladder_type:'Platform Ladder',height:'1.8 m',crew_id:'C2',status:'Active',last_internal_inspection:'2026-10-29',notes:'Long notes stay out of print tables',created_at:null,updated_at:null,supersedes_ladder_id:null,superseded_at:null};
+const historical={...base,id:'OLD',ladder_number:'LAD-001',status:'Superseded',height:'2.4m',serial_number:null,height_measurement_type:null};
+const standardRow={...base,id:'NEW',ladder_number:'LAD-004',serial_number:'SN458392',height_measurement_type:'Platform Height',supersedes_ladder_id:'OLD'};
+const overallRow={...base,id:'OVERALL',ladder_number:'LAD-005',ladder_type:'Extension Ladder',height:'3.0 m',height_measurement_type:'Overall Height',serial_number:'SN-OTHER',crew_id:'C3'};
+const fixtures=[historical,standardRow,overallRow];
+const crewLabel=row=>row.crew_id==='C2'?'Crew 2':'Crew 3',inspectionLabel=()=> 'Recently inspected';
+const emptyFilters={search:'',crew:'All Crews',status:'All',type:'All Types',inspection:'All Inspections'};
+assert.deepEqual(model.filterLadders(fixtures,{...emptyFilters,search:'458392'},crewLabel,inspectionLabel).map(r=>r.id),['NEW']);
+for(const search of ['LAD-004','Bailey','1.8','Platform Ladder','Crew 2','Active'])assert.ok(model.filterLadders(fixtures,{...emptyFilters,search},crewLabel,inspectionLabel).some(r=>r.id==='NEW'));
+const filtered=model.filterLadders(fixtures,{...emptyFilters,status:'Active',crew:'Crew 2',type:'Platform Ladder'},crewLabel,inspectionLabel);assert.deepEqual(filtered.map(r=>r.id),['NEW']);
+const csv=model.ladderCsv(filtered,fixtures,crewLabel,inspectionLabel);assert.match(csv,/'?SN458392/);assert.match(csv,/"Height Measurement"/);assert.match(csv,/"Supersedes","Superseded By","Notes"/);assert.match(csv,/"Platform Height"/);assert.match(csv,/"LAD-001"/);assert.doesNotMatch(csv,/"Overall Height"/);
+assert.equal(model.ladderMeasurementLabel(null),'Not specified');assert.equal(model.defaultLadderHeightMeasurement,'Platform Height');assert.equal(model.ladderHeightLabel('1.8m'),'1.8 m');assert.equal(model.ladderHeightLabel('1.8'),'1.8 (unit not specified)');
+const printing=load('components/assets/ladder-print-register.tsx',{'react/jsx-runtime':require('react/jsx-runtime'),'@/lib/assets/ladders':model});
+function renderPrint(items,allItems,filterSummary){return renderToStaticMarkup(React.createElement(printing.LadderPrintRegister,{items,allItems,crewLabel,inspectionLabel,printedAt:'29 Oct 2026, 10:45 am',filterSummary}));}
+const activeHtml=renderPrint(filtered,fixtures,'Crew 2 \u00b7 Active \u00b7 Platform Ladder');assert.match(activeHtml,/SN458392/);assert.match(activeHtml,/1.8 m/);assert.match(activeHtml,/Platform Height/);assert.match(activeHtml,/1 filtered ladder/);assert.doesNotMatch(activeHtml,/<td>LAD-001<\/td>|<td>LAD-005<\/td>|Long notes stay/);
+const allHtml=renderPrint(fixtures,fixtures,'All ladders');assert.match(allHtml,/<td>Superseded<\/td>/);assert.match(allHtml,/Superseded by LAD-004/);assert.match(allHtml,/<td>\u2014<\/td>/);assert.match(allHtml,/Not specified/);assert.match(allHtml,/Overall Height/);assert.doesNotMatch(allHtml,/null|undefined/);
+assert.match(printing.ladderPrintCss,/size: landscape/);assert.match(printing.ladderPrintCss,/display: table-header-group/);assert.match(printing.ladderPrintCss,/break-inside: avoid/);assert.match(printing.ladderPrintCss,/ladder-screen-only.*display: none/s);
+const ladderSource=fs.readFileSync('app/(protected)/assets/equipment/ladders/page.tsx','utf8');assert.match(ladderSource,/height_measurement_type: defaultLadderHeightMeasurement/);assert.match(ladderSource,/height_measurement_type: clean\(item.height_measurement_type\)/);assert.match(ladderSource,/function printFilteredRegister\(\) \{\s*window.print\(\)/);assert.match(ladderSource,/LadderPrintRegister items=\{filteredItems\}/);
+console.log('PASS actual serial/number/make/type/height/crew/status search, combined filters, CSV metadata, historical Not specified/serial dash, filtered/all print rows and Lifting Gear-style landscape/header CSS.');
+if(process.env.TTTRACKER_LADDER_PRINT_QA_DIR){
+ const dir=path.resolve(process.env.TTTRACKER_LADDER_PRINT_QA_DIR);fs.mkdirSync(dir,{recursive:true});
+ const write=(name,content)=>fs.writeFileSync(path.join(dir,name),'<!doctype html><html><head><meta charset="utf-8"><title>Ladder print QA</title><style>.hidden{display:none}body{margin:0}</style></head><body><header>QA NAVIGATION MUST NOT PRINT</header><div class="ladder-screen-only">QA FILTERS AND BUTTONS MUST NOT PRINT</div>'+content+'</body></html>');
+ write('active.html',activeHtml);write('all.html',allHtml);
+ const many=Array.from({length:85},(_,i)=>({...standardRow,id:'M'+i,ladder_number:'LAD-'+String(100+i),serial_number:i===2?'LONG-SERIAL-'.repeat(5):'SN-'+i,supersedes_ladder_id:null,height_measurement_type:i%2?'Platform Height':'Overall Height'}));
+ write('multipage.html',renderPrint(many,many,'Active \u00b7 Crew 2'));
+ console.log('Print QA HTML fixtures: '+dir);
+}

@@ -32,6 +32,9 @@ async function save(request: NextRequest, editing: boolean) {
     for (const field of ["make", "ladder_type", "height", "notes", "status"]) {
       if (body[field] != null && (typeof body[field] !== "string" || body[field].length > (field === "notes" ? 10000 : 500))) invalidLadder(`Check the ladder ${field.replaceAll("_", " ")}.`);
     }
+    for (const [field, limit] of [["serial_number", 500], ["height_measurement_type", 120]] as const) {
+      if (body[field] != null && (typeof body[field] !== "string" || body[field].length > limit)) invalidLadder(`Check the ladder ${field.replaceAll("_", " ")}.`);
+    }
     for (const field of ["crew_id", "supersedes_ladder_id"]) {
       if (body[field] && !ladderUuid.test(String(body[field]))) invalidLadder("Choose a valid crew or ladder.");
     }
@@ -41,6 +44,10 @@ async function save(request: NextRequest, editing: boolean) {
     // Only supported form fields reach the RPC; no caller-supplied audit columns.
     const payload = Object.fromEntries(["ladder_number", "make", "ladder_type", "height", "crew_id", "status", "last_internal_inspection", "notes", "supersedes_ladder_id", "confirm_supersedes", "updated_at"].map(key => [key, body[key] ?? null]));
     payload.ladder_number = body.ladder_number.trim();
+    // Omitted fields from older clients must not erase values on an existing ladder.
+    for (const field of ["serial_number", "height_measurement_type"]) {
+      if (Object.hasOwn(body, field)) payload[field] = typeof body[field] === "string" ? body[field].trim() || null : null;
+    }
     const result = await service.rpc("v1_ladder_save", { p_data: payload, p_actor: user.id, p_id: editing ? body.id : null });
     if (result.error) ladderDatabaseError(result.error, body.ladder_number);
     const item = Array.isArray(result.data) ? result.data[0] : result.data;

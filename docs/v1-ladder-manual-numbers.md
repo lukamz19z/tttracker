@@ -1,5 +1,7 @@
 # V1 Ladder Register: manual numbers and replacements
 
+The later serial-number, height-measurement and filtered Print PDF extension is documented in [V1 ladder serial, height and print](v1-ladder-serial-height-print.md).
+
 1. **Source of the generated number:** `getNextLadderNumber()` in `app/(protected)/assets/equipment/ladders/page.tsx` scanned loaded `LAD-<digits>` values, incremented the maximum and fell back to `LAD-001` for an empty list. The Add form displayed that generated value in a disabled Asset ID input and inserted it as `ladder_number`. There was no literal `LAD-001` production constant to remove. The connected V1 project currently has no `equipment_ladders` table, so failed loads also left that list empty. All remote inspection for this task was read-only; V2 was not inspected or changed.
 2. **Files changed:** see the list below. Changes remain within V1 ladders, their existing shared document/detail integration, migration, verification and documentation.
 3. **Manual number:** Add Ladder starts empty and requires Ladder Register Number near the top, with `e.g. LAD-001-R1` and the requested physical-register helper. Surrounding whitespace is trimmed; display case and valid suffixes/custom identifiers are preserved. No generation or optional auto-increment remains. Existing identifiers remain locked when editing, matching the previous UI's intentional disabled identifier field. All existing make/type/height/crew/inspection/status/notes fields remain.

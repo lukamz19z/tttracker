@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LadderReplacementLinks } from "./ladder-replacement-links";
-import type { LadderReference } from "@/lib/assets/ladders";
+import { ladderHeightLabel, ladderMeasurementLabel, type LadderReference } from "@/lib/assets/ladders";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import type {
   EquipmentDocumentRow,
@@ -180,8 +180,16 @@ export function EquipmentDocumentDetail() {
       <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <h2 className="text-lg font-black text-slate-950">Equipment Record</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {data.equipmentType === "ladder" ? <>
+            <Info label="Ladder Register Number" value={clean(data.item.ladder_number) || "\u2014"} />
+            <Info label="Serial Number" value={clean(data.item.serial_number) || "\u2014"} />
+            <Info label="Make" value={clean(data.item.make) || "\u2014"} />
+            <Info label="Ladder Type" value={clean(data.item.ladder_type) || "\u2014"} />
+            <Info label="Height" value={ladderHeightLabel(clean(data.item.height))} />
+            <Info label="Height Measurement" value={ladderMeasurementLabel(clean(data.item.height_measurement_type))} />
+          </> : null}
           {Object.entries(data.item)
-            .filter(([key, value]) => !["id", "created_at", "updated_at", ...(data.equipmentType === "ladder" ? ["supersedes_ladder_id", "created_by_user_id", "superseded_by_user_id"] : [])].includes(key) && value !== null && value !== "")
+            .filter(([key, value]) => !["id", "created_at", "updated_at", ...(data.equipmentType === "ladder" ? ["supersedes_ladder_id", "created_by_user_id", "superseded_by_user_id", "ladder_number", "serial_number", "make", "ladder_type", "height", "height_measurement_type"] : [])].includes(key) && value !== null && value !== "")
             .slice(0, 20)
             .map(([key, value]) => <Info key={key} label={titleCase(key)} value={typeof value === "boolean" ? (value ? "Yes" : "No") : clean(value)} />)}
         </div>
