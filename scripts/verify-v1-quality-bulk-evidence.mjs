@@ -34,10 +34,16 @@ console.log(`PASS 200 findings / 260 photos (${elapsed.toFixed(1)} ms), multiple
 
 const readiness=load("lib/quality/finding-readiness.ts").findingReadiness;
 const item={status:"Open",other_issue_text:"Damaged galvanising",rectification_comment:""};
-assert.deepEqual(readiness(item,1,1),{photosComplete:true,commentRequired:true,ready:false,workflow:"Open"});
+assert.deepEqual(readiness(item,1,1),{photosComplete:true,ready:true,workflow:"Ready to Rectify"});
 assert.equal(readiness({...item,rectification_comment:"Repaired"},1,1).workflow,"Ready to Rectify");
 assert.equal(readiness({...item,status:"Rectified",rectification_comment:"Repaired"},1,1).workflow,"Rectified");
 assert.equal(readiness({...item,rectification_comment:"Repaired"},1,0).ready,false);
+for(const comment of [null,"","   ","Repaired"]) {
+  assert.equal(readiness({...item,rectification_comment:comment},1,1).workflow,"Ready to Rectify");
+  assert.equal(readiness({...item,rectification_comment:comment,status:"Rectified"},1,1).workflow,"Rectified");
+  assert.equal(readiness({...item,rectification_comment:comment},0,1).ready,false);
+  assert.equal(readiness({...item,rectification_comment:comment},1,0).ready,false);
+}
 const webPage="app/(protected)/project/[projectId]/tower/[towerId]/revisions/page.tsx";
 const screens=[webPage,"components/quality/PunchlistImport.tsx","mobile/app/revisions/[revisionId].tsx","mobile/app/revisions/[revisionId]/[itemId].tsx","mobile/components/quality/QualityPhotoPicker.tsx","mobile/components/quality/QualityEvidenceGallery.tsx"];
 for(const file of screens) {
@@ -48,7 +54,7 @@ for(const file of screens) {
 }
 assert.match(fs.readFileSync(webPage,"utf8"),/Save &amp; Mark Rectified/);
 assert.match(fs.readFileSync(webPage,"utf8"),/Photos Complete/);
-assert.match(fs.readFileSync(webPage,"utf8"),/Comment Required/);
+for(const screen of screens)assert.doesNotMatch(fs.readFileSync(screen,"utf8"),/Comment Required|Comment required|commentRequired/);
 assert.doesNotMatch(fs.readFileSync("components/quality/PunchlistImport.tsx","utf8"),/<img|createObjectURL/);
 
 const browser=load("lib/quality/browser-evidence.ts");

@@ -764,7 +764,6 @@ export default function RevisionDetailScreen() {
   async function saveRectification() {
     if (!workspace || !rectification) return;
 
-    if (!rectification.rectificationComment.trim()) {Alert.alert("Comment Required","Describe the rectification / action taken.");return;}
     if (!rectification.afterPhotos.length && !(detail?.files || []).some(file=>file.revision_item_id===rectification.item.id && file.file_role==="after_photo")) {
       Alert.alert(
         "After photo required",
@@ -1478,7 +1477,7 @@ export default function RevisionDetailScreen() {
             {findingForm.afterPhotos.length ? (
               <>
                 <Text style={styles.label}>
-                  Rectification comment
+                  Rectification comment (optional)
                 </Text>
                 <TextInput
                   multiline
@@ -1592,7 +1591,7 @@ export default function RevisionDetailScreen() {
               <QualityLegField value={rectification.item.leg} onChange={leg => setRectification(current => current ? { ...current, item: { ...current.item, leg } } : current)} />
               <Text style={styles.label}>Assigned Flag</Text><TextInput style={styles.input} value={rectification.item.assigned_flag || ""} onChangeText={assigned_flag => setRectification(current => current ? { ...current, item: { ...current.item, assigned_flag } } : current)} />
               <Text style={styles.label}>
-                Rectification comment
+                Rectification comment (optional)
               </Text>
               <TextInput
                 multiline

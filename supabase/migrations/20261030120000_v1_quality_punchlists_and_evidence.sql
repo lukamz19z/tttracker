@@ -75,7 +75,6 @@ begin
  if coalesce(p_patch->>'status',item.status) in ('Rectified','Verified') then
   if not exists(select 1 from tower_quality_files where revision_item_id=p_item and file_role='before_photo' and not deletion_pending)
   or not exists(select 1 from tower_quality_files where revision_item_id=p_item and file_role='after_photo' and not deletion_pending) then raise exception 'Before and After evidence must sync before marking Rectified.';end if;
-  if nullif(btrim(case when p_patch ? 'rectification_comment' then p_patch->>'rectification_comment' else item.rectification_comment end),'') is null then raise exception 'Describe the rectification / action taken.';end if;
   if (case when p_patch ? 'issue_type_id' then nullif(p_patch->>'issue_type_id','') else item.issue_type_id::text end) is null
    and nullif(btrim(case when p_patch ? 'other_issue_text' then p_patch->>'other_issue_text' else item.other_issue_text end),'') is null then raise exception 'Select an issue before marking Rectified.';end if;
  end if;
@@ -221,7 +220,6 @@ begin
   raise exception using errcode='P0001',message='Add at least one finding before finalising.';
  end if;
  for item in select * from public.tower_revision_items where revision_id=p_revision_id loop
-  if item.source_type='punchlist' and nullif(btrim(item.rectification_comment),'') is null then raise exception 'Finding %: describe the action taken.',item.item_number;end if;
   if item.issue_type_id is null and nullif(btrim(item.other_issue_text),'') is null then raise exception 'Finding %: select an issue type.',item.item_number; end if;
   if not exists(select 1 from public.tower_quality_files where revision_id=p_revision_id and revision_item_id=item.id and not deletion_pending and file_role='before_photo') then raise exception 'Finding %: Before evidence is required.',item.item_number; end if;
   if item.status not in ('Rectified','Verified') then raise exception 'Finding %: complete rectification before finalising.',item.item_number; end if;

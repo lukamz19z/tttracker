@@ -36,14 +36,13 @@ const again=await runImport('00000000-0000-0000-0000-000000000011');assert.ok(ag
 const changed=await runImport('00000000-0000-0000-0000-000000000012',{...request,rows:rows.map(row=>({...row,description:'Changed source'}))});assert.ok(changed.every(r=>r.disposition.includes('Existing item changed')));assert.equal(changed[0].item.finding,'Member missing');
 const manual=(await db.query('select create_v1_revision_item_atomic($1,$2,$3,$4,$5) result',[rect,project,actor,'manual-1',{otherIssueText:'Loose bolt',finding:'Manual extra finding'}])).rows[0].result.item;assert.equal(manual.fli_number,'FLI-004');
 await assert.rejects(db.exec(`insert into tower_revisions(project_id,tower_id,status)values('${project}','${tower}','Draft')`),/already has RECT-01/);
-const newParent=await db.query(`insert into tower_revisions(project_id,tower_id,status,additional_rect_confirmed)values('${project}','${tower}','Draft',true) returning revision_number`);assert.equal(newParent.rows[0].revision_number,'RECT-02');
+const newParent=await db.query(`insert into tower_revisions(project_id,tower_id,status,additional_rect_confirmed)values('${project}','${tower}','Draft',true) returning id,revision_number`);assert.equal(newParent.rows[0].revision_number,'RECT-02');
 const item=imported[0].item;
 assert.equal(item.inspector_name,'John Smith');assert.equal(item.imported_by_label,'Luka Zetovic');assert.equal((await db.query('select imported_by from tower_quality_import_batches where id=$1',[batch])).rows[0].imported_by,actor);
 const edit=(version,id,patch)=>db.query('select update_v1_quality_item($1,$2,$3,$4,$5,$6) result',[item.id,actor,version,id,patch,'Field User']).then(r=>r.rows[0].result);
 await assert.rejects(edit(1,'no-evidence',{status:'Rectified',rectification_comment:'Member replaced'}),/Before and After/);
 const insertPhoto=role=>db.query('insert into tower_quality_files(project_id,revision_id,revision_item_id,file_role,mobile_client_mutation_id)values($1,$2,$3,$4,$5) returning *',[project,rect,item.id,role,role+':stable']).then(r=>r.rows[0]);
 await insertPhoto('before_photo');const after=await insertPhoto('after_photo');
-await assert.rejects(edit(1,'no-comment',{status:'Rectified',rectification_comment:''}),/action taken/);
 const completed=await edit(1,'phone-A',{status:'Rectified',rectification_comment:'Member replaced'});assert.equal(completed.record_version,2);assert.equal(completed.actioned_by_user_id,actor);
 assert.deepEqual(await edit(1,'phone-A',{status:'Rectified',rectification_comment:'Member replaced'}),completed);
 await assert.rejects(edit(1,'phone-B',{rectification_comment:'Stale edits'}),/changed on another device/);
@@ -58,6 +57,27 @@ assert.deepEqual((await db.query('select begin_v1_quality_photo_delete($1,$2,$3)
 await assert.rejects(edit(3,'still-missing',{status:'Rectified',rectification_comment:'Done'}),/Before and After/);
 const scaleRows=Array.from({length:200},(_,i)=>({...rows[0],rowKey:String(i+2),externalReference:`SCALE-${i}`}));
 const scale=await runImport('00000000-0000-0000-0000-000000000013',{...request,sourceKey:'Scale batch',rows:scaleRows});assert.equal(scale.length,200);assert.equal(new Set(scale.map(result=>result.item.fli_number)).size,200);assert.ok(scale.every(result=>result.item.inspector_name==='John Smith'));
+// Close and finalise a mixed Punchlist/Manual RECT with blank comments.
+const optionalRect=newParent.rows[0].id;
+const supplied=(await runImport('00000000-0000-0000-0000-000000000014',{...request,sourceKey:'Optional comments',rows:[rows[0]],targets:{[tower]:{revisionId:optionalRect}}}))[0].item;
+const optionalManual=(await db.query('select create_v1_revision_item_atomic($1,$2,$3,$4,$5) result',[optionalRect,project,actor,'optional-manual',{otherIssueText:'Loose bolt',finding:'Manual FLI'}])).rows[0].result.item;
+await db.query("update tower_revision_items set source_type='manual' where id=$1",[optionalManual.id]);
+for(const [index,finding] of [supplied,optionalManual].entries()) {
+  const close=()=>db.query('select update_v1_quality_item($1,$2,$3,$4,$5,$6) result',[finding.id,actor,1,`optional-close-${index}`,{status:'Rectified',rectification_comment:index===0?null:''},'Field User']);
+  await assert.rejects(close(),/Before and After/);
+  await db.query("insert into tower_quality_files(project_id,revision_id,revision_item_id,file_role)values($1,$2,$3,'before_photo')",[project,optionalRect,finding.id]);
+  await assert.rejects(close(),/Before and After/);
+  await db.query("insert into tower_quality_files(project_id,revision_id,revision_item_id,file_role)values($1,$2,$3,'after_photo')",[project,optionalRect,finding.id]);
+  const closed=(await close()).rows[0].result;
+  assert.equal(closed.status,'Rectified');assert.equal(closed.rectification_comment,index===0?null:'');assert.equal(closed.actioned_by_user_id,actor);assert.ok(closed.actioned_at);
+}
+const amend=(version,mutation,comment)=>db.query('select update_v1_quality_item($1,$2,$3,$4,$5,$6) result',[optionalManual.id,actor,version,mutation,{rectification_comment:comment},'Field User']).then(result=>result.rows[0].result);
+assert.equal((await amend(2,'optional-comment-entered','Bolt replaced')).rectification_comment,'Bolt replaced');
+assert.equal((await amend(3,'optional-comment-cleared','')).rectification_comment,'');
+const finalised=(await db.query('select finalise_v1_revision_atomic($1,$2,$3) result',[optionalRect,project,actor])).rows[0].result;
+assert.ok(finalised.finalised_at);
+assert.equal((await db.query('select finalise_v1_revision_atomic($1,$2,$3,true) result',[optionalRect,project,actor])).rows[0].result.status,'Ready for Review');
+console.log('PASS Punchlist supplied Before + After and Manual Before + After close without comments; comments remain editable/clearable; mixed RECT finalises and submits with blank comments. Required photo gates remain enforced.');
 console.log('PASS 200-row atomic SQL import with inspector attribution and separate authenticated importer.');
 console.log('PASS import canonical allocation, duplicate retry, changed-source retention, manual coexistence, existing RECT confirmation, stale edit rejection, command retry, deletion audit/tombstone, last-evidence invalidation, finalisation gate.');
 console.log('PGlite serialises execution. Independent PostgreSQL sessions and physical phones still require deployment-environment testing. No remote migration applied.');

@@ -188,7 +188,7 @@ export async function POST(request: Request, context: RouteContext) {
       const issueSelected = Boolean(
         item.issue_type_id || String(item.other_issue_text ?? "").trim(),
       );
-      return !issueSelected || !before || !after || !item.rectification_comment?.trim() || !["Rectified","Verified"].includes(item.status);
+      return !issueSelected || !before || !after || !["Rectified","Verified"].includes(item.status);
     });
 
     if (incomplete.some(item=>!item.issue_type_id && !String(item.other_issue_text || "").trim())) {

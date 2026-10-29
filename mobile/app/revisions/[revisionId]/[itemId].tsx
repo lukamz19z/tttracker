@@ -185,13 +185,6 @@ export default function RevisionItemScreen() {
 
   async function rectify(markRectified=true) {
     if(markRectified && !files.some(file=>file.file_role==="before_photo"))return Alert.alert("Before photo required","Add Before evidence before marking Rectified.");
-    if (markRectified && !comment.trim()) {
-      return Alert.alert(
-        "Comment required",
-        "Describe the rectification completed.",
-      );
-    }
-
     if (
       markRectified && afterPhotos.length === 0 &&
       afterFiles.length === 0
@@ -318,10 +311,9 @@ export default function RevisionItemScreen() {
         <View style={{flexDirection:"row",flexWrap:"wrap",gap:10}}><Text style={q.muted}>{item.source_type==="punchlist"?"Punchlist":"Manual"}</Text><Text style={q.muted}>{item.external_reference}</Text></View>
         {item.source_type==="punchlist"?<><Text>Inspector: {item.inspector_name || "Not supplied"}</Text><Text>Imported By: {qualityDisplayName(item.imported_by_label)}</Text></>:null}
         <Text>{findingReadiness(item,files.filter(file=>file.file_role==="before_photo").length,afterFiles.length).photosComplete?"Photos Complete":"Photos Incomplete"}</Text>
-        {!comment.trim()?<Text>Comment Required</Text>:null}
         {item.inspector_comment?<Text>{item.inspector_comment}</Text>:null}
         <Text style={q.fieldLabel}>
-          Rectification / Action Taken
+          Rectification / Action Taken (optional)
         </Text>
         <TextInput
           value={comment}

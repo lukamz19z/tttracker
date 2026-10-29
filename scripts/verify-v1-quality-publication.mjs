@@ -48,13 +48,15 @@ const evidence=['before_photo','after_photo'].map((role,i)=>({id:'F'+i,project_i
 evidence.push(...['imported-before','website-before','website-after'].map((source,i)=>({...evidence[source.endsWith('after')?1:0],id:'EXTRA'+i,file_name:source+'.jpg',evidence_metadata:{capturedBy:'Michael Brown',capturedDate:'2026-10-29'}})));
 let failPublish=false,authFailure=false,inserted=0,pointers=0,generated,uploadedName;
 const service={rpc:async()=>({data:1,error:null}),from(table){const q={select(){return q},eq(){return q},in(){return q},order(){return q},neq(){return q},or(){return q},update(){if(table==='tower_revisions')pointers++;return q},insert(){inserted++;return q},single:async()=>({data:table==='tower_revisions'?revision:{id:'PDF',file_name:uploadedName},error:null}),then(resolve,reject){return Promise.resolve({data:table==='tower_revision_items'?[item]:table==='project_field_issue_types'?[{id:'ISSUE',name:'Wrong orientation'}]:evidence,error:null}).then(resolve,reject)}};return q}};
+const pdfText=[],RealPdf=require('jspdf').jsPDF;
+const pdfRenderer=load('lib/quality/revision-pdf.ts',{jspdf:{jsPDF:function(...args){const doc=new RealPdf(...args),text=doc.text;doc.text=function(value,...rest){pdfText.push(value);return text.call(this,value,...rest);};return doc;}}});
 const route=load('app/api/quality/files/revisions/[revisionId]/pdf/route.ts',{
  '@/lib/quality/evidence-context':{revisionEvidenceContext:()=>({reference:'RECT-01',fli:'FLI-003'})},
  '@/lib/quality/evidence-watermark':renderer,'@/lib/quality/fli':{revisionItemFli:i=>i.fli_number,revisionReference:r=>r.revision_number},
  'next/server':{NextResponse:{json:Response.json}},sharp:{default:sharp},
  '@/lib/quality/evidence-publication':{ensurePublishedQualityEvidence:async(_service,file)=>file},'@/lib/quality/file-names':names,
  '@/lib/branding/server':{loadSystemPdfBranding:async()=>({})},
- '@/lib/quality/revision-pdf':{generateRevisionPdf:value=>{generated=value;return Buffer.from('%PDF-test')}},
+ '@/lib/quality/revision-pdf':{generateRevisionPdf:value=>{generated=value;return pdfRenderer.generateRevisionPdf(value)}},
  '@/lib/quality/server':{requireQualityUser:async()=>{if(authFailure)throw Error('Sign in required');return {service,user:{id:'U'},role:'test'}},assertQualityProjectAccess:async()=>{},loadQualityProject:async()=>({project_number:'P-UGL-26-002',sharepoint_drive_id:'DRIVE',sharepoint_folder_id:'ROOT'}),loadQualityTower:async()=>({}),qualityTowerLabel:()=> '5C3/5C1-093',qualityUserLabel:()=> 'Test',qualityApiError:error=>({message:error.message,status:authFailure?401:500})},
  '@/lib/sharepoint/quality':{ensureRevisionFolder:async()=>({id:'FOLDER'}),uploadQualityFile:async value=>{uploadedName=value.fileName;if(failPublish)throw Error('Synthetic SharePoint publication failure');return {id:'PROVIDER',name:value.fileName}}},
  '@/lib/sharepoint/graph':{getGraphAccessToken:async()=> 'synthetic-token',deleteDriveItem:async()=>{}}
@@ -66,5 +68,12 @@ try {
  authFailure=true;assert.equal((await call()).status,401);authFailure=false;
  failPublish=true;const failed=await call();assert.equal(failed.status,500);assert.match(failed.headers.get('content-type'),/application\/json/);assert.equal(inserted,0);assert.equal(pointers,0);
  failPublish=false;const succeeded=await call();assert.equal(succeeded.status,200);assert.equal(inserted,1);assert.equal(pointers,1);assert.equal(uploadedName,'P-UGL-26-002_5C3-5C1-093_RECT-01_R01.pdf');assert.ok(generated.items[0].beforePhotos[0].dataUrl.startsWith('data:image/jpeg;base64,'));assert.ok(generated.items[0].afterPhotos[0]);assert.equal(generated.items[0].beforePhotos.length,3);assert.equal(generated.items[0].afterPhotos.length,2);assert.equal(generated.items[0].beforePhotos[1].capturedBy,'Michael Brown');assert.equal(generated.items[0].afterPhotos[1].capturedDate,'2026-10-29');
+ for(const sourceType of ['punchlist','manual'])for(const comment of [null,'','   ','Optional action recorded']) {
+   item.source_type=sourceType;item.rectification_comment=comment;pdfText.length=0;
+   const response=await call();assert.equal(response.status,200,JSON.stringify(await response.json()));
+   assert.equal(generated.reportState,'Rectified');assert.equal(generated.items[0].rectificationComment,comment ?? '');
+   const text=pdfText.flat().join(' ');assert.ok(text.includes(comment?.trim() || 'No additional rectification comment.'));
+ }
+ console.log('PASS actual PDF handler and real PDF renderer for Punchlist/Manual findings with null, empty and whitespace comments; report remains Rectified and entered comments are included.');
 } finally {globalThis.fetch=fetchOriginal;}
 console.log('PASS actual PDF handler: JSON auth/error responses, SharePoint failure leaves published metadata untouched, successful annotated Before/After generation publishes clean PDF and then updates pointer.');
