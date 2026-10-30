@@ -1,3 +1,4 @@
+import type { DetailSchema, DetailValues } from "../../lib/quality/operational-details";
 export type DefectSeverity = "Minor" | "Major" | "Critical";
 
 export type DefectStatus = "Open" | "In Progress" | "Fixed" | "Closed";
@@ -34,6 +35,7 @@ export type QualityTower = {
 };
 
 export type QualityIssueType = {
+  detail_schema?: DetailSchema | null;
   id: string;
   project_id: string;
   applies_to: "defect" | "revision" | "both";
@@ -111,6 +113,8 @@ export type QualityRevision = {
 };
 
 export type QualityRevisionItem = {
+  source_date?: string | null;
+  operational_details?: DetailValues | null;
   record_version?: number;
   source_type?: "manual" | "punchlist" | null;
   external_reference?: string | null;

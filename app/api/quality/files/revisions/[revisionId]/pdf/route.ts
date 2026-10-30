@@ -140,7 +140,7 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,source_type,external_reference,inspector_name,imported_by_label,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,source_type,external_reference,source_date,inspector_name,imported_by_label,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
@@ -241,7 +241,7 @@ export async function POST(request: Request, context: RouteContext) {
         towerSegment: item.tower_segment,
         memberNumber: item.member_number,
         drawingNumber: item.drawing_number,
-        inspectorName:item.inspector_name,importedByLabel:item.imported_by_label,sourceType:item.source_type,externalReference:item.external_reference,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
+        inspectorName:item.inspector_name,importedByLabel:item.imported_by_label,sourceType:item.source_type,externalReference:item.external_reference,sourceDate:item.source_date,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
         finding: String(item.finding ?? ""),
         rectificationComment: String(item.rectification_comment ?? ""),
         status: item.status,

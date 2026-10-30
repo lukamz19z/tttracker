@@ -11,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -36,8 +37,10 @@ import {
   cachedQualityRevisionList,
   listQualityRevisions,
   refreshQualityMemberCatalog,
+  refreshQualityRevisionDetail,
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
+import { prepareQualityOfflinePack } from "@/lib/offline/quality-offline-packs";
 import {
   listRevisionWorkspaces,
   type RevisionWorkspace,
@@ -65,8 +68,7 @@ function formatDate(value: unknown) {
     month: "2-digit",
     year: "numeric",
   })
-    .format(date)
-    .replaceAll("/", "-");
+    .format(date);
 }
 
 type FilterSelector = "tower" | "member" | "stage" | null;
@@ -99,6 +101,8 @@ export default function RevisionsScreen() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offlinePackProgress,setOfflinePackProgress]=useState<{current:number;total:number;findings:number;cached:number;previews:number}|null>(null);
+  const offlineStarted=useRef(new Set<string>());
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -363,6 +367,29 @@ export default function RevisionsScreen() {
     }, [loadFirstPage]),
   );
 
+  useEffect(()=>{
+    if(!online || !projectId)return;
+    const punchlists=rows.filter(row=>row.source_type==="punchlist");
+    const pending=punchlists.filter(row=>!offlineStarted.current.has(row.id));
+    if(!pending.length)return;
+    let active=true;
+    void (async()=>{
+      let completed=0;
+      for(const row of pending){
+        if(!active)break;
+        offlineStarted.current.add(row.id);
+        setOfflinePackProgress({current:completed+1,total:pending.length,findings:row.itemCount,cached:0,previews:0});
+        try{
+          const detail=await refreshQualityRevisionDetail(projectId,row.id);
+          await prepareQualityOfflinePack({projectId,revisionId:row.id,detail,onProgress:pack=>{if(active)setOfflinePackProgress({current:completed+1,total:pending.length,findings:pack.cachedFindings,cached:pack.cachedPreviews,previews:pack.previews});}});
+        }catch{/* individual failed packs remain retryable in their detail screen */}
+        completed++;
+      }
+      if(active)setOfflinePackProgress(null);
+    })();
+    return()=>{active=false;};
+  },[online,projectId,rows]);
+
   const loadMore = useCallback(async () => {
     if (!projectId || nextOffset === null || loadingMore) return;
 
@@ -527,6 +554,7 @@ export default function RevisionsScreen() {
       ) : null}
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {offlinePackProgress?<Text style={styles.meta}>Preparing offline Punchlists · {offlinePackProgress.current}/{offlinePackProgress.total} · {offlinePackProgress.cached}/{offlinePackProgress.previews} previews</Text>:null}
 
       {!loading && rows.length === 0 && localRevisions.length === 0 ? (
         <View style={styles.empty}>

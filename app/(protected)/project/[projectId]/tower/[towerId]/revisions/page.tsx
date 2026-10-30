@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
+import { sourceDateDisplay, sourceDateToDb } from "@/lib/quality/punchlist-import-values";
 import { qualityJsonResponse } from "@/lib/quality/http-response";
 import { qualityCaptureLabel } from "@/lib/quality/date-time";
 import { uploadBrowserEvidence, emptyCaptureDetails, type CaptureDetails } from "@/lib/quality/browser-evidence";
@@ -85,6 +86,7 @@ type RevisionItem = {
   record_version?: number;
   source_type?: string | null;
   external_reference?: string | null;
+  source_date?: string | null;
   inspector_comment?: string | null;
   leg?: string | null;
   assigned_flag?: string | null;
@@ -192,7 +194,7 @@ function fliCode(item: RevisionItem) {
 
 const BLANK_REVISION: RevisionDraft = {
   inspection_stage: "Post Erection",
-  inspection_date: today(),
+  inspection_date: sourceDateDisplay(today()),
   client_inspector: "",
   client_company: "",
   client_reference: "",
@@ -214,8 +216,7 @@ const BLANK_FINDING: FindingDraft = {
 
 function prettyDate(value: string | null | undefined) {
   if (!value) return "-";
-  const parsed = new Date(`${value.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString("en-AU");
+  return sourceDateDisplay(value);
 }
 
 function revisionStatusClasses(status: RevisionRow["status"]) {
@@ -450,6 +451,8 @@ export default function TowerRevisionsPage() {
   }
 
   async function createRevision() {
+    const inspectionDate=sourceDateToDb(revisionDraft.inspection_date);
+    if(!inspectionDate){setMessage({tone:"error",text:"Inspection date must be DD/MM/YYYY."});return;}
     setRevisionSaving(true);
     setMessage(null);
     try {
@@ -467,7 +470,7 @@ export default function TowerRevisionsPage() {
           towerId,
           additionalRectConfirmed: additionalConfirmed,
           inspectionStage: revisionDraft.inspection_stage,
-          inspectionDate: revisionDraft.inspection_date || today(),
+          inspectionDate,
           clientInspector: revisionDraft.client_inspector.trim() || null,
           clientCompany: revisionDraft.client_company.trim() || null,
           clientReference: revisionDraft.client_reference.trim() || null,
@@ -997,7 +1000,7 @@ export default function TowerRevisionsPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span>{item.source_type==="punchlist"?<span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs">Punchlist</span>:null}{item.external_reference?<span className="text-xs text-slate-500">{item.external_reference}</span>:null}<span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{complete.workflow}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px]">{complete.photosComplete?"Photos Complete":"Photos Incomplete"}</span></div>
                                 <div className="mt-1 font-bold text-slate-900">{issueName(item.issue_type_id,item.other_issue_text)}</div>
-                                {item.source_type==="punchlist"?<div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500"><span>Inspector: {item.inspector_name || "Not supplied"}</span><span>Imported By: {qualityDisplayName(item.imported_by_label)}</span></div>:null}
+                                {item.source_type==="punchlist"?<div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500"><span>Inspector: {item.inspector_name || "Not supplied"}</span>{item.source_date?<span>Source Date: {sourceDateDisplay(item.source_date)}</span>:null}<span>Imported By: {qualityDisplayName(item.imported_by_label)}</span></div>:null}
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3"><span>Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
                                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{[item.assigned_flag && `Flag: ${item.assigned_flag}`, item.leg && `Leg ${item.leg}`, item.finding || "No additional client comment."].filter(Boolean).join(" / ")}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
                                 <div className="mt-3 flex flex-wrap gap-3 text-xs"><span>Before: {beforeCount}</span><span>After: {afterCount}</span></div>
@@ -1028,7 +1031,7 @@ export default function TowerRevisionsPage() {
         <Modal title="Manual Rectification" subtitle="Creates the parent RECT record. Add each flagged issue as an FLI after creation." onClose={() => setRevisionModalOpen(false)}>
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Inspection stage"><select value={revisionDraft.inspection_stage} onChange={(event) => setRevisionDraft((current) => ({ ...current, inspection_stage: event.target.value as RevisionRow["inspection_stage"] }))} className="input"><option>Post Assembly</option><option>Post Erection</option><option>Other</option></select></Field>
-            <Field label="Inspection date"><input type="date" value={revisionDraft.inspection_date} onChange={(event) => setRevisionDraft((current) => ({ ...current, inspection_date: event.target.value }))} className="input" /></Field>
+            <Field label="Inspection date (DD/MM/YYYY)"><input type="text" inputMode="numeric" placeholder="DD/MM/YYYY" value={revisionDraft.inspection_date} onChange={(event) => setRevisionDraft((current) => ({ ...current, inspection_date: event.target.value }))} className="input" /></Field>
             <Field label="Client inspector"><input value={revisionDraft.client_inspector} onChange={(event) => setRevisionDraft((current) => ({ ...current, client_inspector: event.target.value }))} placeholder="Name" className="input" /></Field>
             <Field label="Client / company"><input value={revisionDraft.client_company} onChange={(event) => setRevisionDraft((current) => ({ ...current, client_company: event.target.value }))} placeholder="Transgrid / UGL / etc." className="input" /></Field>
             <div className="md:col-span-2"><Field label="Client inspection / punchlist reference"><input value={revisionDraft.client_reference} onChange={(event) => setRevisionDraft((current) => ({ ...current, client_reference: event.target.value }))} placeholder="Optional reference" className="input" /></Field></div>
@@ -1168,7 +1171,7 @@ export default function TowerRevisionsPage() {
             {(["before_photo", "after_photo"] as const).map((role) => {
               const roleViews = evidenceViews.filter((view) => view.role === role);
               const label = role === "before_photo" ? "Before" : "After";
-              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view,viewIndex) => <div key={view.id}><div className="flex justify-between text-xs p-1"><span className="inline-flex gap-2"><span>{label.toUpperCase()}</span><span>{viewIndex+1} of {roleViews.length}</span></span><button type="button" aria-label="Delete Photo" className="inline-flex items-center gap-1" onClick={()=>{if(window.confirm(`Delete this ${label} photo?`))void deleteEvidence(view);}}><Trash2 size={14}/> Delete Photo</button></div><button key={view.id} type="button" onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left"><img loading="lazy" src={view.url} alt={view.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{!view.capturedAt && view.capturedDate?`Captured ${view.capturedDate} (time unknown)`:qualityCaptureLabel(view.capturedAt,project?.timezone,view.recordedAt)}<br />Captured By: {view.capturedBy || "Unknown"}<br />Uploaded By: {view.uploadedBy || "TTTracker User"}</div></div></button></div>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
+              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view,viewIndex) => <div key={view.id}><div className="flex justify-between text-xs p-1"><span className="inline-flex gap-2"><span>{label.toUpperCase()}</span><span>{viewIndex+1} of {roleViews.length}</span></span><button type="button" aria-label="Delete Photo" className="inline-flex items-center gap-1" onClick={()=>{if(window.confirm(`Delete this ${label} photo?`))void deleteEvidence(view);}}><Trash2 size={14}/> Delete Photo</button></div><button key={view.id} type="button" onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left"><img loading="lazy" src={view.url} alt={view.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{!view.capturedAt && view.capturedDate?`Captured ${sourceDateDisplay(view.capturedDate)} (time unknown)`:qualityCaptureLabel(view.capturedAt,project?.timezone,view.recordedAt)}<br />Captured By: {view.capturedBy || "Unknown"}<br />Uploaded By: {view.uploadedBy || "TTTracker User"}</div></div></button></div>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
             })}
           </div>
           <div className="mt-4 space-y-3"><Field label="Rectification / Action Taken (optional)"><textarea className="input" rows={3} value={actionComment} onChange={event=>setActionComment(event.target.value)}/></Field><div className="flex gap-2"><button disabled={findingEditSaving || Boolean(evidenceUploading)} onClick={()=>void saveEvidenceAction(false)} className="rounded-xl border px-4 py-2">Save Only</button><button disabled={findingEditSaving || Boolean(evidenceUploading)} onClick={()=>void saveEvidenceAction(true)} className="rounded-xl bg-emerald-700 text-white px-4 py-2">Save &amp; Mark Rectified</button></div>{message?<p role="status" className={message.tone==="error"?"text-red-700":"text-emerald-700"}>{message.text}</p>:null}</div>

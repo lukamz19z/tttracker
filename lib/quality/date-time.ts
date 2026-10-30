@@ -20,9 +20,9 @@ export function canonicalCaptureTime(value: unknown): string | null {
 export function formatQualityDateTime(value: unknown, timeZone?: unknown) {
   const iso = canonicalCaptureTime(value);
   if (!iso) return "-";
-  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: qualityTimeZone(timeZone), day:"2-digit", month:"2-digit", year:"numeric", hour:"numeric", minute:"2-digit", hour12:true }).formatToParts(new Date(iso));
+  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: qualityTimeZone(timeZone), day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", hourCycle:"h23" }).formatToParts(new Date(iso));
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value || "";
-  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")} ${get("dayPeriod").toLowerCase()}`;
+  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}`;
 }
 /** Legacy recorded/upload time is labelled, never claimed as capture. */
 export function qualityCaptureLabel(capturedAt: unknown, timeZone?: unknown, recordedAt?: unknown) {
@@ -31,7 +31,8 @@ export function qualityCaptureLabel(capturedAt: unknown, timeZone?: unknown, rec
 }
 /** Convert an explicitly supplied project-local wall clock, including DST. */
 export function projectLocalCaptureTime(value: string, timeZone?: unknown) {
-  const match=/^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+  const input=value.trim().replace(/^(\d{2})\/(\d{2})\/(\d{4})(?=\s)/,(_,day,month,year)=>`${year}-${month}-${day}`);
+  const match=/^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(input);
   if(!match) return null;
   const [,year,month,day,hour,minute,second="00"]=match;
   const wall=Date.UTC(+year,+month-1,+day,+hour,+minute,+second);

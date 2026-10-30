@@ -7,18 +7,19 @@ const require=createRequire(import.meta.url),ts=require('typescript');
 function loader(mocks={},override={}) {const cache=new Map();return function load(file){file=path.resolve(file);if(cache.has(file))return cache.get(file);const exports={};cache.set(file,exports);const source=override[file] ?? fs.readFileSync(file,'utf8');new Function('require','exports',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText)(name=>{if(name in mocks)return mocks[name];if(name.startsWith('.'))return load(path.resolve(path.dirname(file),name)+'.ts');throw Error('Missing mock '+name)},exports);return exports;};}
 const pure=loader(),time=pure('lib/quality/date-time.ts');
 const instant='2026-10-25T05:19:23.123Z',zone='Australia/Sydney';
-assert.equal(time.formatQualityDateTime(instant,zone),'25/10/2026 4:19 pm');
-assert.equal(time.formatQualityDateTime('2026-07-25T06:19:00Z',zone),'25/07/2026 4:19 pm');
-assert.equal(time.formatQualityDateTime(instant,'Australia/Brisbane'),'25/10/2026 3:19 pm');
+assert.equal(time.formatQualityDateTime(instant,zone),'25/10/2026 16:19');
+assert.equal(time.formatQualityDateTime('2026-07-25T06:19:00Z',zone),'25/07/2026 16:19');
+assert.equal(time.formatQualityDateTime(instant,'Australia/Brisbane'),'25/10/2026 15:19');
 assert.equal(time.canonicalCaptureTime('2026-10-25T16:19:23.123+11:00'),instant);
 assert.equal(time.canonicalCaptureTime('2026-10-25 16:19'),null);
 assert.equal(time.projectLocalCaptureTime('2026-10-25 16:19',zone),'2026-10-25T05:19:00.000Z');
+assert.equal(time.projectLocalCaptureTime('25/10/2026 16:19',zone),'2026-10-25T05:19:00.000Z');
 assert.equal(time.projectLocalCaptureTime('2026-10-04 02:30',zone),null);
 assert.equal(time.projectLocalCaptureTime('2026-02-30 16:19',zone),null);
 assert.equal(time.captureTimeFromExif({DateTimeOriginal:'2026:10:25 16:19:23',OffsetTimeOriginal:'+11:00'},'UTC'),'2026-10-25T05:19:23.000Z');
 assert.match(time.qualityCaptureLabel(null,zone,'2026-10-25T05:39:00Z'),/Recorded.*capture time unavailable/);
-assert.equal(time.qualityCaptureLabel(instant,zone,'2026-10-25T05:39:00Z'),'25/10/2026 4:19 pm');
-const layout=pure('lib/quality/evidence-layout.ts');assert.equal(layout.watermarkLines({phase:'BEFORE',capturedAt:instant,timeZone:zone}).at(-1),'25/10/2026 4:19 pm');
+assert.equal(time.qualityCaptureLabel(instant,zone,'2026-10-25T05:39:00Z'),'25/10/2026 16:19');
+const layout=pure('lib/quality/evidence-layout.ts');assert.equal(layout.watermarkLines({phase:'BEFORE',capturedAt:instant,timeZone:zone}).at(-1),'Captured: 25/10/2026 16:19');
 const sharp=require('sharp'),original=await sharp({create:{width:1200,height:900,channels:3,background:'#8ea7ba'}}).withExif({IFD2:{DateTimeOriginal:'2026:10:25 16:19:23',OffsetTimeOriginal:'+11:00'}}).jpeg().toBuffer();
 assert.equal(pure('lib/quality/photo-capture.ts').imageCaptureTime(original,'UTC'),'2026-10-25T05:19:23.000Z');
 const actualText=[],RealPdf=require('jspdf').jsPDF;
@@ -29,7 +30,7 @@ const pdf=loader({jspdf:{jsPDF:function(...args){const doc=new RealPdf(...args),
 const photo={id:'BEFORE',fileName:'BEFORE-01.jpg',mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,'+beforeBytes.toString('base64'),capturedAt:instant};
 const timePdf=pdf.generateRevisionPdf({projectName:'Time regression',projectNumber:'P-UGL-26-002',towerName:'5C3/5C1-093',fliNumber:'RECT-01',reportRevision:1,timeZone:zone,inspectionStage:'Post Erection',inspectionDate:'2026-10-25',generatedBy:'Test',generatedAt:'2026-10-25T05:39:00Z',items:[{itemNumber:3,itemReference:'FLI-003',issueType:'Issue',status:'Rectified',beforeTakenAt:'1990-01-01T00:00:00Z',beforePhotos:[photo],afterPhotos:[{...photo,id:'AFTER',dataUrl:'data:image/jpeg;base64,'+afterBytes.toString('base64'),capturedAt:'2026-10-25T05:24:00Z'}]}]});
 if(process.argv.includes('--write-pdf')) {const target=path.join(require('node:os').tmpdir(),'tt-quality-capture-time.pdf');fs.writeFileSync(target,timePdf);console.log('PDF time fixture: '+target);}
-assert.ok(actualText.flat().some(text=>String(text).includes('25/10/2026 4:19 pm')));assert.ok(actualText.flat().some(text=>String(text).includes('25/10/2026 4:24 pm')));assert.ok(!actualText.flat().some(text=>String(text).includes('1990')));
+assert.ok(actualText.flat().some(text=>String(text).includes('25/10/2026 16:19')));assert.ok(actualText.flat().some(text=>String(text).includes('25/10/2026 16:24')));assert.ok(!actualText.flat().some(text=>String(text).includes('1990')));
 console.log('PASS UTC capture preserved across delayed sync; NSW AEDT/AEST, alternate project zone, invalid clocks, EXIF offsets, shared watermark label and honest legacy fallback.');
 console.log('PASS real JPEG EXIF extraction and actual PDF text uses each photo capture instant, never stale item capture/upload/generated time.');
 const location=pure('mobile/lib/offline/revision-location.ts');

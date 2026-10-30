@@ -29,6 +29,9 @@ export async function queueQualityPhotoDelete(file:QualityFile) {
     await setCache(`quality:photo-deleted:${file.id}`,true);
     await removeOfflineFile((await getCache<string>(`quality:preview:${file.id}`))?.value);
     await removeCache(`quality:preview:${file.id}`);
+    const packKey=`quality:offline-pack:${file.project_id}:${file.revision_id}`;
+    const pack=(await getCache<{previews:number;cachedPreviews:number;failedFileIds:string[];previewFiles:Array<{id:string}>;status:string}>(packKey))?.value;
+    if(pack && (pack.previewFiles.some(preview=>preview.id===file.id) || pack.failedFileIds.includes(file.id))){pack.previews=Math.max(0,pack.previews-1);pack.cachedPreviews=pack.previewFiles.filter(preview=>preview.id!==file.id).length;pack.previewFiles=pack.previewFiles.filter(preview=>preview.id!==file.id);pack.failedFileIds=pack.failedFileIds.filter(id=>id!==file.id);pack.status=pack.previews===pack.cachedPreviews?"ready":"partial";await setCache(packKey,pack);}
   });
 }
 export async function syncQualityPhotoDelete(payload:{fileId:string}) {

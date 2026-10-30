@@ -18,7 +18,8 @@ export async function POST(request:Request,context:{params:Promise<{revisionId:s
     if(parent.error)throw new Error(parent.error.message);
     if(!parent.data)return NextResponse.json({error:"This Rectification has been deleted or is no longer available."},{status:404});
     await assertQualityProjectAccess({service,userId:user.id,role,projectId:parent.data.project_id});
-    const fields=Object.fromEntries(["issueTypeId","otherIssueText","leg","assignedFlag","towerSegment","memberNumber","drawingNumber","finding","rectificationComment"].map(key=>[key,typeof body[key]==="string"?body[key].trim():null]));
+    const fields: Record<string, unknown>=Object.fromEntries(["issueTypeId","otherIssueText","leg","assignedFlag","towerSegment","memberNumber","drawingNumber","finding","rectificationComment"].map(key=>[key,typeof body[key]==="string"?body[key].trim():null]));
+    if (Object.hasOwn(body,"operationalDetails")) fields.operationalDetails=body.operationalDetails;
     const {data,error}=await service.rpc("create_v1_revision_item_atomic",{p_revision_id:revisionId,p_project_id:parent.data.project_id,p_actor_id:user.id,p_mutation_id:body.clientMutationId.trim(),p_fields:fields});
     if(error){const result=atomicQualityError(error);console.warn("FLI allocation failed",{revisionId,code:error.code,duration:Date.now()-started});return NextResponse.json({error:result.message},{status:result.status});}
     if(data?.item?.id && !data.item.source_type) {

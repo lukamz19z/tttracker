@@ -1,3 +1,4 @@
+import { verifyFieldWorkflowSql } from "./verify-v1-quality-field-workflow.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {PGlite} from "@electric-sql/pglite";
@@ -25,6 +26,8 @@ await db.exec(fs.readFileSync('supabase/migrations/20261025100000_v1_rect_alloca
 await db.exec('create trigger tower_revisions_assign_number before insert on tower_revisions for each row execute function tttracker_assign_revision_number();');
 const migration=fs.readFileSync('supabase/migrations/20261030120000_v1_quality_punchlists_and_evidence.sql','utf8');
 await db.exec(migration);await db.exec(migration);
+const operationalMigration=fs.readFileSync("supabase/migrations/20261030150000_v1_quality_operational_details.sql","utf8");
+await db.exec(operationalMigration);await db.exec(operationalMigration);
 await db.exec(`create trigger item_invalidation after insert or update or delete on tower_revision_items for each row execute function invalidate_v1_revision_finalisation();create trigger file_invalidation after insert or update or delete on tower_quality_files for each row execute function invalidate_v1_revision_finalisation();`);
 const rows=Array.from({length:3},(_,i)=>({rowKey:String(i+2),towerId:tower,tower:'136',externalReference:'TG-'+i,defectType:'Missing member',description:'Member missing',member:'77H',segment:'Peak',leg:'A',drawing:'D-1',inspector:'John Smith',inspectorComment:'Replace',sourceDate:'2026-10-28',assignedFlag:'Crew 2',photos:'source.jpg'}));
 const request={importedByLabel:'Luka Zetovic',sourceKey:'Client punchlist',filename:'punchlist.csv',rows,targets:{[tower]:{revisionId:rect}}};
@@ -81,4 +84,5 @@ console.log('PASS Punchlist supplied Before + After and Manual Before + After cl
 console.log('PASS 200-row atomic SQL import with inspector attribution and separate authenticated importer.');
 console.log('PASS import canonical allocation, duplicate retry, changed-source retention, manual coexistence, existing RECT confirmation, stale edit rejection, command retry, deletion audit/tombstone, last-evidence invalidation, finalisation gate.');
 console.log('PGlite serialises execution. Independent PostgreSQL sessions and physical phones still require deployment-environment testing. No remote migration applied.');
+await verifyFieldWorkflowSql(db,{project,actor,rect});
 }finally{await db.close();}

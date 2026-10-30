@@ -60,8 +60,8 @@ assert.doesNotMatch(fs.readFileSync("components/quality/PunchlistImport.tsx","ut
 const browser=load("lib/quality/browser-evidence.ts");
 const blank=browser.emptyCaptureDetails,bytes=new Uint8Array([0,1,2]);
 assert.equal(browser.resolveEvidenceCapture(blank,bytes).capturedAt,null);
-assert.deepEqual(browser.resolveEvidenceCapture({...blank,capturedBy:"Michael Brown",capturedDate:"2026-10-29"},bytes),{capturedAt:null,capturedDate:"2026-10-29",capturedBy:"Michael Brown"});
-assert.equal(browser.resolveEvidenceCapture({...blank,capturedDate:"2026-10-29",capturedTime:"14:30"},bytes,"Australia/Sydney").capturedAt,"2026-10-29T03:30:00.000Z");
+assert.deepEqual(browser.resolveEvidenceCapture({...blank,capturedBy:"Michael Brown",capturedDate:"29/10/2026"},bytes),{capturedAt:null,capturedDate:"2026-10-29",capturedBy:"Michael Brown"});
+assert.equal(browser.resolveEvidenceCapture({...blank,capturedDate:"29/10/2026",capturedTime:"14:30"},bytes,"Australia/Sydney").capturedAt,"2026-10-29T03:30:00.000Z");
 assert.throws(()=>browser.resolveEvidenceCapture({...blank,capturedTime:"14:30"},bytes),/capture date/);
 assert.throws(()=>browser.resolveEvidenceCapture({...blank,capturedBy:"person@example.com"},bytes),/not an email/);
 let sessions=[],completed=0,chunks=0;
@@ -112,6 +112,6 @@ for(const fileRole of ["before_photo","after_photo"]) {
 assert.equal(inserted.length,4);assert.equal(published.length,8);
 for(const file of inserted){assert.equal(file.uploaded_by,"AUTHENTICATED-UPLOADER");assert.equal(file.uploaded_by_label,"Luka Zetovic");assert.equal(file.captured_at,null);assert.equal(file.evidence_metadata.capturedBy,"Michael Brown");assert.equal(file.evidence_metadata.capturedDate,"2026-10-29");assert.ok(file.annotated_sharepoint_item_id);assert.match(file.file_name,/^PROJECT_136_RECT-01_FLI-001_(BEFORE|AFTER)-01.jpg$/);}
 for(const photo of published.filter(value=>value.folderId==="FOLDER")){assert.notDeepEqual(photo.content,original);assert.equal((await sharp(photo.content).metadata()).format,"jpeg");}
-const lines=layout.watermarkLines(inserted[0].evidence_metadata).join("\n");for(const value of ["PROJECT","136","RECT-01","FLI-001","BEFORE","Crew 1","Leg: A","Peak","M1","D1","Damaged galvanising","Michael Brown","2026-10-29 (time unknown)"])assert.ok(lines.includes(value),value);
+const lines=layout.watermarkLines(inserted[0].evidence_metadata).join("\n");for(const value of ["PROJECT","136","RECT-01","FLI-001","BEFORE","Crew 1","Leg: A","Peak","M1","D1","Damaged galvanising","Michael Brown","29/10/2026 (time unknown)"])assert.ok(lines.includes(value),value);
 assert.ok(!lines.includes("1 of"));
 console.log("PASS real website upload handler publishes baked canonical Before/After JPEGs, preserves originals, canonical filenames, photographer and authenticated uploader separately; no fabricated capture timestamp.");

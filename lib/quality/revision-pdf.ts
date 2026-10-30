@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { formatQualityDateTime, qualityCaptureLabel } from "./date-time";
+import { sourceDateDisplay } from "./punchlist-import-values";
 
 export type RevisionPdfBranding = {
   logoDataUrl?: string | null;
@@ -27,10 +28,11 @@ export type RevisionPdfPhoto = {
 };
 
 function photoCaptureLabel(photo:RevisionPdfPhoto|undefined,timeZone?:unknown) {
-  return !photo?.capturedAt && photo?.capturedDate ? `Captured ${photo.capturedDate} (time unknown)` : qualityCaptureLabel(photo?.capturedAt,timeZone,photo?.recordedAt);
+  return !photo?.capturedAt && photo?.capturedDate ? `Captured ${sourceDateDisplay(photo.capturedDate)} (time unknown)` : qualityCaptureLabel(photo?.capturedAt,timeZone,photo?.recordedAt);
 }
 
 export type RevisionPdfItem = {
+  sourceDate?: string | null;
   sourceType?: string | null;
   externalReference?: string | null;
   inspectorComment?: string | null;
@@ -92,6 +94,7 @@ function text(value: unknown) {
 
 function date(value: string | null | undefined, withTime = false) {
   if (!value) return "-";
+  if (!withTime && /^\d{4}-\d{2}-\d{2}$/.test(value)) return sourceDateDisplay(value);
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat("en-AU", {
@@ -395,7 +398,7 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     doc.setFontSize(8);
     doc.text([item.itemReference && `FLI # ${item.itemReference}`, item.assignedFlag && `Flag: ${item.assignedFlag}`, item.leg && `Leg ${item.leg}`].filter(Boolean).join(" / "), margin, iy - 3);
     iy += 3;
-    const audit=[item.sourceType==="punchlist"?"Punchlist":"Manual",item.externalReference && `External: ${item.externalReference}`,item.inspectorName && `Inspector: ${item.inspectorName}`,item.importedByLabel && `Imported By: ${item.importedByLabel}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
+    const audit=[item.sourceType==="punchlist"?"Punchlist":"Manual",item.externalReference && `External: ${item.externalReference}`,item.sourceDate && `Source Date: ${sourceDateDisplay(item.sourceDate)}`,item.inspectorName && `Inspector: ${item.inspectorName}`,item.importedByLabel && `Imported By: ${item.importedByLabel}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
     const auditLines=doc.splitTextToSize(audit,contentWidth) as string[];doc.text(auditLines,margin,iy);iy+=auditLines.length*3.5+5;
     drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, `BEFORE - ${item.beforePhotos.length?1:0} of ${item.beforePhotos.length}`);
     drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, `AFTER - ${item.afterPhotos.length?1:0} of ${item.afterPhotos.length}`);

@@ -1,17 +1,19 @@
 import { imageCaptureTime } from "./photo-capture";
 import { projectLocalCaptureTime } from "./date-time";
+import { sourceDateToDb } from "./punchlist-import-values";
 
 export type CaptureDetails = { capturedBy: string; capturedDate: string; capturedTime: string };
 export const emptyCaptureDetails: CaptureDetails = {capturedBy:"",capturedDate:"",capturedTime:""};
 export function resolveEvidenceCapture(details: CaptureDetails, bytes: Uint8Array, timeZone?: unknown) {
-  if(details.capturedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(details.capturedDate) || !Number.isFinite(Date.parse(details.capturedDate)) || new Date(details.capturedDate).toISOString().slice(0,10)!==details.capturedDate))throw new Error("Enter a valid capture date.");
+  const capturedDate=sourceDateToDb(details.capturedDate);
+  if(capturedDate===null)throw new Error("Captured date must be DD/MM/YYYY.");
   if(details.capturedBy.includes("@")) throw new Error("Enter the photographer's name, not an email address.");
   if(details.capturedTime && !details.capturedDate) throw new Error("Enter a capture date with the capture time, or leave both unknown.");
-  const capturedAt = details.capturedDate && details.capturedTime
-    ? projectLocalCaptureTime(`${details.capturedDate} ${details.capturedTime}`, timeZone)
+  const capturedAt = capturedDate && details.capturedTime
+    ? projectLocalCaptureTime(`${capturedDate} ${details.capturedTime}`, timeZone)
     : details.capturedDate ? null : imageCaptureTime(bytes,timeZone);
   if(details.capturedDate && details.capturedTime && !capturedAt) throw new Error("The captured date/time is invalid.");
-  return {capturedAt, capturedDate:details.capturedDate || "", capturedBy:details.capturedBy.trim()};
+  return {capturedAt, capturedDate:capturedDate || "", capturedBy:details.capturedBy.trim()};
 }
 /** Shared browser transport; finalisation bakes the canonical watermark on the server. */
 export async function uploadBrowserEvidence(apiFetch:(url:string,init?:RequestInit)=>Promise<Response>, file:File,

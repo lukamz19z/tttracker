@@ -1,5 +1,8 @@
 "use client";
 
+import { DetailSchemaEditor } from "./DetailSchemaEditor";
+import { validateDetailSchema, type DetailSchema } from "@/lib/quality/operational-details";
+
 import { Plus, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -8,6 +11,7 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 type Scope = "defect" | "revision" | "both";
 
 type IssueType = {
+  detail_schema?: DetailSchema | null;
   id: string;
   project_id: string;
   applies_to: Scope;
@@ -50,7 +54,7 @@ export default function IssueTypeManager({
     setMessage(null);
     const { data, error } = await supabase
       .from("project_field_issue_types")
-      .select("id,project_id,applies_to,name,description,active,sort_order")
+      .select("id,project_id,applies_to,name,description,active,sort_order,detail_schema")
       .eq("project_id", projectId)
       .order("sort_order")
       .order("name");
@@ -109,11 +113,14 @@ export default function IssueTypeManager({
       return;
     }
 
+    const configurationError = validateDetailSchema(row.detail_schema || { fields: [] });
+    if (configurationError) { setMessage(configurationError); return; }
     setSavingId(row.id);
     setMessage(null);
     const { error } = await supabase
       .from("project_field_issue_types")
       .update({
+        detail_schema: row.detail_schema || { fields: [] },
         name: row.name.trim(),
         description: row.description?.trim() || null,
         applies_to: row.applies_to,
@@ -141,7 +148,7 @@ export default function IssueTypeManager({
           <div>
             <h2 className="text-lg font-black text-slate-950">Project Issue Types</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Add or change the common field issues available to this project. Changes are available to the website now and the mobile workflow later.
+              Add or change the common field issues available to this project. Refresh mobile Quality to load configuration changes.
             </p>
           </div>
           <button
@@ -282,6 +289,7 @@ export default function IssueTypeManager({
                   <Save size={15} />
                   Save
                 </button>
+                <DetailSchemaEditor value={row.detail_schema} onChange={detail_schema=>patchRow(row.id,{detail_schema})}/>
               </div>
             ))}
           </div>

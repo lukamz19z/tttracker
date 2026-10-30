@@ -3,6 +3,7 @@ import { fetch as binaryFetch } from "expo/fetch";
 import { Image as NativeImage } from "react-native";
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import { offlineFileExists } from "@/lib/offline/files";
+import { getOfflineDirectoryUri, persistOfflineFile, removeOfflineFile } from "@/lib/offline/files";
 import { reconcileRevisionDetail } from "@/lib/offline/revision-workspaces";
 import { filterDeletedRevisions, revisionDeletion } from "@/lib/offline/revision-deletions";
 import { canonicalCaptureTime } from "../../../lib/quality/date-time";
@@ -577,12 +578,17 @@ export async function downloadQualityFile(
   fileId: string,
   fileName: string,
   preview = false,
+  durable = false,
+  previewQuality = 78,
 ) {
   const cacheKey=`quality:${preview?"preview":"file"}:${fileId}`;
   const cached=(await getCache<string>(cacheKey))?.value;
-  if(cached && new File(cached).exists)return cached;
+  if(cached && new File(cached).exists){
+    if(!durable || cached.startsWith(getOfflineDirectoryUri()))return cached;
+    const persistent=await persistOfflineFile(cached,`quality-preview-${fileId}`);await setCache(cacheKey,persistent);await removeOfflineFile(cached);return persistent;
+  }
   const response = await apiFetch(
-    `/api/quality/files/${encodeURIComponent(fileId)}/content${preview?"?preview=1":""}`,
+    `/api/quality/files/${encodeURIComponent(fileId)}/content${preview?`?preview=1&quality=${Math.max(45,Math.min(88,Math.round(previewQuality)))}`:""}`,
     { timeoutMs: 120_000 },
   );
 
@@ -608,8 +614,10 @@ export async function downloadQualityFile(
     intermediates: true,
   });
   file.write(bytes);
-  await setCache(cacheKey,file.uri);
-  return file.uri;
+  const localUri=durable?await persistOfflineFile(file.uri,`quality-preview-${fileId}`):file.uri;
+  if(durable)await removeOfflineFile(file.uri);
+  await setCache(cacheKey,localUri);
+  return localUri;
 }
 
 export type QualityMemberCatalogRow = {

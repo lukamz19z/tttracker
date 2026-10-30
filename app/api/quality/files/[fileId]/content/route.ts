@@ -79,7 +79,11 @@ export async function GET(request: Request, context: RouteContext) {
       (annotated && file.annotated_sharepoint_item_id) || legacyAnnotation ? "image/jpeg" : response.headers.get("content-type") || file.mime_type || "application/octet-stream";
 
     const preview = new URL(request.url).searchParams.get("preview") === "1" && contentType.startsWith("image/");
-    if(preview) bytes=Uint8Array.from(await sharp(Buffer.from(bytes)).resize({width:960,height:960,fit:"inside",withoutEnlargement:true}).jpeg({quality:78}).toBuffer()).buffer;
+    if(preview) {
+      const requestedQuality=Number(new URL(request.url).searchParams.get("quality") || 78);
+      const quality=Math.max(45,Math.min(88,Number.isFinite(requestedQuality)?Math.round(requestedQuality):78));
+      bytes=Uint8Array.from(await sharp(Buffer.from(bytes)).resize({width:960,height:960,fit:"inside",withoutEnlargement:true}).jpeg({quality}).toBuffer()).buffer;
+    }
     return new Response(bytes, {
       status: 200,
       headers: {

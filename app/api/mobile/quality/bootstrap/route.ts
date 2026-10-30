@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
         service
           .from("project_field_issue_types")
           .select(
-            "id,project_id,applies_to,name,active,sort_order",
+            "id,project_id,applies_to,name,active,sort_order,detail_schema",
           )
           .eq("project_id", projectId)
           .eq("active", true)

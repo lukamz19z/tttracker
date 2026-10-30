@@ -1,3 +1,4 @@
+import type { DetailValues } from "../../../lib/quality/operational-details";
 import { syncQualityPhotoDelete } from "./quality-photo-deletion";
 import { photoDeleted, withoutDeletedPhotos } from "./quality-photo-tombstones";
 import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
@@ -88,6 +89,7 @@ export type OfflineRevisionCreate = {
 };
 
 export type OfflineRevisionItemCreate = {
+  operationalDetails?: DetailValues;
   clientMutationId: string;
   revisionId: string;
   projectId: string;
@@ -107,6 +109,9 @@ export type OfflineRevisionItemCreate = {
 };
 
 export type OfflineRevisionItemUpdate = {
+  operationalDetails?: DetailValues;
+  issueTypeId?: string | null;
+  beforePhotos?: LocalQualityPhoto[];
   expectedVersion?: number;
   workspaceCreatedAt?: string;
   clientMutationId: string;
@@ -211,6 +216,7 @@ export async function enqueueRevisionItemUpdate(
   await enqueueRectOperation("quality_revision_item_update",
     {
       ...input,
+      beforePhotos: await prepareEvidence(input.beforePhotos || [],"BEFORE"),
       afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
       clientMutationId,
     },
@@ -423,7 +429,9 @@ async function syncRevisionItemUpdate(
   const details=await apiJson<{item:{record_version:number}}>(endpoint,{method:"PATCH",body:JSON.stringify({
     expectedVersion:payload.expectedVersion,clientMutationId:`${payload.clientMutationId}:details`,
     leg:payload.leg,assignedFlag:payload.assignedFlag,rectificationComment:payload.rectificationComment,
+    operationalDetails:payload.operationalDetails,issueTypeId:payload.issueTypeId,
   })});
+  await uploadPhotos({projectId:payload.projectId,towerId:payload.towerId,revisionId:payload.revisionId,revisionItemId:payload.itemId,role:"before_photo",photos:payload.beforePhotos || []});
   await uploadPhotos({projectId:payload.projectId,towerId:payload.towerId,revisionId:payload.revisionId,revisionItemId:payload.itemId,role:"after_photo",photos:payload.afterPhotos});
   await apiJson(endpoint,{method:"PATCH",body:JSON.stringify({expectedVersion:details.item.record_version,clientMutationId:`${payload.clientMutationId}:status`,status:payload.status})});
 

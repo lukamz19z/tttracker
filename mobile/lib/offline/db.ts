@@ -156,6 +156,15 @@ export async function cachedValuesWithPrefix<T>(prefix: string): Promise<T[]> {
   return rows.flatMap(row => JSON.parse(row.payload) as T[]);
 }
 
+export async function cacheEntriesWithPrefix<T>(prefix: string): Promise<Array<{ key:string; value:T; updatedAt:string }>> {
+  const db=await database();
+  const rows=await db.getAllAsync<{cache_key:string;payload:string;updated_at:string}>(
+    "SELECT cache_key,payload,updated_at FROM cache_entries WHERE substr(cache_key,1,?) = ? ORDER BY updated_at DESC",
+    prefix.length,prefix,
+  );
+  return rows.map(row=>({key:row.cache_key,value:JSON.parse(row.payload) as T,updatedAt:row.updated_at}));
+}
+
 /** Explicit Retry starts a bounded attempt cycle; successes are deleted normally. */
 export async function resetQueueFailures() {
   const db = await database();

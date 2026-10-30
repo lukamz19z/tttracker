@@ -40,20 +40,20 @@ function clean(value: unknown) {
 function isoToAustralianDate(value: string) {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return value;
-  return `${match[3]}-${match[2]}-${match[1]}`;
+  return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
 function formatAustralianDateInput(value: string) {
   const digits = value.replace(/\D/g, "").slice(0, 8);
   if (digits.length <= 2) return digits;
   if (digits.length <= 4) {
-    return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2)}`;
   }
-  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 }
 
 function australianDateToIso(value: string) {
-  const match = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  const match = value.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!match) return "";
 
   const day = Number(match[1]);
@@ -181,7 +181,7 @@ export default function NewRevisionScreen() {
     if (!current.inspectionDate) {
       Alert.alert(
         "Inspection date required",
-        "Enter the date as DD-MM-YYYY.",
+        "Enter the date as DD/MM/YYYY.",
       );
       return;
     }
@@ -313,7 +313,7 @@ export default function NewRevisionScreen() {
                 : current,
             );
           }}
-          placeholder="DD-MM-YYYY"
+          placeholder="DD/MM/YYYY"
           keyboardType="number-pad"
           maxLength={10}
           style={styles.input}

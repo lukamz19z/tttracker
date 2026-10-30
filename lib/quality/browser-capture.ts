@@ -6,7 +6,7 @@ export async function browserPhotoCaptureTime(file:File,timeZone?:unknown) {
   const zone=qualityTimeZone(timeZone);
   let captured=imageCaptureTime(new Uint8Array(await file.arrayBuffer()),zone);
   if(!captured) {
-    const answer=window.prompt(`Capture date/time for ${file.name} (${zone}). The photo has no readable capture metadata. Enter YYYY-MM-DD HH:mm; upload time will not be used.`);
+    const answer=window.prompt(`Capture date/time for ${file.name} (${zone}). The photo has no readable capture metadata. Enter DD/MM/YYYY HH:mm; upload time will not be used.`);
     captured=answer?projectLocalCaptureTime(answer,zone):null;
   }
   if(!captured)throw new Error("Enter the photo's actual capture date/time before uploading evidence.");

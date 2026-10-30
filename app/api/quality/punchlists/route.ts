@@ -4,6 +4,7 @@ import { qualityApiError } from "@/lib/quality/server";
 import { atomicQualityError } from "@/lib/quality/atomic-error";
 import { qualityTowerDisplay } from "@/lib/quality/tower-label";
 import { punchlistFields, type PunchlistRow } from "@/lib/quality/punchlist";
+import { resolveProjectTower, sourceDateToDb } from "@/lib/quality/punchlist-import-values";
 
 export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
@@ -21,16 +22,19 @@ export async function POST(request: Request) {
     for (const result of [towers, revisions, existing]) if (result.error) throw new Error(result.error.message);
     if ([towers.data?.length, revisions.data?.length, existing.data?.length].some(count => count === 1000)) throw new Error("Punchlist preview exceeds the query page size. Narrow this import before continuing.");
     const errors: string[] = [], seen = new Set<string>();
+    const resolutions:Record<string,string> = body.towerResolutions && typeof body.towerResolutions==="object" && !Array.isArray(body.towerResolutions) ? body.towerResolutions : {};
     const rows = (body.rows as PunchlistRow[]).map((raw, index) => {
       const row = { ...raw, rowKey:String(index+2) };
-      const matches = towers.data?.filter(tower => tower.id === row.tower || tower.name?.trim().toLowerCase() === row.tower?.trim().toLowerCase());
-      if (matches?.length !== 1) errors.push(`Row ${index + 2}: tower not found or ambiguous (${row.tower}).`);
-      row.towerId = matches?.length === 1 ? matches[0].id : "";
+      const match=resolveProjectTower(row.tower,towers.data || [],resolutions[row.tower]);
+      if(match.state!=="matched")errors.push(`Row ${index+2}: tower ${match.state} (${row.tower}). Select a TTTracker tower in the preview.`);
+      row.towerId=match.tower?.id || "";
       if (!row.externalReference || !row.description || !row.defectType) errors.push(`Row ${index + 2}: external reference, defect type and description are required.`);
       if (Object.values(row).some(value => typeof value !== "string" || value.length > 10000)) errors.push(`Row ${index + 2}: invalid cell data.`);
       if (row.inspector.includes("@")) errors.push(`Row ${index + 2}: Inspector must be a person name, not an email address.`);
       if (row.leg && !["A", "B", "C", "D"].includes(row.leg)) errors.push(`Row ${index + 2}: choose Leg A, B, C or D.`);
-      if (row.sourceDate && (!/^\d{4}-\d{2}-\d{2}$/.test(row.sourceDate) || !Number.isFinite(Date.parse(row.sourceDate)) || new Date(row.sourceDate).toISOString().slice(0,10)!==row.sourceDate)) errors.push(`Row ${index + 2}: source date must be YYYY-MM-DD.`);
+      const date=sourceDateToDb(row.sourceDate,Boolean(body.confirm));
+      if(date===null) errors.push(`Row ${index+2}: Source date must be DD/MM/YYYY.`);
+      else row.sourceDate=date;
       const key = `${row.towerId}:${row.externalReference?.toUpperCase()}`;
       if (seen.has(key)) errors.push(`Row ${index + 2}: duplicate external reference ${row.externalReference}.`);
       seen.add(key);

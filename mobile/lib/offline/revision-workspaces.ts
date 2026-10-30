@@ -1,3 +1,4 @@
+import type { DetailValues } from "../../../lib/quality/operational-details";
 import { withoutDeletedPhotos } from "./quality-photo-tombstones";
 
 import { getCache, setCache } from "@/lib/offline/db";
@@ -11,6 +12,7 @@ import type {
 } from "@/types/quality";
 
 export type PendingRevisionFinding = {
+  operationalDetails?: DetailValues;
   clientMutationId: string;
   queuedAt: string | null;
   leg?: string | null;
@@ -214,6 +216,7 @@ export function createLocalRevisionWorkspace(input: {
 }
 
 export function createPendingFinding(input: {
+  operationalDetails?: DetailValues;
   leg?: string | null;
   assignedFlag?: string | null;
   issueTypeId: string | null;

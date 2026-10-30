@@ -59,7 +59,7 @@ export function QualityPhotoPicker({
   const zone=qualityTimeZone(context?.timeZone);
   function confirmCaptureTime() {
     const iso=projectLocalCaptureTime(captureInput,zone);
-    if(!iso){setError("Enter a valid capture date/time: YYYY-MM-DD HH:mm.");return;}
+    if(!iso){setError("Enter a valid capture date/time: DD/MM/YYYY HH:mm.");return;}
     captureReply.current?.resolve(iso);captureReply.current=null;setCapturePrompt(null);
   }
   function cancelCaptureTime() {captureReply.current?.reject(new Error("Photo capture date/time was not supplied."));captureReply.current=null;setCapturePrompt(null);}
@@ -137,7 +137,7 @@ export function QualityPhotoPicker({
         const position = photo.watermarkPosition || "bottom-left";
         return <View key={photo.id} style={{ gap: 8 }}>
           <Pressable accessibilityLabel="Preview annotated evidence" onPress={() => void previewPhoto(photo)} style={{ width: "100%", maxWidth: 180, height: 135, alignSelf: "center" }}>
-            <Image source={{ uri: photo.annotatedUri || photo.originalUri || photo.uri }} style={StyleSheet.absoluteFillObject} contentFit="contain" allowDownscaling />
+            <Image alt={photo.name} source={{ uri: photo.annotatedUri || photo.originalUri || photo.uri }} style={StyleSheet.absoluteFillObject} contentFit="contain" allowDownscaling />
           </Pressable>
           {context ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>{(["top-left","top-right","bottom-left","bottom-right"] as const).map(corner => <Pressable key={corner} onPress={() => onChange(photos.map(row => row.id === photo.id ? { ...row, watermarkPosition: corner } : row))} style={{ minHeight: 44, padding: 8, justifyContent: "center", borderRadius: 8, backgroundColor: corner === position ? "#dbeafe" : "#f1f5f9" }}><Text>{corner.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join(" ")}</Text></Pressable>)}</View> : null}
           <View style={styles.photoRow}><View style={{flex:1,gap:4}}><View style={{flexDirection:"row",gap:8}}><Text>{phase}</Text><Text>{index + 1} of {photos.length}</Text></View><Text style={styles.photoName}>{photo.name}</Text></View><Pressable hitSlop={12} disabled={busy} accessibilityLabel="Delete Photo" onPress={() => remove(photo)}><Trash2 size={17} color="#be123c" /></Pressable></View>
@@ -151,7 +151,7 @@ export function QualityPhotoPicker({
           <View style={{backgroundColor:"white",padding:16,borderRadius:12,gap:10}}>
             <Text style={styles.label}>Photo capture date/time</Text>
             <Text>{capturePrompt} has no capture metadata. Enter when it was taken in {zone}.</Text>
-            <TextInput accessibilityLabel="Photo capture date/time" placeholder="YYYY-MM-DD HH:mm" value={captureInput} onChangeText={setCaptureInput} style={{minHeight:44,borderWidth:1,padding:10,borderColor:"#cbd5e1"}} />
+            <TextInput accessibilityLabel="Photo capture date/time" placeholder="DD/MM/YYYY HH:mm" value={captureInput} onChangeText={setCaptureInput} style={{minHeight:44,borderWidth:1,padding:10,borderColor:"#cbd5e1"}} />
             {error ? <Text style={styles.required}>{error}</Text> : null}
             <View style={styles.actions}><Pressable style={styles.button} onPress={cancelCaptureTime}><Text>Cancel</Text></Pressable><Pressable style={styles.button} onPress={confirmCaptureTime}><Text>Use capture time</Text></Pressable></View>
           </View>
