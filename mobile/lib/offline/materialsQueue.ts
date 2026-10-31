@@ -5,8 +5,10 @@ import type {
   CreateMissingMaterialInput,
   RecordMissingReceiptInput,
 } from "@/types/materials";
+import type { MaterialReceiptEvidenceInput } from "@/types/materials";
 
 export type PendingMaterialMutation =
+  | { clientMutationId?: string; projectId?: string; targetLocalId?: string; attempts?: number; lastError?: string | null; status?: "pending" | "failed"; } & (
   | {
       id: string;
       kind: "save_bundle";
@@ -37,7 +39,9 @@ export type PendingMaterialMutation =
     }
   | { id: string; kind: "report_missing"; input: CreateMissingMaterialInput; createdAt: string }
   | { id: string; kind: "receive_missing"; input: RecordMissingReceiptInput; createdAt: string }
-  | { id: string; kind: "resolve_missing"; input: { projectId: string; towerId: string; issueKey: string }; createdAt: string };
+  | { id: string; clientMutationId: string; projectId: string; targetLocalId: string; attempts: number; lastError: string | null; status: "pending" | "failed"; kind: "receipt_evidence"; input: MaterialReceiptEvidenceInput; createdAt: string }
+  | { id: string; kind: "resolve_missing"; input: { projectId: string; towerId: string; issueKey: string }; createdAt: string }
+  );
 
 export const materialQueueKey = (projectId: string) =>
   `materials:pending:${projectId}`;
@@ -114,23 +118,37 @@ export function makeClearMemberMutation(
 
 export function makeReportMissingMutation(input: Omit<CreateMissingMaterialInput,"clientMutationId">): PendingMaterialMutation {
   const id=mutationId();
-  return {id,kind:"report_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
+  return {id,clientMutationId:id,projectId:input.projectId,targetLocalId:`pending:${id}`,attempts:0,lastError:null,status:"pending",kind:"report_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
 }
 
-export function makeReceiveMissingMutation(input: Omit<RecordMissingReceiptInput,"clientMutationId">): PendingMaterialMutation {
-  const id=mutationId();
-  return {id,kind:"receive_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
+export function makeReceiveMissingMutation(input: RecordMissingReceiptInput, projectId?: string): PendingMaterialMutation {
+  const id=input.clientMutationId||mutationId();
+  return {id,clientMutationId:id,projectId,targetLocalId:input.issueKey,attempts:0,lastError:null,status:"pending",kind:"receive_missing",input:{...input,projectId,clientMutationId:id},createdAt:new Date().toISOString()};
+}
+
+export function makeReceiptEvidenceMutation(input: MaterialReceiptEvidenceInput): PendingMaterialMutation {
+  return {id:input.clientEvidenceId,clientMutationId:input.clientEvidenceId,projectId:input.projectId,targetLocalId:input.issueKey,attempts:0,lastError:null,status:"pending",kind:"receipt_evidence",input,createdAt:new Date().toISOString()};
 }
 
 export function makeResolveMissingMutation(input: { projectId: string; towerId: string; issueKey: string }): PendingMaterialMutation {
-  return { id: mutationId(), kind: "resolve_missing", input, createdAt: new Date().toISOString() };
+  const id=mutationId();
+  return { id,clientMutationId:id,projectId:input.projectId,targetLocalId:input.issueKey,attempts:0,lastError:null,status:"pending",kind:"resolve_missing", input, createdAt: new Date().toISOString() };
 }
 
 export function mergeMaterialMutation(
   current: PendingMaterialMutation[],
   next: PendingMaterialMutation,
 ) {
-  if(next.kind==="report_missing"||next.kind==="receive_missing"||next.kind==="resolve_missing") return [...current,next];
+  if(next.kind==="receive_missing"){
+    const existing=current.findIndex(item=>item.kind==="receive_missing"&&item.id===next.id);
+    if(existing>=0){const copy=[...current];copy[existing]={...next,createdAt:current[existing].createdAt,attempts:current[existing].attempts||0,lastError:null,status:"pending"};return copy;}
+    return [...current,next];
+  }
+  if(next.kind==="receipt_evidence"){
+    if(current.some(item=>item.kind==="receipt_evidence"&&item.id===next.id))return current;
+    return [...current,next];
+  }
+  if(next.kind==="report_missing"||next.kind==="resolve_missing") return [...current,next];
   if (next.kind === "save_bundle" || next.kind === "clear_bundle") {
     const filtered = current.filter((item) => {
       if (

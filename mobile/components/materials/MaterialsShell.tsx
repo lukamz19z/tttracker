@@ -151,13 +151,7 @@ export function MaterialsShell({
           </Text>
         ) : null}
 
-        {pendingSyncCount > 0 ? (
-          <Text style={styles.pending}>
-            {pendingSyncCount} material update{pendingSyncCount === 1 ? "" : "s"} pending sync
-          </Text>
-        ) : null}
-
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error && pendingSyncCount === 0 ? <Text style={styles.error}>{error}</Text> : null}
 
         {children}
   </>;

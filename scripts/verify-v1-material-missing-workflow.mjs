@@ -12,6 +12,9 @@ const docket = fs.readFileSync("lib/dockets/mobile-docket-materials.ts", "utf8")
 const catalogue = fs.readFileSync("app/api/mobile/materials/catalogue/route.ts", "utf8");
 const search = fs.readFileSync("app/api/mobile/materials/search/route.ts", "utf8");
 const report = fs.readFileSync("mobile/app/materials/report-missing.tsx", "utf8");
+const missingScreen = fs.readFileSync("mobile/app/materials/missing.tsx", "utf8");
+const notifications = fs.readFileSync("lib/materials/missing-notifications.ts", "utf8");
+const notificationMigration = fs.readFileSync("supabase/migrations/20261031230000_v1_material_notifications.sql", "utf8");
 
 assert.match(migration, /unique index if not exists tower_material_events_project_mutation_idx/);
 assert.match(migration, /for update of e/i);
@@ -20,15 +23,31 @@ assert.match(migration, /insert into public\.tower_material_events\([\s\S]*?even
 assert.match(migration, /receipt_auto_resolve/);
 assert.match(migration, /tttracker_v1_resolve_missing_material/);
 assert.match(context, /mutation\.kind === "report_missing"/);
-assert.match(context, /await recordMissingReceiptApi\(mutation\.input\)/);
+assert.match(context, /await recordMissingReceiptApi\(\{ \.\.\.mutation\.input, projectId: mutation\.projectId, issueKey \}\)/);
 assert.match(context, /mutation\.kind === "resolve_missing"/);
-assert.match(context, /if \(online\) \{await flushQueue\(queued\)/);
+assert.match(context, /const remaining = await flushQueue\(queued\)/);
 assert.match(docket, /asOfDate[\s\S]*occurred_at/);
 assert.match(catalogue, /item_type,tower_segment,drawing_number,bolt_diameter,dn_sn,length,packer_no,packer_mark,qty/);
 assert.match(search, /packer_no\.ilike/);
 assert.match(search, /packer_mark\.ilike/);
 assert.match(report, /clean\(row\.item_type\)==="packer"/);
 assert.match(report, /sourceTable==="packer"\?"packer"/);
+assert.match(missingScreen, /Quantity Received/);
+assert.match(missingScreen, /Delivery \/ Docket Reference/);
+assert.match(missingScreen, /Add delivery or condition notes/);
+assert.match(missingScreen, /finally\{setReceiptSaving\(false\);\}/);
+assert.doesNotMatch(missingScreen, /receiveModal:\{[^}]*justifyContent:"center"/);
+assert.match(context, /canonicalIssueKeys\.set\(temporaryKey, result\.issue\.issue_key\)/);
+assert.match(context, /attempts: \(mutation\.attempts \|\| 0\) \+ 1, lastError: message/);
+assert.match(context, /await createMissingMaterialApi\(mutation\.input\)/);
+assert.match(context, /await recordMissingReceiptApi\(\{ \.\.\.mutation\.input, projectId: mutation\.projectId, issueKey \}\)/);
+assert.match(notificationMigration, /user_notifications_material_event_unique_idx/);
+assert.match(notificationMigration, /unique\(source_event_id,event_type,user_id,channel\)/);
+assert.match(notifications, /filterAppNotificationUserIds/);
+assert.match(notifications, /user_push_tokens/);
+assert.match(notifications, /sendDailyDocketEmail/);
+assert.match(notifications, /partial_receipt/);
+assert.match(notifications, /Assigned to you/);
 
 const exports = {};
 const cache = new Map();
@@ -46,7 +65,11 @@ const receipt = exports.makeReceiveMissingMutation({ issueKey: "I", quantity: 1 
 assert.equal(receipt.id, receipt.input.clientMutationId);
 const queued = exports.mergeMaterialMutation([], receipt);
 assert.equal(queued.length, 1);
-assert.equal(exports.mergeMaterialMutation(queued, receipt).length, 2);
+assert.equal(exports.mergeMaterialMutation(queued, receipt).length, 1);
+const sameReceiptRetry=exports.makeReceiveMissingMutation({issueKey:"I",quantity:2,clientMutationId:receipt.id});
+const refreshedReceipt=exports.mergeMaterialMutation(queued,sameReceiptRetry);
+assert.equal(refreshedReceipt.length,1);
+assert.equal(refreshedReceipt[0].input.quantity,2);
 const resolve = exports.makeResolveMissingMutation({ projectId: "P", towerId: "T", issueKey: "I" });
 assert.equal(exports.mergeMaterialMutation(queued, resolve).length, 2);
 console.log("PASS: canonical missing workflow has mutation idempotency, serialized quantity protection, immutable receipt ledger, configured resolution, offline queue coverage and docket date cut-off.");

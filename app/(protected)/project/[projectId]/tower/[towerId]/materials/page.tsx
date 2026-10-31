@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import {
   AlertCircle,
   ArrowRightLeft,
+  Bell,
   Boxes,
   CheckCircle2,
   ChevronDown,
@@ -34,6 +35,7 @@ import {
 } from "lucide-react";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
+import { MissingMaterialCanonicalPanel } from "@/components/materials/MissingMaterialCanonicalPanel";
 
 
 type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue" | "transferred";
@@ -289,6 +291,12 @@ type MaterialEvent = {
   mitigation_actions?: string[] | null;
   commercial_impact_type?: string | null;
   notes?: string | null;
+  issue_status?: string | null;
+  assigned_to_user_id?: string | null;
+  notify_user_ids?: string[] | null;
+  cancelled_at?: string | null;
+  cancelled_by_user_id?: string | null;
+  cancellation_reason?: string | null;
   items: MaterialEventItem[];
 };
 
@@ -300,7 +308,7 @@ type DocketSummary = {
 };
 
 
-type MissingIssueStatus = "open" | "partial" | "resolved";
+type MissingIssueStatus = "open" | "partial" | "resolved" | "cancelled";
 
 type MissingIssueReceipt = {
   event: MaterialEvent;
@@ -322,7 +330,7 @@ type MissingIssueRow = {
 
 type ImportMode = "replace" | "merge";
 type DataManagerTab = "bundles" | "members" | "bolts";
-type IssueFilter = "all" | "open" | "partial" | "resolved" | "excess" | "damaged" | "movements";
+type IssueFilter = "all" | "open" | "partial" | "resolved" | "cancelled" | "excess" | "damaged" | "movements";
 
 type ImportSourceRow = Record<string, unknown>;
 
@@ -819,12 +827,14 @@ function itemDisplayReference(item: MaterialEventItem): string {
 }
 
 function missingIssueStatusLabel(status: MissingIssueStatus): string {
+  if (status === "cancelled") return "Cancelled";
   if (status === "resolved") return "Resolved";
   if (status === "partial") return "Partially Delivered";
   return "Open";
 }
 
 function missingIssueStatusClasses(status: MissingIssueStatus): string {
+  if (status === "cancelled") return "border-slate-200 bg-slate-100 text-slate-600";
   if (status === "resolved") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "partial") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-rose-200 bg-rose-50 text-rose-700";
@@ -859,7 +869,7 @@ function buildMissingIssues(data: MaterialsData): MissingIssueRow[] {
           0,
         );
         const remainingQty = Math.max(originalQty - deliveredQty, 0);
-        const status: MissingIssueStatus =
+        const status: MissingIssueStatus = event.issue_status === "cancelled" ? "cancelled" : event.issue_status === "resolved" ? "resolved" :
           remainingQty <= 0 ? "resolved" : deliveredQty > 0 ? "partial" : "open";
         const sortedReceipts = [...receipts].sort((a, b) =>
           safeString(a.event.occurred_at).localeCompare(safeString(b.event.occurred_at)),
@@ -881,7 +891,7 @@ function buildMissingIssues(data: MaterialsData): MissingIssueRow[] {
     });
 
   return rows.sort((a, b) => {
-    const order: Record<MissingIssueStatus, number> = { open: 0, partial: 1, resolved: 2 };
+    const order: Record<MissingIssueStatus, number> = { open: 0, partial: 1, resolved: 2, cancelled: 3 };
     if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
     return safeString(b.reportedAt).localeCompare(safeString(a.reportedAt));
   });
@@ -3940,6 +3950,7 @@ function IssuesWorkspace({
   const open = missingIssues.filter((row) => row.status === "open");
   const partial = missingIssues.filter((row) => row.status === "partial");
   const resolved = missingIssues.filter((row) => row.status === "resolved");
+  const cancelled = missingIssues.filter((row) => row.status === "cancelled");
 
   const excessEvents = data.materialEvents.filter((event) => event.event_type === "excess");
   const damagedEvents = data.materialEvents.filter((event) => event.event_type === "damaged_incorrect");
@@ -3964,7 +3975,7 @@ function IssuesWorkspace({
   const missingByFilter =
     filter === "open" ? open :
     filter === "partial" ? partial :
-    filter === "resolved" ? resolved :
+    filter === "resolved" ? resolved : filter === "cancelled" ? cancelled :
     missingIssues;
 
   const filteredMissing = missingByFilter.filter((row) => {
@@ -3981,7 +3992,7 @@ function IssuesWorkspace({
     ].join(" ").toLowerCase().includes(q);
   });
 
-  const showMissing = ["all", "open", "partial", "resolved"].includes(filter);
+  const showMissing = ["all", "open", "partial", "resolved", "cancelled"].includes(filter);
   const outstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
 
   return (
@@ -4003,6 +4014,7 @@ function IssuesWorkspace({
             ["open", "Open"],
             ["partial", "Part Delivered"],
             ["resolved", "Resolved"],
+            ["cancelled", "Cancelled"],
             ["excess", "Excess"],
             ["damaged", "Damaged / Incorrect"],
             ["movements", "Movements"],
@@ -4033,6 +4045,9 @@ function IssuesWorkspace({
         </div>
         <Link href={`/project/${projectId}/tower/${towerId}/dockets`} className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white">
           <ClipboardList size={14} /> Daily Dockets
+        </Link>
+        <Link href={`/project/${projectId}/materials/notifications`} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-xs font-black text-slate-700">
+          <Bell size={14} /> Missing Material Notifications
         </Link>
       </div>
 
@@ -4131,6 +4146,7 @@ function IssuesWorkspace({
                             </div>
                           )}
                         </div>
+                        {row.item.issue_key ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={row.issueKey} status={row.status} receipts={row.receipts.map(({event})=>({id:event.id,occurred_at:event.occurred_at,notes:event.notes}))}/> : null}
                       </div>
                     )}
                   </div>

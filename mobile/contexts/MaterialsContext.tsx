@@ -24,11 +24,13 @@ import {
   materialCacheKey,
   receiveMaterialTransfer,
   recordMissingReceipt as recordMissingReceiptApi,
+  uploadMaterialReceiptEvidence,
   refreshMaterials,
   saveBundleCheck as saveBundleCheckApi,
   saveMemberCheck as saveMemberCheckApi,
 } from "@/lib/api/materials";
 import { setCache } from "@/lib/offline/db";
+import { removeOfflineFile } from "@/lib/offline/files";
 import {
   loadMaterialQueue,
   makeClearBundleMutation,
@@ -38,6 +40,7 @@ import {
   makeReportMissingMutation,
   makeReceiveMissingMutation,
   makeResolveMissingMutation,
+  makeReceiptEvidenceMutation,
   mergeMaterialMutation,
   saveMaterialQueue,
   type PendingMaterialMutation,
@@ -97,7 +100,7 @@ type Value = {
   createTransfer: (input: CreateTransferInput) => Promise<void>;
   receiveTransfer: (transfer: TransferRecord) => Promise<void>;
   cancelTransfer: (transfer: TransferRecord) => Promise<void>;
-  recordMissingReceipt: (input: RecordMissingReceiptInput) => Promise<void>;
+  recordMissingReceipt: (input: RecordMissingReceiptInput, photos?: Array<{id:string;uri:string;name:string;mimeType:string}>) => Promise<void>;
   reportMissingMaterial: (input: Omit<CreateMissingMaterialInput,"projectId">) => Promise<void>;
   resolveMissingMaterial: (input: { towerId: string; issueKey: string }) => Promise<void>;
 };
@@ -204,10 +207,11 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       }
 
       const remaining: PendingMaterialMutation[] = [];
-      let failed = false;
+      const canonicalIssueKeys = new Map<string, string>();
+      let blocked = false;
 
       for (const mutation of queue) {
-        if (failed) {
+        if (blocked) {
           remaining.push(mutation);
           continue;
         }
@@ -222,27 +226,77 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           } else if (mutation.kind === "clear_member") {
             await clearMemberCheckApi(mutation.memberId);
           } else if (mutation.kind === "report_missing") {
-            await createMissingMaterialApi(mutation.input);
+            const result = await createMissingMaterialApi(mutation.input);
+            const temporaryKey = `pending:${mutation.input.clientMutationId}`;
+            canonicalIssueKeys.set(temporaryKey, result.issue.issue_key);
+            const current = dataRef.current;
+            if (current) {
+              const next = {
+                ...current,
+                materialEvents: current.materialEvents.map((event) => event.client_mutation_id === mutation.input.clientMutationId
+                  ? {
+                      ...event,
+                      id: result.issue.event_id,
+                      tower_material_event_items: event.tower_material_event_items?.map((item) => ({ ...item, issue_key: result.issue.issue_key })),
+                    }
+                  : event),
+              };
+              dataRef.current = next;
+              setData(next);
+              persist(next);
+            }
           } else if (mutation.kind === "resolve_missing") {
-            await resolveMissingMaterialApi(mutation.input);
-          } else {
-            await recordMissingReceiptApi(mutation.input);
+            const issueKey = canonicalIssueKeys.get(mutation.input.issueKey) || mutation.input.issueKey;
+            await resolveMissingMaterialApi({ ...mutation.input, issueKey });
+          } else if (mutation.kind === "receive_missing") {
+            const issueKey = canonicalIssueKeys.get(mutation.input.issueKey) || mutation.input.issueKey;
+            await recordMissingReceiptApi({ ...mutation.input, projectId: mutation.projectId, issueKey });
+          } else if (mutation.kind === "receipt_evidence") {
+            const issueKey=canonicalIssueKeys.get(mutation.input.issueKey)||mutation.input.issueKey;
+            await uploadMaterialReceiptEvidence({...mutation.input,issueKey});
+            await removeOfflineFile(mutation.input.uri);
           }
-        } catch {
-          failed = true;
-          remaining.push(mutation);
+        } catch (syncError) {
+          blocked = true;
+          const message = syncError instanceof Error ? syncError.message : "Material change could not be synced.";
+          remaining.push({ ...mutation, attempts: (mutation.attempts || 0) + 1, lastError: message, status: "failed" });
+          setError(message);
         }
       }
 
-      await replaceQueue(remaining);
+      const remapped = remaining.map((mutation) => {
+        if (mutation.kind === "receive_missing") {
+          const issueKey = canonicalIssueKeys.get(mutation.input.issueKey);
+          if (issueKey) return { ...mutation, targetLocalId: issueKey, input: { ...mutation.input, issueKey } };
+        }
+        if (mutation.kind === "resolve_missing") {
+          const issueKey = canonicalIssueKeys.get(mutation.input.issueKey);
+          if (issueKey) return { ...mutation, targetLocalId: issueKey, input: { ...mutation.input, issueKey } };
+        }
+        if(mutation.kind==="receipt_evidence"){
+          const issueKey=canonicalIssueKeys.get(mutation.input.issueKey);
+          if(issueKey)return {...mutation,targetLocalId:issueKey,input:{...mutation.input,issueKey}};
+        }
+        return mutation;
+      });
+      await replaceQueue(remapped);
 
-      if (!remaining.length) {
+      if (!remapped.length) {
         setError(null);
+        try {
+          const latest = await refreshMaterials(projectId, undefined, true);
+          dataRef.current = latest;
+          setData(latest);
+          setCachedAt(new Date().toISOString());
+          persist(latest);
+        } catch (refreshError) {
+          setError(refreshError instanceof Error ? `Synced, but Materials refresh failed: ${refreshError.message}` : "Synced, but Materials refresh failed.");
+        }
       }
 
-      return remaining;
+      return remapped;
     },
-    [online, projectId, replaceQueue],
+    [dataRef, online, persist, projectId, replaceQueue],
   );
 
   const flushPromise = useRef<Promise<PendingMaterialMutation[]> | null>(null);
@@ -1168,18 +1222,25 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   );
 
   const recordMissingReceipt = useCallback(
-    async (input: RecordMissingReceiptInput) => {
+    async (input: RecordMissingReceiptInput, photos:Array<{id:string;uri:string;name:string;mimeType:string}>=[]) => {
       setBusyIssueKey(input.issueKey);
       try {
-        const queued = await enqueue(makeReceiveMissingMutation(input));
-        const receiptMutation=queued[queued.length-1];
+        const receiptCandidate=makeReceiveMissingMutation(input, projectId || undefined);
+        let queued = await enqueue(receiptCandidate);
+        const receiptMutation=queued.find(row=>row.id===receiptCandidate.id);
         const receiptInput=receiptMutation?.kind==="receive_missing"?receiptMutation.input:input;
+        if(projectId&&receiptMutation?.kind==="receive_missing")for(const photo of photos){queued=await enqueue(makeReceiptEvidenceMutation({projectId,issueKey:input.issueKey,receiptMutationId:receiptInput.clientMutationId||receiptMutation.id,clientEvidenceId:`${receiptInput.clientMutationId||receiptMutation.id}:${photo.id}`,localPhotoId:photo.id,uri:photo.uri,name:photo.name,mimeType:photo.mimeType}));}
         if(dataRef.current&&projectId){
           const source=dataRef.current.materialEvents.flatMap(event=>event.tower_material_event_items||[]).find(item=>item.issue_key===input.issueKey);
           const towerId=dataRef.current.materialEvents.find(event=>event.tower_material_event_items?.some(item=>item.issue_key===input.issueKey))?.tower_id||"";
           if(source){const pending:MaterialEventRecord={id:`pending:${receiptInput.clientMutationId}`,project_id:projectId,tower_id:towerId,event_type:"found_received",occurred_at:receiptInput.occurredAt||new Date().toISOString(),notes:receiptInput.notes||null,client_mutation_id:receiptInput.clientMutationId,tower_material_event_items:[{...source,id:`pending:${receiptInput.clientMutationId}`,source_issue_key:receiptInput.issueKey,quantity:receiptInput.quantity,notes:receiptInput.notes||null}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
         }
-        if (online) {await flushQueue(queued);await load(true, true);}
+        if (online) {
+          const remaining = await flushQueue(queued);
+          const failed = remaining.find((mutation) => mutation.id === receiptMutation?.id);
+          if (failed) throw new Error(failed.lastError || "Receipt is queued and needs retry.");
+          await load(true, true);
+        }
       } finally {
         setBusyIssueKey(null);
       }
@@ -1193,7 +1254,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     const mutation=queued.find(row=>row.id===queued[queued.length-1]?.id);
     const local=mutation?.kind==="report_missing"?mutation.input:null;
     if(local&&dataRef.current){const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:"outstanding",client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||local.category,material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
-    if(online){await flushQueue(queued);await load(true,true);}
+    if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true,true);}
   },[dataRef,enqueue,flushQueue,load,online,persist,projectId]);
 
   const resolveMissingMaterial = useCallback(async (input: { towerId: string; issueKey: string }) => {
@@ -1201,7 +1262,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     const queued = await enqueue(makeResolveMissingMutation({ ...input, projectId }));
     const next = dataRef.current && { ...dataRef.current, materialEvents: dataRef.current.materialEvents.map((event) => event.tower_material_event_items?.some((item) => item.issue_key === input.issueKey) ? { ...event, issue_status: "resolved" } : event) };
     if (next) { dataRef.current = next; setData(next); persist(next); }
-    if (online) { await flushQueue(queued); await load(true, true); }
+    if (online) { const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Resolution is queued and needs retry.");await load(true, true); }
   }, [dataRef, enqueue, flushQueue, load, online, persist, projectId]);
 
   const isBundlePending = useCallback(
@@ -1228,7 +1289,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     [pendingMutations],
   );
 
-  useEffect(() => registerMaterialSync(async () => { const remaining = await flushQueue(); if (remaining.length) throw new Error("Material changes remain pending. Tap Sync now to retry."); }), [flushQueue, registerMaterialSync]);
+  useEffect(() => registerMaterialSync(async () => { const remaining = await flushQueue(); if (remaining.length) throw new Error(remaining.find(row=>row.lastError)?.lastError || `${remaining.length} material change(s) remain queued.`); }), [flushQueue, registerMaterialSync]);
   useEffect(() => { setMaterialPendingCount(pendingMutations.length); }, [pendingMutations.length, setMaterialPendingCount]);
 
   const sortedData = useMemo(() => data ? { ...data, bundles: [...data.bundles].sort(compareBundles), deliveries: data.deliveries.map((delivery) => ({ ...delivery, tower_bundle_delivery_items: [...(delivery.tower_bundle_delivery_items || [])].sort(compareBundles) })) } : data, [data]);

@@ -374,6 +374,8 @@ export async function loadOutstandingMobileMaterialIssues(
           id,
           docket_id,
           occurred_at,
+          issue_status,
+          cancelled_at,
           items:tower_material_event_items(
             issue_key,
             source_issue_key,
@@ -448,6 +450,7 @@ export async function loadOutstandingMobileMaterialIssues(
 
   for (const event of missingResult.data ?? []) {
     if(asOfDate && clean((event as any).occurred_at).slice(0,10)>asOfDate) continue;
+    if(clean((event as any).issue_status)==="cancelled"&&(!asOfDate||clean((event as any).cancelled_at).slice(0,10)<=asOfDate)) continue;
     for (const item of
       (event as any).items ?? []) {
       const issueKey = clean(

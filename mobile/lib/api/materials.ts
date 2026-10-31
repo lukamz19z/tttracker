@@ -1,9 +1,11 @@
 import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
+import { File as ExpoFile } from "expo-file-system";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
   BundleCheckRecord,
   CreateTransferInput,
   MaterialPayload,
+  MaterialReceiptEvidenceInput,
   MemberCheckRecord,
   RecordMissingReceiptInput,
   CreateMissingMaterialInput,
@@ -199,4 +201,26 @@ export async function resolveMissingMaterial(input: { projectId: string; towerId
     timeoutMs: 30_000,
   });
   await readJson<{ ok: boolean }>(response, "Missing material could not be resolved.");
+}
+
+export async function uploadMaterialReceiptEvidence(input:MaterialReceiptEvidenceInput){
+  const local=new ExpoFile(input.uri);if(!local.exists)throw new Error("Receipt evidence file is missing from this device.");
+  const form=new FormData();form.append("projectId",input.projectId);form.append("issueKey",input.issueKey);form.append("receiptMutationId",input.receiptMutationId);form.append("clientEvidenceId",input.clientEvidenceId);form.append("file",local as unknown as Blob,input.name);
+  const response=await apiFetch("/api/mobile/materials/missing/evidence",{method:"POST",body:form,timeoutMs:120_000});
+  return readJson<{file:{id:string}}>(response,"Receipt evidence could not be uploaded.");
+}
+
+export type MaterialProjectUser = { id: string; name: string; role: string };
+export async function loadMaterialProjectUsers(projectId: string) {
+  const result = await apiJson<{ users: MaterialProjectUser[] }>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
+  return result.users;
+}
+
+export async function loadMissingMaterialDetails(projectId:string,issueKey:string){
+  return apiJson<{event:Record<string,unknown>;actions:Array<Record<string,unknown>>;files:Array<Record<string,unknown>>;receipts:Array<Record<string,unknown>>}>(`/api/mobile/materials/missing/actions?projectId=${encodeURIComponent(projectId)}&issueKey=${encodeURIComponent(issueKey)}`,{timeoutMs:30_000});
+}
+
+export async function saveMissingMaterialAction(input:{projectId:string;towerId:string;issueKey:string;clientMutationId:string;actionType:"update"|"assignment"|"cancel";text?:string;assignedToUserId?:string|null;notifyUserIds?:string[]}){
+  const response=await apiFetch("/api/mobile/materials/missing/actions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),timeoutMs:30_000});
+  return readJson<{ok:boolean;action:Record<string,unknown>}>(response,"Missing-material update could not be saved.");
 }

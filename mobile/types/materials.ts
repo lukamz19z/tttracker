@@ -211,12 +211,24 @@ export type CreateTransferInput = {
 };
 
 export type RecordMissingReceiptInput = {
+  projectId?: string;
   issueKey: string;
   quantity: number;
   notes?: string;
   clientMutationId?: string;
   deliveryReference?: string;
   occurredAt?: string;
+};
+
+export type MaterialReceiptEvidenceInput = {
+  projectId: string;
+  issueKey: string;
+  receiptMutationId: string;
+  clientEvidenceId: string;
+  localPhotoId: string;
+  uri: string;
+  name: string;
+  mimeType: string;
 };
 
 export type CreateMissingMaterialInput = {
@@ -239,5 +251,7 @@ export type CreateMissingMaterialInput = {
   urgency?: string;
   requiredBy?: string | null;
   notes?: string;
+  assignedToUserId?: string | null;
+  notifyUserIds?: string[];
   occurredAt?: string;
 };

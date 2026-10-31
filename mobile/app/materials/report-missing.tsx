@@ -1,8 +1,9 @@
 import { QualitySelector, type QualitySelectorOption } from "@/components/quality/QualitySelector";
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import { loadMaterialProjectUsers, type MaterialProjectUser } from "@/lib/api/materials";
 import { useLocalSearchParams, router } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ChevronDown, Save } from "lucide-react-native";
 
@@ -31,7 +32,13 @@ export default function ReportMissingMaterialScreen(){
   const [itemOpen,setItemOpen]=useState(false);
   const [categoryOpen,setCategoryOpen]=useState(false);
   const [urgencyOpen,setUrgencyOpen]=useState(false);
+  const [assigneeOpen,setAssigneeOpen]=useState(false);
+  const [notifyOpen,setNotifyOpen]=useState(false);
+  const [projectUsers,setProjectUsers]=useState<MaterialProjectUser[]>([]);
+  const [assignedToUserId,setAssignedToUserId]=useState("");
+  const [notifyUserIds,setNotifyUserIds]=useState<string[]>([]);
   const [saving,setSaving]=useState(false);
+  useEffect(()=>{if(data?.projectId&&online)void loadMaterialProjectUsers(data.projectId).then(setProjectUsers).catch(()=>setProjectUsers([]));},[data?.projectId,online]);
   const towers=data?.towers||[];
   const towerOptions=towers.map(row=>({id:clean(row.id),label:clean(row.name)||clean(row.line)||"Tower"}));
   const itemOptions=useMemo<QualitySelectorOption[]>(()=>{
@@ -52,7 +59,7 @@ export default function ReportMissingMaterialScreen(){
     setSaving(true);
     try{
       const [sourceTable,sourceRecordId]=itemId?itemId.split(":",2):["",""];
-      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:itemLabel||description.trim(),description:description.trim(),quantity:Number(quantity),unit:unit.trim()||"ea",category,specification:specification.trim()||undefined,sourceTable:sourceTable?`tower_${sourceTable==='member'?'material_members':sourceTable==='bolt'||sourceTable==='packer'?'material_bolts':'required_bundles'}`:undefined,sourceRecordId:sourceRecordId||undefined,materialType:sourceTable==="packer"?"packer":category.toLowerCase(),boltSize:sourceTable==="bolt"?itemLabel:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:due,notes:notes.trim()||undefined});
+      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:itemLabel||description.trim(),description:description.trim(),quantity:Number(quantity),unit:unit.trim()||"ea",category,specification:specification.trim()||undefined,sourceTable:sourceTable?`tower_${sourceTable==='member'?'material_members':sourceTable==='bolt'||sourceTable==='packer'?'material_bolts':'required_bundles'}`:undefined,sourceRecordId:sourceRecordId||undefined,materialType:sourceTable==="packer"?"packer":category.toLowerCase(),boltSize:sourceTable==="bolt"?itemLabel:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:due,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds});
       Alert.alert(online?"Missing material reported":"Saved for sync",online?"It is now linked to the tower and will appear in Materials and the next Daily Docket.":"The report is safely queued and will sync when connected.");
       router.back();
     }catch(error){Alert.alert("Could not report material",error instanceof Error?error.message:"Please retry.");}
@@ -68,12 +75,15 @@ export default function ReportMissingMaterialScreen(){
     <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Member</Text><TextInput value={member} onChangeText={setMember} placeholder="Optional" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Drawing</Text><TextInput value={drawing} onChangeText={setDrawing} placeholder="Optional" style={styles.input}/></View></View>
     <Text style={styles.label}>Urgency</Text><Pressable style={styles.selector} onPress={()=>setUrgencyOpen(true)}><Text style={styles.value}>{urgency}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
     <Text style={styles.label}>Required By · DD/MM/YYYY</Text><TextInput value={requiredBy} onChangeText={setRequiredBy} placeholder="Optional" style={styles.input}/>
+    {projectUsers.length>0?<><Text style={styles.label}>Assigned To · Optional</Text><Pressable style={styles.selector} onPress={()=>setAssigneeOpen(true)}><Text style={styles.value}>{projectUsers.find(user=>user.id===assignedToUserId)?.name||"Not assigned"}</Text><ChevronDown size={18} color="#64748b"/></Pressable><Text style={styles.label}>Also Notify · Optional</Text><Pressable style={styles.selector} onPress={()=>setNotifyOpen(true)}><Text style={styles.value}>{notifyUserIds.map(id=>projectUsers.find(user=>user.id===id)?.name).filter(Boolean).join(", ")||"No additional recipients"}</Text><ChevronDown size={18} color="#64748b"/></Pressable></>:null}
     <Text style={styles.label}>Notes</Text><TextInput value={notes} onChangeText={setNotes} multiline style={[styles.input,styles.notes]}/>
     <Pressable disabled={saving} onPress={()=>void submit()} style={styles.save}><Save size={17} color="#fff"/><Text style={styles.saveText}>{saving?"Saving…":online?"Report Missing":"Save Pending Sync"}</Text></Pressable>
     <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);}}/>
     <QualitySelector visible={itemOpen} title="Search tower materials" options={itemOptions} onClose={()=>setItemOpen(false)} onSelect={row=>{setItemId(row.id);setItemLabel(row.label);setDescription(row.label);const selectedPacker=row.id.startsWith("packer:");const selectedBolt=data?.bolts.find(item=>clean(item.id)===row.id.split(":")[1]);const selectedMember=data?.members.find(item=>clean(item.id)===row.id.split(":")[1]);setSpecification(selectedPacker?[clean(selectedBolt?.bolt_diameter),clean(selectedBolt?.packer_no)].filter(Boolean).join(" mm "):row.subtitle||"");setSegment(clean(selectedPacker?selectedBolt?.tower_segment:selectedMember?.tower_segment||selectedMember?.section)||segment);setDrawing(clean(selectedPacker?selectedBolt?.drawing_number:selectedMember?.drawing_number)||drawing);setMember(clean(selectedMember?.mark_no)||member);setCategory(row.id.startsWith("member:")?"Steel":selectedPacker?"Packer":row.id.startsWith("bolt:")?"Bolt":"Bundle");}}/>
     <QualitySelector visible={categoryOpen} title="Material category" options={["Steel","Bolt","Packer","Mesh","Fitting","Consumable","Other"].map(value=>({id:value,label:value}))} onClose={()=>setCategoryOpen(false)} onSelect={row=>setCategory(row.id)}/>
     <QualitySelector visible={urgencyOpen} title="Urgency" options={["Normal","Urgent","Critical"].map(value=>({id:value,label:value}))} onClose={()=>setUrgencyOpen(false)} onSelect={row=>setUrgency(row.id)}/>
+    <QualitySelector visible={assigneeOpen} title="Assign to" options={[{id:"",label:"Not assigned"},...projectUsers.map(user=>({id:user.id,label:user.name,subtitle:user.role}))]} onClose={()=>setAssigneeOpen(false)} onSelect={row=>setAssignedToUserId(row.id)}/>
+    <QualitySelector visible={notifyOpen} title="Notify an additional person" options={projectUsers.filter(user=>user.id!==assignedToUserId).map(user=>({id:user.id,label:`${notifyUserIds.includes(user.id)?"✓ ":""}${user.name}`,subtitle:user.role}))} onClose={()=>setNotifyOpen(false)} onSelect={row=>setNotifyUserIds(ids=>ids.includes(row.id)?ids.filter(id=>id!==row.id):[...ids,row.id])}/>
   </MaterialsShell>;
 }
 
