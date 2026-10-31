@@ -4,10 +4,13 @@ import {
   docketEmailShell,
   sendDailyDocketEmail,
 } from "@/lib/email/daily-dockets";
+import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
+import { defectRequiredByDisplay } from "@/lib/quality/defect-dates";
 
 export type DefectNotificationKind =
   | "created"
   | "critical"
+  | "assigned"
   | "status_changed"
   | "action_added"
   | "closed";
@@ -19,6 +22,7 @@ type DefectNotificationRule = {
   notify_action: boolean;
   notify_closed: boolean;
   notify_critical: boolean;
+  notify_assignment?: boolean;
   receives_email: boolean;
   receives_in_app: boolean;
   receives_push: boolean;
@@ -36,6 +40,11 @@ type DefectForNotification = {
   description: string | null;
   assigned_to_user_id?: string | null;
   assigned_to_label?: string | null;
+  required_by?: string | null;
+  work_impact?: string | null;
+  affected_activity?: string | null;
+  urgency_note?: string | null;
+  notify_user_ids?: string[] | null;
 };
 
 type Recipient = {
@@ -92,6 +101,8 @@ function ruleApplies(
       return rule.notify_new;
     case "critical":
       return rule.notify_critical;
+    case "assigned":
+      return rule.notify_assignment !== false;
     case "status_changed":
       return rule.notify_status_change;
     case "action_added":
@@ -122,12 +133,15 @@ async function userIdentity(
 function eventTitle(
   kind: DefectNotificationKind,
   defectNumber: string,
+  towerLabel?: string | null,
 ) {
   switch (kind) {
     case "created":
       return `New Defect · ${defectNumber}`;
     case "critical":
-      return `Critical Defect · ${defectNumber}`;
+      return `CRITICAL DEFECT · ${clean(towerLabel) || "Tower"} · ${defectNumber}`;
+    case "assigned":
+      return `Defect Assigned · ${clean(towerLabel) || "Tower"} · ${defectNumber}`;
     case "status_changed":
       return `Defect Updated · ${defectNumber}`;
     case "action_added":
@@ -143,6 +157,8 @@ function eventType(kind: DefectNotificationKind) {
       return "defect_created";
     case "critical":
       return "defect_critical";
+    case "assigned":
+      return "defect_assigned";
     case "status_changed":
       return "defect_status_changed";
     case "action_added":
@@ -178,7 +194,7 @@ export async function notifyDefectEvent({
   const { data: rawRules, error: rulesError } = await service
     .from("project_defect_notification_rules")
     .select(
-      "user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,receives_email,receives_in_app,receives_push",
+      "user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,notify_assignment,receives_email,receives_in_app,receives_push",
     )
     .eq("project_id", defect.project_id)
     .eq("active", true);
@@ -207,38 +223,43 @@ export async function notifyDefectEvent({
     });
   }
 
-  // The assigned person always receives visibility for their own assigned Defect.
+  // The assigned person and explicitly selected additional recipients receive
+  // direct visibility even when they are not general project recipients.
   if (defect.assigned_to_user_id) {
-    const existing = channels.get(defect.assigned_to_user_id) ?? {
-      email: false,
-      inApp: false,
-      push: false,
-    };
-
+    const configured = channels.get(defect.assigned_to_user_id);
     channels.set(defect.assigned_to_user_id, {
-      email: true,
+      // In-app and push are direct assignment channels; email follows the
+      // project's configured email preference for this user/event.
+      email: configured?.email ?? false,
       inApp: true,
-      push: existing.push,
+      push: true,
     });
+  }
+
+  for (const userId of defect.notify_user_ids || []) {
+    if (!clean(userId)) continue;
+    const existing = channels.get(userId) ?? { email: false, inApp: false, push: false };
+    channels.set(userId, { email: existing.email, inApp: true, push: true });
   }
 
   if (actorUserId) {
     channels.delete(actorUserId);
   }
 
-  const recipients: Recipient[] = [];
-
-  for (const [userId, selectedChannels] of channels.entries()) {
+  const category = eventType(kind);
+  const actionRoute = `/project/${defect.project_id}/tower/${defect.tower_id}/defects`;
+  const appEligible = new Set(await filterAppNotificationUserIds(service, [...channels.keys()], category, actionRoute));
+  const recipients: Recipient[] = await Promise.all([...channels.entries()].map(async ([userId, selectedChannels]) => {
     const identity = await userIdentity(service, userId);
-    recipients.push({
+    return {
       userId,
       email: identity.email,
       name: identity.name,
       receivesEmail: selectedChannels.email,
-      receivesInApp: selectedChannels.inApp,
-      receivesPush: selectedChannels.push,
-    });
-  }
+      receivesInApp: selectedChannels.inApp && appEligible.has(userId),
+      receivesPush: selectedChannels.push && appEligible.has(userId),
+    };
+  }));
 
   if (recipients.length === 0) {
     return {
@@ -264,6 +285,9 @@ export async function notifyDefectEvent({
   const message = [
     issue,
     location,
+    defect.work_impact,
+    defect.required_by ? `Required ${defectRequiredByDisplay(defect.required_by)}` : null,
+    defect.urgency_note,
     clean(detail) ||
       clean(defect.description) ||
       clean(defect.status),
@@ -271,9 +295,8 @@ export async function notifyDefectEvent({
     .filter(Boolean)
     .join(" — ");
 
-  const title = eventTitle(kind, defectNumber);
+  const title = eventTitle(kind, defectNumber,towerLabel);
   const severity = notificationSeverity(kind, defect.severity);
-  const actionRoute = `/project/${defect.project_id}/tower/${defect.tower_id}/defects`;
   const now = new Date().toISOString();
 
   const inAppRows = recipients
@@ -282,7 +305,9 @@ export async function notifyDefectEvent({
       user_id: recipient.userId,
       event_type: eventType(kind),
       title,
-      message,
+      message: ["assigned","created","critical"].includes(kind) && recipient.userId === defect.assigned_to_user_id
+        ? `${message} · Assigned to you by ${actorLabel}`
+        : message,
       severity,
       read_at: null,
       archived_at: null,
@@ -310,7 +335,7 @@ export async function notifyDefectEvent({
       .insert(inAppRows);
 
     if (error) {
-      console.error("Defect in-app notification failed", error);
+      throw new Error(`Defect in-app notification failed: ${error.message}`);
     }
   }
 
@@ -400,14 +425,34 @@ export async function notifyDefectEvent({
     });
   }
 
+  const pushUserIds = recipients.filter((recipient) => recipient.receivesPush).map((recipient) => recipient.userId);
+  let push = 0;
+  if (pushUserIds.length) {
+    const { data: tokenRows, error: tokenError } = await service.from("user_push_tokens").select("user_id,expo_push_token").in("user_id", pushUserIds).eq("active", true);
+    if (tokenError) throw new Error(`Defect push token lookup failed: ${tokenError.message}`);
+    const tokens = [...new Map((tokenRows || []).map(row => [clean(row.expo_push_token), row.user_id])).entries()].filter(([token]) => token);
+    if (tokens.length) {
+      const response = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", "Accept-Encoding": "gzip, deflate" },
+        body: JSON.stringify(tokens.map(([to, userId]) => ({
+          to, sound: "default", title,
+          body: `${message}${["assigned","created","critical"].includes(kind) && userId === defect.assigned_to_user_id ? ` · Assigned to you by ${actorLabel}` : ""}`,
+          data: { action_route: "/defects", action_params: { defect_id: defect.id, project_id: defect.project_id, tower_id: defect.tower_id }, defect_id: defect.id, project_id: defect.project_id, tower_id: defect.tower_id },
+        }))),
+      });
+      if (!response.ok) throw new Error(`Defect Expo push failed (${response.status}).`);
+      const result = await response.json() as { data?: Array<{status?:string;message?:string}> };
+      const failed = (result.data || []).filter(ticket => ticket.status === "error");
+      if (failed.length) throw new Error(`Defect Expo push failed: ${failed.map(ticket=>ticket.message).filter(Boolean).join("; ")}`);
+      push = tokens.length;
+    }
+  }
+
   return {
     recipients: recipients.length,
     inApp: inAppRows.length,
     email: emailRecipients.length,
-    // Stored now so mobile push can honour the same exact-user configuration.
-    // The current web phase does not dispatch Expo push directly.
-    pushRequested: recipients.filter(
-      (recipient) => recipient.receivesPush,
-    ).length,
+    push,
   };
 }

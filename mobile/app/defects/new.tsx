@@ -35,6 +35,7 @@ import {
 } from "@/lib/api/quality";
 import {
   getDefectAssignees,
+  getDefectWorkflowOptions,
   type DefectAssignee,
   type MobileDefectSeverity,
 } from "@/lib/api/defects";
@@ -62,6 +63,11 @@ type FormState = {
   clientReference: string;
   severity: MobileDefectSeverity;
   assignedToUserId: string | null;
+  notifyUserIds: string[];
+  requiredBy: string;
+  workImpact: string;
+  affectedActivity: string;
+  urgencyNote: string;
   photos: LocalQualityPhoto[];
 };
 
@@ -77,6 +83,11 @@ const BLANK: FormState = {
   clientReference: "",
   severity: "Minor",
   assignedToUserId: null,
+  notifyUserIds: [],
+  requiredBy: "",
+  workImpact: "No Immediate Impact",
+  affectedActivity: "",
+  urgencyNote: "",
   photos: [],
 };
 
@@ -96,6 +107,7 @@ function NewDefectContent() {
   const [assignees, setAssignees] = useState<
     DefectAssignee[]
   >([]);
+  const [workflowOptions,setWorkflowOptions]=useState({workImpactOptions:["No Immediate Impact","May Delay Work","Blocks Work"],affectedActivityOptions:["Assembly","Erection","Revision","Stringing","Delivery","Inspection","Other"]});
   const [saving, setSaving] = useState(false);
   const [memberLoading, setMemberLoading] =
     useState(false);
@@ -106,8 +118,12 @@ function NewDefectContent() {
     useState(false);
   const [severityPickerOpen, setSeverityPickerOpen] =
     useState(false);
+  const [workImpactPickerOpen,setWorkImpactPickerOpen]=useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] =
     useState(false);
+  const [notifyPickerOpen,setNotifyPickerOpen]=useState(false);
+  const [activityPickerOpen,setActivityPickerOpen]=useState(false);
+  const [customActivity,setCustomActivity]=useState(false);
 
   const draftHydrated = useRef(false);
 
@@ -228,6 +244,7 @@ function NewDefectContent() {
           severity: saved.severity,
           assignedToUserId:
             saved.assignedToUserId,
+          notifyUserIds:saved.notifyUserIds||[],requiredBy:saved.requiredBy||"",workImpact:saved.workImpact||"No Immediate Impact",affectedActivity:saved.affectedActivity||"",urgencyNote:saved.urgencyNote||"",
           photos: saved.photos ?? [],
         });
       }
@@ -239,6 +256,8 @@ function NewDefectContent() {
       active = false;
     };
   }, [projectId]);
+
+  useEffect(()=>{if(projectId)void getDefectWorkflowOptions(projectId).then(setWorkflowOptions).catch(()=>undefined);},[projectId]);
 
   useEffect(() => {
     if (!projectId || !draftHydrated.current) return;
@@ -396,6 +415,11 @@ function NewDefectContent() {
           severity: form.severity,
           assignedToUserId:
             clean(form.assignedToUserId) || null,
+          notifyUserIds:form.notifyUserIds,
+          requiredBy:form.requiredBy.trim()||null,
+          workImpact:form.workImpact||null,
+          affectedActivity:form.affectedActivity.trim()||null,
+          urgencyNote:form.urgencyNote.trim()||null,
           photos: form.photos,
         });
 
@@ -435,6 +459,24 @@ function NewDefectContent() {
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
 
+      <QualityPhotoPicker
+        context={{timeZone:data?.project?.timezone,project:data?.project?.project_number,kind:"defect",phase:"BEFORE",leg:form.leg,reference:"Pending DEF",tower:towerLabel,segment:form.segment,member:form.memberNumber,drawing:form.drawingNumber,assignedFlag:form.clientReference,issue:issueOptions.find(row=>row.id===form.issueTypeId)?.label}}
+        label="Take defect photo"
+        photos={form.photos}
+        onChange={(photos) => setForm(current => ({ ...current, photos }))}
+        prefix="defect"
+      />
+
+      <Text style={styles.label}>Work impact</Text>
+      <Pressable style={styles.selector} onPress={()=>setWorkImpactPickerOpen(true)}><Text style={styles.selectorText}>{form.workImpact||"No Immediate Impact"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      <Text style={styles.label}>Required By · DD/MM/YYYY</Text>
+      <TextInput value={form.requiredBy} onChangeText={requiredBy=>setForm(current=>({...current,requiredBy}))} placeholder="Optional · e.g. 01/11/2026" keyboardType="numbers-and-punctuation" style={styles.input}/>
+      <Text style={styles.label}>Affected activity</Text>
+      <Pressable style={styles.selector} onPress={()=>setActivityPickerOpen(true)}><Text style={styles.selectorText}>{form.affectedActivity||"Optional"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      {customActivity?<TextInput value={form.affectedActivity} onChangeText={affectedActivity=>setForm(current=>({...current,affectedActivity}))} placeholder="Enter activity" style={styles.input}/>:null}
+      <Text style={styles.label}>Urgency / impact note</Text>
+      <TextInput value={form.urgencyNote} onChangeText={urgencyNote=>setForm(current=>({...current,urgencyNote}))} placeholder="What work is at risk?" style={styles.input}/>
+
       <Text style={styles.label}>Common issue</Text>
       <Pressable
         style={styles.selector}
@@ -445,6 +487,9 @@ function NewDefectContent() {
         </Text>
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
+      <Text style={styles.label}>Also notify (optional)</Text>
+      {form.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setForm(current=>({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}))} style={styles.notifyChip}><Text style={{fontSize:12,fontWeight:"700",color:"#334155"}}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
+      <Pressable style={[styles.selector,{minHeight:40}]} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>Add person to notify</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 
       {form.towerId ? (
         <>
@@ -571,19 +616,6 @@ function NewDefectContent() {
       />
 
       <QualityLegField value={form.leg} onChange={leg=>setForm(current=>({...current,leg}))} />
-      <QualityPhotoPicker
-        context={{timeZone:data?.project?.timezone,project:data?.project?.project_number,kind:"defect",phase:"BEFORE",leg:form.leg,reference:"Pending DEF",tower:towerLabel,segment:form.segment,member:form.memberNumber,drawing:form.drawingNumber,assignedFlag:form.clientReference,issue:issueOptions.find(row=>row.id===form.issueTypeId)?.label}}
-        label="Defect photos"
-        photos={form.photos}
-        onChange={(photos) =>
-          setForm((current) => ({
-            ...current,
-            photos,
-          }))
-        }
-        prefix="defect"
-      />
-
       <Pressable
         style={[
           styles.save,
@@ -662,6 +694,9 @@ function NewDefectContent() {
           setAssigneePickerOpen(false);
         }}
       />
+      <QualitySelector visible={workImpactPickerOpen} title="Work impact" options={[{id:"",label:"Not specified"},...workflowOptions.workImpactOptions.map(value=>({id:value,label:value}))]} onClose={()=>setWorkImpactPickerOpen(false)} onSelect={option=>{setForm(current=>({...current,workImpact:option.id}));setWorkImpactPickerOpen(false);}}/>
+      <QualitySelector visible={activityPickerOpen} title="Affected activity" options={[{id:"",label:"Not specified"},...workflowOptions.affectedActivityOptions.map(value=>({id:value,label:value})),{id:"__other__",label:"Other / enter a value"}]} onClose={()=>setActivityPickerOpen(false)} onSelect={option=>{setCustomActivity(option.id==="__other__");setForm(current=>({...current,affectedActivity:option.id==="__other__"?"":option.id}));setActivityPickerOpen(false);}}/>
+      <QualitySelector visible={notifyPickerOpen} title="Also notify" options={assignees.filter(person=>person.id!==form.assignedToUserId&&!form.notifyUserIds.includes(person.id)).map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} onClose={()=>setNotifyPickerOpen(false)} onSelect={option=>{setForm(current=>({...current,notifyUserIds:[...current.notifyUserIds,option.id]}));setNotifyPickerOpen(false);}}/>
     </QualityShell>
   );
 }
@@ -679,6 +714,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textTransform: "uppercase",
   },
+  notifyChip: { alignSelf: "flex-start", borderRadius: 999, borderWidth: 1, borderColor: "#cbd5e1", backgroundColor: "#f8fafc", paddingHorizontal: 11, paddingVertical: 7, marginBottom: 6 },
   selector: {
     minHeight: 48,
     borderWidth: 1,

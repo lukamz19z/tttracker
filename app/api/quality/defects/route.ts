@@ -3,6 +3,8 @@ import { qualityDisplayName } from "@/lib/quality/display-name";
 import { resolveSystemUserIdentityById } from "@/lib/dockets/system-user-identity";
 
 import { notifyDefectEvent } from "@/lib/quality/defect-notifications";
+import { assertProjectDefectRecipients, cleanDefectRecipientIds } from "@/lib/quality/defect-recipients";
+import { defectRequiredByToDb } from "@/lib/quality/defect-dates";
 import {
   assertQualityProjectAccess,
   loadQualityProject,
@@ -32,6 +34,11 @@ type CreateBody = {
   assignedToUserId?: string | null;
   source?: string | null;
   sourceDocketId?: string | null;
+  requiredBy?: string | null;
+  workImpact?: string | null;
+  affectedActivity?: string | null;
+  urgencyNote?: string | null;
+  notifyUserIds?: string[];
 };
 
 function clean(value: unknown) {
@@ -84,6 +91,8 @@ export async function POST(request: Request) {
     const issueTypeId = clean(body.issueTypeId) || null;
     const assignedToUserId = clean(body.assignedToUserId) || null;
     const sourceDocketId = clean(body.sourceDocketId) || null;
+    const requiredBy = defectRequiredByToDb(body.requiredBy);
+    const notifyUserIds = cleanDefectRecipientIds(body.notifyUserIds);
     const leg=clean(body.leg) || null;
     if(leg && !["A","B","C","D"].includes(leg)) return NextResponse.json({error:"Select Leg A, B, C or D."},{status:400});
 
@@ -100,6 +109,7 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+    if (requiredBy.error) return NextResponse.json({ error: requiredBy.error }, { status: 400 });
 
     await assertQualityProjectAccess({
       service,
@@ -107,6 +117,7 @@ export async function POST(request: Request) {
       role,
       projectId,
     });
+    await assertProjectDefectRecipients(service, projectId, [...notifyUserIds, ...(assignedToUserId ? [assignedToUserId] : [])]);
     const clientMutationId=clean(body.clientMutationId);
     const findExisting=async()=> {
       if(!clientMutationId) return null;
@@ -178,6 +189,11 @@ export async function POST(request: Request) {
         photo_url: null,
         assigned_to_user_id: assignedToUserId,
         assigned_to_label: assignedToLabel,
+        required_by: requiredBy.value,
+        work_impact: clean(body.workImpact) || null,
+        affected_activity: clean(body.affectedActivity) || null,
+        urgency_note: clean(body.urgencyNote) || null,
+        notify_user_ids: notifyUserIds,
       })
       .select("*")
       .single();
@@ -226,10 +242,7 @@ export async function POST(request: Request) {
         projectLabel:
           project.project_number || project.name || project.id,
         towerLabel: qualityTowerLabel(tower),
-        detail:
-          severity === "Critical"
-            ? "A Critical Defect has been raised."
-            : null,
+        detail: severity === "Critical" ? "A Critical Defect has been raised." : null,
         docketId: sourceDocketId,
       });
     } catch (notificationError) {

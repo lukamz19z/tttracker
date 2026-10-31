@@ -77,6 +77,11 @@ export type QualityDefect = {
   resolution_notes: string | null;
   assigned_to_user_id: string | null;
   assigned_to_label: string | null;
+  required_by?: string | null;
+  work_impact?: string | null;
+  affected_activity?: string | null;
+  urgency_note?: string | null;
+  notify_user_ids?: string[] | null;
   completed_by: string | null;
   completed_at: string | null;
   created_at: string;

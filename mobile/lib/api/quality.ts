@@ -383,6 +383,11 @@ export async function updateDefect(
     status?: DefectStatus;
     resolutionNotes?: string | null;
     assignedToUserId?: string | null;
+    notifyUserIds?: string[];
+    requiredBy?: string | null;
+    workImpact?: string | null;
+    affectedActivity?: string | null;
+    urgencyNote?: string | null;
   },
 ) {
   return apiJson<{

@@ -3,6 +3,8 @@ import { qualityDisplayName } from "@/lib/quality/display-name";
 import { cleanupQualityUploadSessions } from "@/lib/quality/upload-cleanup";
 
 import { notifyDefectEvent } from "@/lib/quality/defect-notifications";
+import { assertProjectDefectRecipients, cleanDefectRecipientIds } from "@/lib/quality/defect-recipients";
+import { defectRequiredByState, defectRequiredByToDb } from "@/lib/quality/defect-dates";
 import {
   assertQualityProjectAccess,
   loadQualityProject,
@@ -37,6 +39,11 @@ type PatchBody = {
   status?: "Open" | "In Progress" | "Fixed" | "Closed";
   resolutionNotes?: string | null;
   assignedToUserId?: string | null;
+  requiredBy?: string | null;
+  workImpact?: string | null;
+  affectedActivity?: string | null;
+  urgencyNote?: string | null;
+  notifyUserIds?: string[];
 };
 
 type DeleteBody = {
@@ -141,6 +148,10 @@ export async function PATCH(
     const actorIdentity = await resolveSystemUserIdentity(service, user);
     const nextLeg=body.leg===undefined?current.leg:clean(body.leg)||null;
     if(nextLeg && !["A","B","C","D"].includes(nextLeg)) return NextResponse.json({error:"Select Leg A, B, C or D."},{status:400});
+    const requiredBy = body.requiredBy === undefined
+      ? { value: current.required_by ?? null, error: null }
+      : defectRequiredByToDb(body.requiredBy);
+    if (requiredBy.error) return NextResponse.json({ error: requiredBy.error }, { status: 400 });
 
     const nextAssignedUserId =
       body.assignedToUserId === undefined
@@ -151,6 +162,10 @@ export async function PATCH(
       body.assignedToUserId === undefined
         ? current.assigned_to_label
         : await userLabel(service, nextAssignedUserId);
+    const notifyUserIds = body.notifyUserIds === undefined
+      ? (Array.isArray(current.notify_user_ids) ? current.notify_user_ids as string[] : [])
+      : cleanDefectRecipientIds(body.notifyUserIds);
+    await assertProjectDefectRecipients(service,current.project_id,[...notifyUserIds,...(nextAssignedUserId?[nextAssignedUserId]:[])]);
 
     const nextStatus =
       body.status === undefined ? current.status : body.status;
@@ -196,6 +211,11 @@ export async function PATCH(
           : clean(body.resolutionNotes) || null,
       assigned_to_user_id: nextAssignedUserId,
       assigned_to_label: nextAssignedLabel,
+      required_by: requiredBy.value,
+      work_impact: body.workImpact === undefined ? current.work_impact ?? null : clean(body.workImpact) || null,
+      affected_activity: body.affectedActivity === undefined ? current.affected_activity ?? null : clean(body.affectedActivity) || null,
+      urgency_note: body.urgencyNote === undefined ? current.urgency_note ?? null : clean(body.urgencyNote) || null,
+      notify_user_ids: notifyUserIds,
       completed_by:
         nextStatus === "Closed"
           ? actorIdentity.display
@@ -238,60 +258,57 @@ export async function PATCH(
     const actorLabel = actorIdentity.display;
     let warning: string | null = null;
 
+    const audit: string[] = [];
+    if (current.status !== defect.status) audit.push(`Status changed from ${current.status} to ${defect.status}.`);
+    if (current.assigned_to_user_id !== defect.assigned_to_user_id) audit.push(defect.assigned_to_label ? `Assigned to ${defect.assigned_to_label}.` : "Assignment cleared.");
+    if (clean(current.severity) !== clean(defect.severity)) audit.push(`Severity changed from ${current.severity} to ${defect.severity}.`);
+    if (current.required_by !== defect.required_by) audit.push(`Required By changed to ${defect.required_by || "not set"}.`);
+    if (audit.length) {
+      const { error: auditError } = await service.from("defect_actions").insert(audit.map(action_note=>({defect_id:defect.id,action_note,created_by:actorLabel,created_by_user_id:user.id})));
+      if (auditError) warning = `Defect was updated, but its history could not be recorded: ${auditError.message}`;
+    }
+
     try {
-      if (current.status !== defect.status) {
+      const assignmentChanged = current.assigned_to_user_id !== defect.assigned_to_user_id && Boolean(defect.assigned_to_user_id);
+      const statusChanged = current.status !== defect.status;
+      const criticalEscalation =
+        clean(current.severity).toLowerCase() !== "critical" &&
+        clean(defect.severity).toLowerCase() === "critical";
+      const dueState = defectRequiredByState(defect.required_by, defect.status, project.timezone);
+      const urgentRequiredByChanged = current.required_by !== defect.required_by && Boolean(dueState?.overdue || dueState?.relative === "Required Today" || dueState?.relative === "Required Tomorrow");
+      const workImpactEscalated = current.work_impact !== defect.work_impact && /block|delay/i.test(clean(defect.work_impact));
+      if (statusChanged || assignmentChanged || criticalEscalation || urgentRequiredByChanged || workImpactEscalated) {
+        const kind = defect.status === "Closed"
+          ? "closed"
+          : criticalEscalation
+            ? "critical"
+            : assignmentChanged
+              ? "assigned"
+              : "status_changed";
+        const context = [
+          statusChanged ? `Status changed from ${current.status} to ${defect.status}.` : null,
+          assignmentChanged ? `Assigned to ${defect.assigned_to_label || "a project user"}.` : null,
+          criticalEscalation ? "Defect severity was escalated to Critical." : null,
+          urgentRequiredByChanged ? `Urgent Required By set to ${defect.required_by ? defect.required_by.split("-").reverse().join("/") : "a new date"}.` : null,
+          workImpactEscalated ? `Work impact changed to ${defect.work_impact}.` : null,
+        ].filter(Boolean).join(" ");
         await notifyDefectEvent({
           service,
           defect,
-          kind: defect.status === "Closed" ? "closed" : "status_changed",
+          kind,
           actorUserId: user.id,
           actorLabel,
           issueTypeName,
           projectLabel:
             project.project_number || project.name || project.id,
           towerLabel: qualityTowerLabel(tower),
-          detail: `Status changed from ${current.status} to ${defect.status}.`,
-        });
-      } else if (
-        current.assigned_to_user_id !== defect.assigned_to_user_id
-      ) {
-        await notifyDefectEvent({
-          service,
-          defect,
-          kind: "status_changed",
-          actorUserId: user.id,
-          actorLabel,
-          issueTypeName,
-          projectLabel:
-            project.project_number || project.name || project.id,
-          towerLabel: qualityTowerLabel(tower),
-          detail: defect.assigned_to_label
-            ? `Assigned to ${defect.assigned_to_label}.`
-            : "Defect assignment was cleared.",
+          detail: context,
         });
       }
 
-      if (
-        clean(current.severity).toLowerCase() !== "critical" &&
-        clean(defect.severity).toLowerCase() === "critical"
-      ) {
-        await notifyDefectEvent({
-          service,
-          defect,
-          kind: "critical",
-          actorUserId: user.id,
-          actorLabel,
-          issueTypeName,
-          projectLabel:
-            project.project_number || project.name || project.id,
-          towerLabel: qualityTowerLabel(tower),
-          detail: "Defect severity was escalated to Critical.",
-        });
-      }
     } catch (notificationError) {
       console.error("Defect update notification warning", notificationError);
-      warning =
-        "The Defect was updated, but one or more notifications could not be sent.";
+      warning = [warning,"The Defect was updated, but one or more notifications could not be sent."].filter(Boolean).join(" ");
     }
 
     return NextResponse.json({ defect, warning });

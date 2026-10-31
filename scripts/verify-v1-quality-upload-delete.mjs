@@ -93,12 +93,14 @@ const canonical=load("app/api/quality/defects/route.ts",{
   "@/lib/quality/display-name":display,
   "@/lib/dockets/system-user-identity":{resolveSystemUserIdentityById:async()=>({name:"Luka Z"})},
   "@/lib/quality/defect-notifications":{notifyDefectEvent:async()=>{}},
+  "@/lib/quality/defect-recipients":{cleanDefectRecipientIds:value=>Array.isArray(value)?value:[],assertProjectDefectRecipients:async()=>{}},
+  "@/lib/quality/defect-dates":{defectRequiredByToDb:value=>({value:value?"2026-11-01":null,error:null})},
   "@/lib/quality/server":{requireQualityUser:async()=>({service:defectService,user:{id:"user"},role:""}),assertQualityProjectAccess:async()=>{},loadQualityProject:async()=>({id:"p"}),loadQualityTower:async()=>({id:"t"}),qualityTowerLabel:()=>"Tower",qualityUserLabel:()=>"Luka Z",qualityApiError:error=>({status:500,message:error.message})},
 });
-const createRequest=()=>new Request("https://test/defects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId:"p",towerId:"t",description:"Long engineering finding",clientMutationId:"offline-defect",leg:"B",source:"mobile"})});
+const createRequest=()=>new Request("https://test/defects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectId:"p",towerId:"t",description:"Long engineering finding",clientMutationId:"offline-defect",leg:"B",source:"mobile",requiredBy:"01/11/2026",workImpact:"Blocks Work",affectedActivity:"Erection",urgencyNote:"Member needed tomorrow",notifyUserIds:["user-b"]})});
 const concurrent=await Promise.all([canonical.POST(createRequest()),canonical.POST(createRequest())]);
 for(const response of concurrent){assert.equal(response.status,200);assert.equal((await response.json()).defect.id,"server-defect");}
-assert.equal(defectInserts,1);assert.equal(defectRows[0].mobile_client_mutation_id,"offline-defect");assert.equal(defectRows[0].leg,"B");
+assert.equal(defectInserts,1);assert.equal(defectRows[0].mobile_client_mutation_id,"offline-defect");assert.equal(defectRows[0].leg,"B");assert.equal(defectRows[0].required_by,"2026-11-01");assert.equal(defectRows[0].work_impact,"Blocks Work");assert.equal(defectRows[0].affected_activity,"Erection");assert.equal(defectRows[0].urgency_note,"Member needed tomorrow");assert.deepEqual(defectRows[0].notify_user_ids,["user-b"]);
 assert.equal((await (await canonical.POST(createRequest())).json()).defect.defect_number,"DEF-001");assert.equal(defectInserts,1);
 console.log("PASS actual canonical DEF POST: mutation key is inserted atomically, concurrent/lost-response retry returns the same DEF, Leg B retained.");
 

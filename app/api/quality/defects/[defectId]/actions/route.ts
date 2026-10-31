@@ -67,6 +67,7 @@ export async function POST(
         defect_id: defect.id,
         action_note: action,
         created_by: actorLabel,
+        created_by_user_id: user.id,
       })
       .select("*")
       .single();

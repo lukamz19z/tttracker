@@ -165,7 +165,7 @@ export async function GET(request: NextRequest) {
         service
           .from("tower_material_events")
           .select(
-            "id,project_id,docket_id,tower_id,event_type,source_tower_id,destination_tower_id,occurred_at,affected_work,work_outcome,affected_activity,affected_section,current_effect,notes,tower_material_event_items(id,event_id,bundle_id,bundle_no,bundle_section,source_table,source_record_id,material_type,bolt_size,item_reference,item_description,quantity,unit,notes,issue_key,source_issue_key)",
+            "id,project_id,docket_id,tower_id,event_type,source_tower_id,destination_tower_id,occurred_at,affected_work,work_outcome,affected_activity,affected_section,current_effect,notes,urgency,required_by,issue_status,created_by_user_id,client_mutation_id,tower_material_event_items(id,event_id,bundle_id,bundle_no,bundle_section,source_table,source_record_id,material_type,bolt_size,item_reference,item_description,quantity,unit,notes,issue_key,source_issue_key,material_category,specification,segment,member_number,drawing_number)",
           )
           .eq("project_id", projectId)
           .order("occurred_at", { ascending: false })

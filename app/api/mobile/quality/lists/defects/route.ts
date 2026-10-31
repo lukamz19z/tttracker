@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DEFECT_FIELDS =
-  "id,project_id,tower_id,sequence_no,defect_number,issue_type_id,member_number,segment,drawing_number,description,responsibility,client_reference,severity,status,source,identified_at,identified_by_label,resolution_notes,assigned_to_user_id,assigned_to_label,completed_by,completed_at,created_at,updated_at,mobile_client_mutation_id";
+  "id,project_id,tower_id,sequence_no,defect_number,issue_type_id,member_number,segment,drawing_number,description,responsibility,client_reference,severity,status,source,identified_at,identified_by_label,resolution_notes,assigned_to_user_id,assigned_to_label,required_by,work_impact,affected_activity,urgency_note,notify_user_ids,completed_by,completed_at,created_at,updated_at,mobile_client_mutation_id";
 
 const SEARCH_FIELDS = [
   "defect_number",

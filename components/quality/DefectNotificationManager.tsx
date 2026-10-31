@@ -32,6 +32,7 @@ type RuleRow = {
   notify_action: boolean;
   notify_closed: boolean;
   notify_critical: boolean;
+  notify_assignment: boolean;
   receives_email: boolean;
   receives_in_app: boolean;
   receives_push: boolean;
@@ -67,6 +68,9 @@ export default function DefectNotificationManager({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [workImpactText,setWorkImpactText]=useState("No Immediate Impact\nMay Delay Work\nBlocks Work");
+  const [activityText,setActivityText]=useState("Assembly\nErection\nRevision\nStringing\nDelivery\nInspection\nOther");
+  const [optionsSaving,setOptionsSaving]=useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,6 +94,9 @@ export default function DefectNotificationManager({
 
       setUsers(payload.users ?? []);
       setRules((payload.rules ?? []).map((rule) => ({ ...rule })));
+      const optionsResponse=await apiFetch(`/api/quality/defects/options?projectId=${encodeURIComponent(projectId)}`);
+      const options=await optionsResponse.json() as {workImpactOptions?:string[];affectedActivityOptions?:string[]};
+      if(optionsResponse.ok){setWorkImpactText((options.workImpactOptions||[]).join("\n"));setActivityText((options.affectedActivityOptions||[]).join("\n"));}
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -100,6 +107,15 @@ export default function DefectNotificationManager({
       setLoading(false);
     }
   }, [apiFetch, projectId]);
+
+  async function saveWorkflowOptions(){
+    setOptionsSaving(true);setMessage(null);
+    try{
+      const response=await apiFetch("/api/quality/defects/options",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId,workImpactOptions:workImpactText.split(/\r?\n/).map(value=>value.trim()).filter(Boolean),affectedActivityOptions:activityText.split(/\r?\n/).map(value=>value.trim()).filter(Boolean)})});
+      const payload=await response.json() as {error?:string};if(!response.ok)throw new Error(payload.error||"Defect options could not be saved.");
+      setMessage("Defect workflow options saved.");onChanged?.();
+    }catch(error){setMessage(error instanceof Error?error.message:"Defect options could not be saved.");}finally{setOptionsSaving(false);}
+  }
 
   useEffect(() => {
     void load();
@@ -130,6 +146,7 @@ export default function DefectNotificationManager({
         notify_action: false,
         notify_closed: true,
         notify_critical: true,
+        notify_assignment: true,
         receives_email: true,
         receives_in_app: true,
         receives_push: false,
@@ -171,6 +188,7 @@ export default function DefectNotificationManager({
             notifyAction: rule.notify_action,
             notifyClosed: rule.notify_closed,
             notifyCritical: rule.notify_critical,
+            notifyAssignment: rule.notify_assignment,
             receivesEmail: rule.receives_email,
             receivesInApp: rule.receives_in_app,
             receivesPush: rule.receives_push,
@@ -345,6 +363,12 @@ export default function DefectNotificationManager({
                 </div>
               </div>
 
+              <details className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <summary className="cursor-pointer text-sm font-bold text-slate-800">Configure Defect work impact and affected activities</summary>
+                <div className="mt-3 grid gap-3 md:grid-cols-2"><label className="grid gap-1 text-xs font-bold">Work impact options<textarea rows={5} value={workImpactText} onChange={event=>setWorkImpactText(event.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-normal"/><span className="font-normal text-slate-500">One option per line. This field remains optional.</span></label><label className="grid gap-1 text-xs font-bold">Affected activity options<textarea rows={5} value={activityText} onChange={event=>setActivityText(event.target.value)} className="rounded-xl border border-slate-200 bg-white p-3 text-sm font-normal"/><span className="font-normal text-slate-500">One option per line; users can enter another value.</span></label></div>
+                <div className="mt-3 flex justify-end"><button type="button" onClick={()=>void saveWorkflowOptions()} disabled={optionsSaving} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{optionsSaving?<Loader2 size={13} className="animate-spin"/>:<Save size={13}/>}Save options</button></div>
+              </details>
+
               <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
                 <table className="w-full min-w-[1050px] text-sm">
                   <thead className="bg-slate-50 text-left text-[11px] font-black uppercase tracking-wide text-slate-500">
@@ -352,6 +376,7 @@ export default function DefectNotificationManager({
                       <th className="px-4 py-3">User</th>
                       <th className="px-3 py-3">New</th>
                       <th className="px-3 py-3">Critical</th>
+                      <th className="px-3 py-3">Assignment</th>
                       <th className="px-3 py-3">Status</th>
                       <th className="px-3 py-3">Actions</th>
                       <th className="px-3 py-3">Closed</th>
@@ -377,7 +402,7 @@ export default function DefectNotificationManager({
                     {rules.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={10}
+                          colSpan={11}
                           className="px-5 py-10 text-center text-sm text-slate-500"
                         >
                           No project Defect notification recipients configured.
@@ -407,6 +432,7 @@ export default function DefectNotificationManager({
                             {[
                               ["notify_new", rule.notify_new],
                               ["notify_critical", rule.notify_critical],
+                              ["notify_assignment", rule.notify_assignment],
                               [
                                 "notify_status_change",
                                 rule.notify_status_change,
@@ -470,9 +496,7 @@ export default function DefectNotificationManager({
               </div>
 
               <p className="mt-4 text-xs leading-5 text-slate-500">
-                Push is stored now for the mobile phase. Website email and
-                in-app notifications work in this phase. Expo push dispatch can
-                be connected when the mobile Defects module is added.
+                Assigned users receive direct in-app alerts and Expo push when their device notifications are enabled. Project recipients follow the event and channel preferences above.
               </p>
             </>
           )}

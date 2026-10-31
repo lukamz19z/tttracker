@@ -1852,6 +1852,9 @@ export default function DailyDocketForm({
       const receivedByIssue = new Map<string, number>();
 
       for (const event of (receivedEventsRes.data || []) as any[]) {
+        // Keep a saved/previous-day docket at its own material cut-off. Later
+        // receipts remain visible on later dockets without rewriting history.
+        if (docketDate && toStringValue(event.occurred_at).slice(0, 10) > docketDate) continue;
         for (const item of event.items || []) {
           const sourceIssueKey = toStringValue(item.source_issue_key);
           if (!sourceIssueKey) continue;
@@ -1865,6 +1868,7 @@ export default function DailyDocketForm({
       const issues: MissingMaterialIssue[] = [];
 
       for (const event of (missingEventsRes.data || []) as any[]) {
+        if (docketDate && toStringValue(event.occurred_at).slice(0, 10) > docketDate) continue;
         for (const item of event.items || []) {
           const issueKey = toStringValue(item.issue_key);
           if (!issueKey) continue;
@@ -1899,7 +1903,7 @@ export default function DailyDocketForm({
 
     const timer = window.setTimeout(() => void loadMissingMaterialIssues(), 0);
     return () => window.clearTimeout(timer);
-  }, [supabase, towerId]);
+  }, [docketDate, supabase, towerId]);
 
   useEffect(() => {
     async function loadBundleTransferContext() {

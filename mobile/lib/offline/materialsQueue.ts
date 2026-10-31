@@ -2,6 +2,8 @@ import { getCache, setCache } from "@/lib/offline/db";
 import type {
   SaveBundleCheckInput,
   SaveMemberCheckInput,
+  CreateMissingMaterialInput,
+  RecordMissingReceiptInput,
 } from "@/types/materials";
 
 export type PendingMaterialMutation =
@@ -32,7 +34,10 @@ export type PendingMaterialMutation =
       memberId: string;
       bundleId: string;
       createdAt: string;
-    };
+    }
+  | { id: string; kind: "report_missing"; input: CreateMissingMaterialInput; createdAt: string }
+  | { id: string; kind: "receive_missing"; input: RecordMissingReceiptInput; createdAt: string }
+  | { id: string; kind: "resolve_missing"; input: { projectId: string; towerId: string; issueKey: string }; createdAt: string };
 
 export const materialQueueKey = (projectId: string) =>
   `materials:pending:${projectId}`;
@@ -107,10 +112,25 @@ export function makeClearMemberMutation(
   };
 }
 
+export function makeReportMissingMutation(input: Omit<CreateMissingMaterialInput,"clientMutationId">): PendingMaterialMutation {
+  const id=mutationId();
+  return {id,kind:"report_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
+}
+
+export function makeReceiveMissingMutation(input: Omit<RecordMissingReceiptInput,"clientMutationId">): PendingMaterialMutation {
+  const id=mutationId();
+  return {id,kind:"receive_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
+}
+
+export function makeResolveMissingMutation(input: { projectId: string; towerId: string; issueKey: string }): PendingMaterialMutation {
+  return { id: mutationId(), kind: "resolve_missing", input, createdAt: new Date().toISOString() };
+}
+
 export function mergeMaterialMutation(
   current: PendingMaterialMutation[],
   next: PendingMaterialMutation,
 ) {
+  if(next.kind==="report_missing"||next.kind==="receive_missing"||next.kind==="resolve_missing") return [...current,next];
   if (next.kind === "save_bundle" || next.kind === "clear_bundle") {
     const filtered = current.filter((item) => {
       if (

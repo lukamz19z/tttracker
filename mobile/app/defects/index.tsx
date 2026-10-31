@@ -1,5 +1,6 @@
 import { qualityDisplayName } from "../../../lib/quality/display-name";
 import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
+import { defectRequiredByDisplay, defectRequiredByState } from "../../../lib/quality/defect-dates";
 import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
 import { queueRows, cachedValuesWithPrefix, type QueueRecord } from "@/lib/offline/db";
 import type { OfflineDefectCreate } from "@/lib/offline/quality-sync";
@@ -37,6 +38,7 @@ import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useQuality } from "@/contexts/QualityContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityDefectList,
@@ -54,6 +56,7 @@ function clean(value: unknown) {
 export default function DefectsScreen() {
   const { data, loading: metadataLoading } =
     useQuality();
+  const { session } = useAuth();
   const { online,syncing,refresh:refreshSync } = useSync();
 
   const projectId = clean(data?.projectId);
@@ -64,11 +67,12 @@ export default function DefectsScreen() {
   const [debouncedQuery, setDebouncedQuery] =
     useState("");
   const [status, setStatus] = useState("All");
+  const [urgency, setUrgency] = useState("All");
   const [towerId, setTowerId] = useState("");
   const [memberNumber, setMemberNumber] = useState("");
   const [issueTypeId, setIssueTypeId] = useState("");
   const [selector, setSelector] = useState<
-    "tower" | "member" | "issue" | null
+    "tower" | "member" | "issue" | "urgency" | null
   >(null);
   const [memberCatalog, setMemberCatalog] = useState<
     QualityMemberCatalogRow[]
@@ -140,6 +144,22 @@ export default function DefectsScreen() {
     ],
     [issueTypes],
   );
+
+  const urgencyOptions: QualitySelectorOption[] = [
+    {id:"All",label:"All urgency"},
+    {id:"Critical",label:"Critical"},
+    {id:"Assigned to Me",label:"Assigned to Me"},
+    {id:"Required Today",label:"Required Today"},
+    {id:"Overdue",label:"Overdue"},
+  ];
+  const visibleRows = rows.filter(row=>{
+    if(urgency==="Critical"&&row.severity!=="Critical")return false;
+    if(urgency==="Assigned to Me"&&row.assigned_to_user_id!==session?.user?.id)return false;
+    const due=defectRequiredByState(row.required_by,row.status,data?.project?.timezone);
+    if(urgency==="Required Today"&&due?.relative!=="Required Today")return false;
+    if(urgency==="Overdue"&&!due?.overdue)return false;
+    return true;
+  });
 
   const memberOptions = useMemo<QualitySelectorOption[]>(() => {
     const byNumber = new Map<string, QualitySelectorOption>();
@@ -465,17 +485,18 @@ export default function DefectsScreen() {
         />
       </View>
 
-      {towerId || memberNumber || issueTypeId ? (
+      {towerId || memberNumber || issueTypeId || urgency!=="All" ? (
         <Pressable
           style={styles.clearFilters}
           onPress={() => {
             setTowerId("");
             setMemberNumber("");
             setIssueTypeId("");
+            setUrgency("All");
           }}
         >
           <X size={14} color="#475569" />
-          <Text style={styles.clearFiltersText}>Clear tower / member / issue filters</Text>
+          <Text style={styles.clearFiltersText}>Clear filters</Text>
         </Pressable>
       ) : null}
 
@@ -504,6 +525,7 @@ export default function DefectsScreen() {
           ),
         )}
       </View>
+      <FilterSelect label="Urgency" value={urgencyOptions.find(option=>option.id===urgency)?.label||"All urgency"} onPress={()=>setSelector("urgency")}/>
 
       {(metadataLoading || loading) &&
       rows.length === 0 ? (
@@ -514,7 +536,7 @@ export default function DefectsScreen() {
         <Text style={styles.error}>{error}</Text>
       ) : null}
 
-      {!loading && rows.length === 0 ? (
+      {!loading && visibleRows.length === 0 ? (
         <View style={styles.empty}>
           <AlertTriangle
             size={30}
@@ -526,7 +548,7 @@ export default function DefectsScreen() {
         </View>
       ) : null}
 
-      {rows.map((row) => (
+      {visibleRows.map((row) => (
         <Pressable
           key={row.id}
           style={styles.card}
@@ -563,6 +585,8 @@ export default function DefectsScreen() {
             {clean(row.description) ||
               "No description"}
           </Text>
+
+          {row.required_by || row.work_impact ? <View style={styles.urgencyRow}>{row.severity === "Critical"?<Text style={styles.criticalBadge}>CRITICAL</Text>:null}{row.work_impact?<Text style={styles.impactBadge}>{row.work_impact.toUpperCase()}</Text>:null}{row.required_by?<Text style={styles.requiredText}>{defectRequiredByState(row.required_by,row.status,data?.project?.timezone)?.overdue?"OVERDUE · ":"Required "}{defectRequiredByState(row.required_by,row.status,data?.project?.timezone)?.relative||""} · {defectRequiredByDisplay(row.required_by)}</Text>:null}</View>:null}
 
           <View style={styles.cardFoot}>
             <QualityStatusPill
@@ -649,6 +673,7 @@ export default function DefectsScreen() {
           setSelector(null);
         }}
       />
+      <QualitySelector visible={selector==="urgency"} title="Filter by urgency / assignment" options={urgencyOptions} onClose={()=>setSelector(null)} onSelect={option=>{setUrgency(option.id);setSelector(null);}}/>
     </QualityShell>
   );
 }
@@ -814,6 +839,10 @@ const styles = StyleSheet.create({
     color: "#334155",
     lineHeight: 19,
   },
+  urgencyRow:{flexDirection:"row",flexWrap:"wrap",alignItems:"center",gap:6},
+  criticalBadge:{borderRadius:999,overflow:"hidden",backgroundColor:"#fee2e2",color:"#991b1b",paddingHorizontal:8,paddingVertical:4,fontSize:10,fontWeight:"900"},
+  impactBadge:{borderRadius:999,overflow:"hidden",backgroundColor:"#ffedd5",color:"#9a3412",paddingHorizontal:8,paddingVertical:4,fontSize:10,fontWeight:"900"},
+  requiredText:{color:"#7f1d1d",fontSize:11,fontWeight:"800"},
   cardFoot: {
     flexDirection: "row",
     alignItems: "center",

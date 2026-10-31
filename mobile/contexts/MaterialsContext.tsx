@@ -16,6 +16,8 @@ import { useSync } from "@/contexts/SyncContext";
 import {
   cachedMaterials,
   cancelMaterialTransfer,
+  createMissingMaterial as createMissingMaterialApi,
+  resolveMissingMaterial as resolveMissingMaterialApi,
   clearBundleCheck as clearBundleCheckApi,
   clearMemberCheck as clearMemberCheckApi,
   createMaterialTransfer,
@@ -33,6 +35,9 @@ import {
   makeClearMemberMutation,
   makeSaveBundleMutation,
   makeSaveMemberMutation,
+  makeReportMissingMutation,
+  makeReceiveMissingMutation,
+  makeResolveMissingMutation,
   mergeMaterialMutation,
   saveMaterialQueue,
   type PendingMaterialMutation,
@@ -43,10 +48,12 @@ import type {
   BundleRecord,
   CreateTransferInput,
   MaterialPayload,
+  MaterialEventRecord,
   MemberCheckRecord,
   MemberCheckStatus,
   MemberRecord,
   RecordMissingReceiptInput,
+  CreateMissingMaterialInput,
   TransferRecord,
 } from "@/types/materials";
 
@@ -91,6 +98,8 @@ type Value = {
   receiveTransfer: (transfer: TransferRecord) => Promise<void>;
   cancelTransfer: (transfer: TransferRecord) => Promise<void>;
   recordMissingReceipt: (input: RecordMissingReceiptInput) => Promise<void>;
+  reportMissingMaterial: (input: Omit<CreateMissingMaterialInput,"projectId">) => Promise<void>;
+  resolveMissingMaterial: (input: { towerId: string; issueKey: string }) => Promise<void>;
 };
 
 const Ctx = createContext<Value | undefined>(undefined);
@@ -210,8 +219,14 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
             await clearBundleCheckApi(mutation.bundleId);
           } else if (mutation.kind === "save_member") {
             await saveMemberCheckApi(mutation.memberId, mutation.input);
-          } else {
+          } else if (mutation.kind === "clear_member") {
             await clearMemberCheckApi(mutation.memberId);
+          } else if (mutation.kind === "report_missing") {
+            await createMissingMaterialApi(mutation.input);
+          } else if (mutation.kind === "resolve_missing") {
+            await resolveMissingMaterialApi(mutation.input);
+          } else {
+            await recordMissingReceiptApi(mutation.input);
           }
         } catch {
           failed = true;
@@ -1154,17 +1169,40 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
 
   const recordMissingReceipt = useCallback(
     async (input: RecordMissingReceiptInput) => {
-      requireOnline();
       setBusyIssueKey(input.issueKey);
       try {
-        await recordMissingReceiptApi(input);
-        await load(true, true);
+        const queued = await enqueue(makeReceiveMissingMutation(input));
+        const receiptMutation=queued[queued.length-1];
+        const receiptInput=receiptMutation?.kind==="receive_missing"?receiptMutation.input:input;
+        if(dataRef.current&&projectId){
+          const source=dataRef.current.materialEvents.flatMap(event=>event.tower_material_event_items||[]).find(item=>item.issue_key===input.issueKey);
+          const towerId=dataRef.current.materialEvents.find(event=>event.tower_material_event_items?.some(item=>item.issue_key===input.issueKey))?.tower_id||"";
+          if(source){const pending:MaterialEventRecord={id:`pending:${receiptInput.clientMutationId}`,project_id:projectId,tower_id:towerId,event_type:"found_received",occurred_at:receiptInput.occurredAt||new Date().toISOString(),notes:receiptInput.notes||null,client_mutation_id:receiptInput.clientMutationId,tower_material_event_items:[{...source,id:`pending:${receiptInput.clientMutationId}`,source_issue_key:receiptInput.issueKey,quantity:receiptInput.quantity,notes:receiptInput.notes||null}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
+        }
+        if (online) {await flushQueue(queued);await load(true, true);}
       } finally {
         setBusyIssueKey(null);
       }
     },
-    [load, requireOnline],
+    [dataRef,enqueue, flushQueue, load, online,persist,projectId],
   );
+
+  const reportMissingMaterial = useCallback(async (input: Omit<CreateMissingMaterialInput,"projectId">) => {
+    if(!projectId) throw new Error("Select a project before reporting missing material.");
+    const queued=await enqueue(makeReportMissingMutation({...input,projectId}));
+    const mutation=queued.find(row=>row.id===queued[queued.length-1]?.id);
+    const local=mutation?.kind==="report_missing"?mutation.input:null;
+    if(local&&dataRef.current){const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:"outstanding",client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||local.category,material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
+    if(online){await flushQueue(queued);await load(true,true);}
+  },[dataRef,enqueue,flushQueue,load,online,persist,projectId]);
+
+  const resolveMissingMaterial = useCallback(async (input: { towerId: string; issueKey: string }) => {
+    if (!projectId) throw new Error("Select a project before resolving material.");
+    const queued = await enqueue(makeResolveMissingMutation({ ...input, projectId }));
+    const next = dataRef.current && { ...dataRef.current, materialEvents: dataRef.current.materialEvents.map((event) => event.tower_material_event_items?.some((item) => item.issue_key === input.issueKey) ? { ...event, issue_status: "resolved" } : event) };
+    if (next) { dataRef.current = next; setData(next); persist(next); }
+    if (online) { await flushQueue(queued); await load(true, true); }
+  }, [dataRef, enqueue, flushQueue, load, online, persist, projectId]);
 
   const isBundlePending = useCallback(
     (bundleId: unknown) => {
@@ -1229,6 +1267,8 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       receiveTransfer,
       cancelTransfer,
       recordMissingReceipt,
+      reportMissingMaterial,
+      resolveMissingMaterial,
     }),
     [
       sortedData,
@@ -1264,6 +1304,8 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       receiveTransfer,
       cancelTransfer,
       recordMissingReceipt,
+      reportMissingMaterial,
+      resolveMissingMaterial,
     ],
   );
 

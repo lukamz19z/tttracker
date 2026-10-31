@@ -784,6 +784,7 @@ export async function GET(request: Request) {
       loadOutstandingMobileMaterialIssues(
         service,
         towerId,
+        docketDate,
       ),
       loadMobileBundleTransferContext({
         service,

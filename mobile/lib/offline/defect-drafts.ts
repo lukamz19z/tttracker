@@ -14,6 +14,11 @@ export type DefectWorkingDraft = {
   clientReference: string;
   severity: "Minor" | "Major" | "Critical";
   assignedToUserId: string | null;
+  notifyUserIds?: string[];
+  requiredBy?: string;
+  workImpact?: string;
+  affectedActivity?: string;
+  urgencyNote?: string;
   photos: LocalQualityPhoto[];
   updatedAt: string;
 };

@@ -132,7 +132,7 @@ export async function GET(request: Request) {
       service
         .from("project_defect_notification_rules")
         .select(
-          "id,project_id,user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,receives_email,receives_in_app,receives_push,active,created_at,updated_at",
+          "id,project_id,user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,notify_assignment,receives_email,receives_in_app,receives_push,active,created_at,updated_at",
         )
         .eq("project_id", projectId)
         .order("created_at"),
@@ -165,6 +165,7 @@ export async function PUT(request: Request) {
       notifyAction?: boolean;
       notifyClosed?: boolean;
       notifyCritical?: boolean;
+      notifyAssignment?: boolean;
       receivesEmail?: boolean;
       receivesInApp?: boolean;
       receivesPush?: boolean;
@@ -196,6 +197,7 @@ export async function PUT(request: Request) {
       notify_action: body.notifyAction === true,
       notify_closed: body.notifyClosed !== false,
       notify_critical: body.notifyCritical !== false,
+      notify_assignment: body.notifyAssignment !== false,
       receives_email: body.receivesEmail !== false,
       receives_in_app: body.receivesInApp !== false,
       receives_push: body.receivesPush === true,

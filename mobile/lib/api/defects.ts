@@ -12,6 +12,15 @@ export type DefectAssignee = {
   role: string;
 };
 
+export type DefectWorkflowOptions = { workImpactOptions: string[]; affectedActivityOptions: string[] };
+export async function getDefectWorkflowOptions(projectId: string): Promise<DefectWorkflowOptions> {
+  const payload = await apiJson<Partial<DefectWorkflowOptions>>(`/api/quality/defects/options?projectId=${encodeURIComponent(projectId)}`);
+  return {
+    workImpactOptions: payload.workImpactOptions?.length ? payload.workImpactOptions : ["No Immediate Impact", "May Delay Work", "Blocks Work"],
+    affectedActivityOptions: payload.affectedActivityOptions?.length ? payload.affectedActivityOptions : ["Assembly", "Erection", "Revision", "Stringing", "Delivery", "Inspection", "Other"],
+  };
+}
+
 export type DefectActionRow = {
   id: string;
   defect_id: string;
@@ -37,6 +46,11 @@ export async function createDefect(body: {
   clientReference: string | null;
   severity: MobileDefectSeverity;
   assignedToUserId: string | null;
+  notifyUserIds?: string[];
+  requiredBy?: string | null;
+  workImpact?: string | null;
+  affectedActivity?: string | null;
+  urgencyNote?: string | null;
 }) {
   const response = await authenticatedFetch("/api/quality/defects", {
     method: "POST",
@@ -67,6 +81,11 @@ export async function patchDefect(
     status?: MobileDefectStatus;
     resolutionNotes?: string | null;
     assignedToUserId?: string | null;
+    notifyUserIds?: string[];
+    requiredBy?: string | null;
+    workImpact?: string | null;
+    affectedActivity?: string | null;
+    urgencyNote?: string | null;
   },
 ) {
   const response = await authenticatedFetch(

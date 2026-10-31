@@ -3,6 +3,7 @@
 import { qualityDisplayName } from "@/lib/quality/display-name";
 import { formatQualityDateTime, qualityCaptureLabel } from "@/lib/quality/date-time";
 import { browserPhotoCaptureTime } from "@/lib/quality/browser-capture";
+import { defectRequiredByDisplay, defectRequiredByState } from "@/lib/quality/defect-dates";
 
 import {
   AlertTriangle,
@@ -72,6 +73,11 @@ type DefectRow = {
   assigned_to_user_id: string | null;
   assigned_to_label: string | null;
   leg?: string | null;
+  required_by?: string | null;
+  work_impact?: string | null;
+  affected_activity?: string | null;
+  urgency_note?: string | null;
+  notify_user_ids?: string[] | null;
   created_at: string;
   updated_at: string | null;
   completed_by: string | null;
@@ -106,7 +112,6 @@ type DefectAction = {
 type DefectAssignee = {
   id: string;
   name: string;
-  email: string;
   role: string;
 };
 
@@ -123,6 +128,11 @@ type EditDraft = {
   status: DefectRow["status"];
   resolution_notes: string;
   assigned_to_user_id: string;
+  required_by: string;
+  work_impact: string;
+  affected_activity: string;
+  urgency_note: string;
+  notify_user_ids: string[];
 };
 
 type PhotoView = {
@@ -145,6 +155,11 @@ const BLANK_FORM = {
   client_reference: "",
   severity: "Minor" as DefectRow["severity"],
   assigned_to_user_id: "",
+  required_by: "",
+  work_impact: "No Immediate Impact",
+  affected_activity: "",
+  urgency_note: "",
+  notify_user_ids: [] as string[],
   files: [] as File[],
 };
 
@@ -179,9 +194,12 @@ export default function TowerDefectsPage() {
   const [issueManagerOpen, setIssueManagerOpen] = useState(false);
   const [notificationManagerOpen, setNotificationManagerOpen] = useState(false);
   const [assigneeOptions, setAssigneeOptions] = useState<DefectAssignee[]>([]);
+  const [workImpactOptions,setWorkImpactOptions]=useState(["No Immediate Impact","May Delay Work","Blocks Work"]);
+  const [activityOptions,setActivityOptions]=useState(["Assembly","Erection","Revision","Stringing","Delivery","Inspection","Other"]);
   const [form, setForm] = useState(BLANK_FORM);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Open");
+  const [urgencyFilter,setUrgencyFilter]=useState("All");
   const [message, setMessage] = useState<{
     tone: "success" | "error";
     text: string;
@@ -287,6 +305,9 @@ export default function TowerDefectsPage() {
           payload.error,
         );
       }
+      const optionsResponse=await apiFetch(`/api/quality/defects/options?projectId=${encodeURIComponent(projectId)}`);
+      const optionsPayload=await optionsResponse.json() as {workImpactOptions?:string[];affectedActivityOptions?:string[]};
+      if(optionsResponse.ok){if(optionsPayload.workImpactOptions?.length)setWorkImpactOptions(optionsPayload.workImpactOptions);if(optionsPayload.affectedActivityOptions?.length)setActivityOptions(optionsPayload.affectedActivityOptions);}
     } catch (error) {
       console.warn("Defect assignees could not be loaded", error);
     }
@@ -338,6 +359,10 @@ export default function TowerDefectsPage() {
     return rows.filter((row) => {
       const matchesStatus = statusFilter === "All" || row.status === statusFilter;
       if (!matchesStatus) return false;
+      const required=defectRequiredByState(row.required_by,row.status,projectTimeZone);
+      if(urgencyFilter==="Critical"&&row.severity!=="Critical")return false;
+      if(urgencyFilter==="Required Today"&&required?.relative!=="Required Today")return false;
+      if(urgencyFilter==="Overdue"&&!required?.overdue)return false;
       if (!query) return true;
       return [
         row.defect_number,
@@ -348,11 +373,12 @@ export default function TowerDefectsPage() {
         row.client_reference,
         row.responsibility,
         issueTypeName(row.issue_type_id),
+        row.work_impact,row.affected_activity,row.urgency_note,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
-  }, [issueTypeName, rows, search, statusFilter]);
+  }, [issueTypeName, rows, search, statusFilter,urgencyFilter,projectTimeZone]);
 
   function isHeic(file: File) {
     const name = file.name.toLowerCase();
@@ -421,6 +447,11 @@ export default function TowerDefectsPage() {
           clientReference: form.client_reference.trim() || null,
           severity: form.severity,
           assignedToUserId: form.assigned_to_user_id || null,
+          requiredBy:form.required_by.trim()||null,
+          workImpact:form.work_impact||null,
+          affectedActivity:form.affected_activity.trim()||null,
+          urgencyNote:form.urgency_note.trim()||null,
+          notifyUserIds:form.notify_user_ids,
           source: "manual",
         }),
       });
@@ -476,6 +507,11 @@ export default function TowerDefectsPage() {
       status: row.status,
       resolution_notes: row.resolution_notes || "",
       assigned_to_user_id: row.assigned_to_user_id || "",
+      required_by:row.required_by?defectRequiredByDisplay(row.required_by):"",
+      work_impact:row.work_impact||"No Immediate Impact",
+      affected_activity:row.affected_activity||"",
+      urgency_note:row.urgency_note||"",
+      notify_user_ids:row.notify_user_ids||[],
     });
   }
 
@@ -503,6 +539,11 @@ export default function TowerDefectsPage() {
             status: editDraft.status,
             resolutionNotes: editDraft.resolution_notes.trim() || null,
             assignedToUserId: editDraft.assigned_to_user_id || null,
+            requiredBy:editDraft.required_by.trim()||null,
+            workImpact:editDraft.work_impact||null,
+            affectedActivity:editDraft.affected_activity.trim()||null,
+            urgencyNote:editDraft.urgency_note.trim()||null,
+            notifyUserIds:editDraft.notify_user_ids,
           }),
         },
       );
@@ -970,6 +1011,9 @@ export default function TowerDefectsPage() {
               />
               <Field label="Drawing"><input value={form.drawing_number} onChange={(event) => setForm((current) => ({ ...current, drawing_number: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Severity"><select value={form.severity} onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value as DefectRow["severity"] }))} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
+              <Field label="Work impact"><select value={form.work_impact} onChange={event=>setForm(current=>({...current,work_impact:event.target.value}))} className="input"><option value="">Not specified</option>{workImpactOptions.map(value=><option key={value}>{value}</option>)}</select></Field>
+              <Field label="Required By · DD/MM/YYYY"><input value={form.required_by} onChange={event=>setForm(current=>({...current,required_by:event.target.value}))} placeholder="Optional · 01/11/2026" className="input"/></Field>
+              <Field label="Affected activity"><input list="defect-activities" value={form.affected_activity} onChange={event=>setForm(current=>({...current,affected_activity:event.target.value}))} placeholder="Choose or enter activity" className="input"/><datalist id="defect-activities">{activityOptions.map(value=><option key={value} value={value}/>)}</datalist></Field>
               <Field label="Assigned to">
                 <select
                   value={form.assigned_to_user_id}
@@ -993,6 +1037,8 @@ export default function TowerDefectsPage() {
               <Field label="Client / RFI reference"><input value={form.client_reference} onChange={(event) => setForm((current) => ({ ...current, client_reference: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Photos"><input type="file" multiple accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" onChange={(event) => setForm((current) => ({ ...current, files: Array.from(event.target.files ?? []) }))} className="input" /></Field>
             </div>
+            <div className="mt-3"><Field label="Urgency / impact note"><input value={form.urgency_note} onChange={event=>setForm(current=>({...current,urgency_note:event.target.value}))} placeholder="What work is at risk?" className="input"/></Field></div>
+            <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary><div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==form.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.notify_user_ids.includes(user.id)} onChange={event=>setForm(current=>({...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}))}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
             <div className="mt-3"><Field label="Defect description"><textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={4} placeholder="Describe what was identified and where." className="input" /></Field></div>
             <div className="mt-4 flex justify-end"><button type="button" onClick={() => void saveDefect()} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} Save Defect</button></div>
           </div>
@@ -1003,7 +1049,7 @@ export default function TowerDefectsPage() {
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search ID, member, segment, issue, drawing, reference…" className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm" />
           </div>
-          <div className="flex items-center gap-2"><Filter size={15} className="text-slate-400" /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option>All</option><option>Open</option><option>In Progress</option><option>Fixed</option><option>Closed</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Filter size={15} className="text-slate-400" /><select aria-label="Filter by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option>All</option><option>Open</option><option>In Progress</option><option>Fixed</option><option>Closed</option></select><select aria-label="Filter by urgency" value={urgencyFilter} onChange={event=>setUrgencyFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option>All</option><option>Critical</option><option>Required Today</option><option>Overdue</option></select></div>
         </div>
 
         <div className="overflow-x-auto">
@@ -1015,9 +1061,9 @@ export default function TowerDefectsPage() {
               {filteredRows.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100 align-top hover:bg-slate-50/70">
                   <td className="px-4 py-4"><div className="font-black text-slate-950">{row.defect_number || "Legacy Defect"}</div><div className="mt-1 text-xs text-slate-500">{row.client_reference || "No client reference"}</div></td>
-                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {qualityDisplayName(row.assigned_to_label)}</div> : null}{row.leg ? <div className="mt-1 text-xs text-slate-500">Leg {row.leg}</div> : null}</td>
+                  <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.urgency_note?<div className="mt-1 text-xs font-semibold text-slate-700">{row.urgency_note}</div>:null}{row.affected_activity?<div className="mt-1 text-xs text-slate-500">Activity: {row.affected_activity}</div>:null}{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {qualityDisplayName(row.assigned_to_label)}</div> : null}{row.leg ? <div className="mt-1 text-xs text-slate-500">Leg {row.leg}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600"><div><b>Segment:</b> {row.segment || "-"}</div><div><b>Member:</b> {row.member_number || "-"}</div><div><b>Drawing:</b> {row.drawing_number || "-"}</div></td>
-                  <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${severityClasses(row.severity)}`}>{row.severity}</span></td>
+                  <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${severityClasses(row.severity)}`}>{row.severity.toUpperCase()}</span>{row.work_impact?<div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[10px] font-black ${row.work_impact.toLowerCase().includes("block")?"bg-rose-100 text-rose-700":row.work_impact.toLowerCase().includes("delay")?"bg-amber-100 text-amber-800":"bg-slate-100 text-slate-600"}`}>{row.work_impact.toUpperCase()}</div>:null}{row.required_by?(()=>{const due=defectRequiredByState(row.required_by,row.status,projectTimeZone);return <div className={`mt-2 text-xs font-bold ${due?.overdue?"text-rose-700":"text-slate-600"}`}>{due?.overdue?"OVERDUE":due?.relative||"Required"} {defectRequiredByDisplay(row.required_by)}</div>;})():null}</td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${statusClasses(row.status)}`}>{row.status}</span>{row.status === "Closed" ? <div className="mt-2 text-[11px] text-slate-500">{row.completed_by || "-"}<br />{prettyDateTime(row.completed_at)}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600">{prettyDateTime(row.identified_at || row.created_at)}<div className="mt-1 text-slate-400">{row.identified_by_label || row.uploaded_by || "-"}</div></td>
                   <td className="px-4 py-4"><button type="button" onClick={() => void openPhotos(row)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Camera size={14} /> Photos {filesByDefect.get(row.id)?.length ? `(${filesByDefect.get(row.id)?.length})` : ""}</button></td>
@@ -1116,6 +1162,9 @@ export default function TowerDefectsPage() {
             />
             <Field label="Drawing"><input value={editDraft.drawing_number} onChange={(event) => setEditDraft((current) => current ? { ...current, drawing_number: event.target.value } : current)} className="input" /></Field>
             <Field label="Severity"><select value={editDraft.severity} onChange={(event) => setEditDraft((current) => current ? { ...current, severity: event.target.value as DefectRow["severity"] } : current)} className="input"><option>Minor</option><option>Major</option><option>Critical</option></select></Field>
+            <Field label="Work impact"><select value={editDraft.work_impact} onChange={event=>setEditDraft(current=>current?{...current,work_impact:event.target.value}:current)} className="input"><option value="">Not specified</option>{workImpactOptions.map(value=><option key={value}>{value}</option>)}</select></Field>
+            <Field label="Required By · DD/MM/YYYY"><input value={editDraft.required_by} onChange={event=>setEditDraft(current=>current?{...current,required_by:event.target.value}:current)} placeholder="Optional · 01/11/2026" className="input"/></Field>
+            <Field label="Affected activity"><input list="defect-activities-edit" value={editDraft.affected_activity} onChange={event=>setEditDraft(current=>current?{...current,affected_activity:event.target.value}:current)} className="input"/><datalist id="defect-activities-edit">{activityOptions.map(value=><option key={value} value={value}/>)}</datalist></Field>
             <Field label="Assigned to">
               <select
                 value={editDraft.assigned_to_user_id}
@@ -1143,6 +1192,8 @@ export default function TowerDefectsPage() {
             <Field label="Client / RFI reference"><input value={editDraft.client_reference} onChange={(event) => setEditDraft((current) => current ? { ...current, client_reference: event.target.value } : current)} className="input" /></Field>
           </div>
           <div className="mt-3"><Field label="Description"><textarea rows={4} value={editDraft.description} onChange={(event) => setEditDraft((current) => current ? { ...current, description: event.target.value } : current)} className="input" /></Field></div>
+          <div className="mt-3"><Field label="Urgency / impact note"><textarea rows={2} value={editDraft.urgency_note} onChange={event=>setEditDraft(current=>current?{...current,urgency_note:event.target.value}:current)} className="input"/></Field></div>
+          <details className="mt-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary><div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==editDraft.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editDraft.notify_user_ids.includes(user.id)} onChange={event=>setEditDraft(current=>current?{...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}:current)}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
           <div className="mt-3"><Field label="Resolution / close-out notes"><textarea rows={3} value={editDraft.resolution_notes} onChange={(event) => setEditDraft((current) => current ? { ...current, resolution_notes: event.target.value } : current)} className="input" /></Field></div>
           <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditDraft(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold">Cancel</button><button type="button" onClick={() => void saveEdit()} disabled={editSaving} className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{editSaving ? "Saving…" : "Save Changes"}</button></div>
         </Modal>

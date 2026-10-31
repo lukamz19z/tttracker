@@ -364,6 +364,7 @@ export async function syncMobileDocketMaterialEvents(args: {
 export async function loadOutstandingMobileMaterialIssues(
   service: SupabaseClient,
   towerId: string,
+  asOfDate?: string,
 ): Promise<MissingMaterialIssue[]> {
   const [missingResult, receivedResult] =
     await Promise.all([
@@ -421,8 +422,8 @@ export async function loadOutstandingMobileMaterialIssues(
   >();
 
   if (!receivedResult.error) {
-    for (const event of
-      receivedResult.data ?? []) {
+    for (const event of receivedResult.data ?? []) {
+      if(asOfDate && clean((event as any).occurred_at).slice(0,10)>asOfDate) continue;
       for (const item of
         (event as any).items ?? []) {
         const sourceIssueKey = clean(
@@ -445,8 +446,8 @@ export async function loadOutstandingMobileMaterialIssues(
   const issues: MissingMaterialIssue[] =
     [];
 
-  for (const event of
-    missingResult.data ?? []) {
+  for (const event of missingResult.data ?? []) {
+    if(asOfDate && clean((event as any).occurred_at).slice(0,10)>asOfDate) continue;
     for (const item of
       (event as any).items ?? []) {
       const issueKey = clean(

@@ -3,6 +3,7 @@ import { SyncStatus } from "@/components/sync/SyncStatus";
 import { enqueueDefectUpdate } from "@/lib/offline/quality-sync";
 import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
 import { qualityDisplayName } from "../../../lib/quality/display-name";
+import { defectRequiredByDisplay, defectRequiredByState } from "../../../lib/quality/defect-dates";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import {
@@ -57,13 +58,14 @@ import {
 import {
   addDefectAction,
   getDefectAssignees,
+  getDefectWorkflowOptions,
   type DefectActionRow,
   type DefectAssignee,
   type MobileDefectSeverity,
   type MobileDefectStatus,
 } from "@/lib/api/defects";
 import { supabase } from "@/lib/supabase";
-import type { LocalQualityPhoto } from "@/types/quality";
+import type { LocalQualityPhoto, QualityFile } from "@/types/quality";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -82,6 +84,11 @@ type EditState = {
   severity: MobileDefectSeverity;
   resolutionNotes: string;
   assignedToUserId: string | null;
+  notifyUserIds: string[];
+  requiredBy: string;
+  workImpact: string;
+  affectedActivity: string;
+  urgencyNote: string;
 };
 
 type Preview = {
@@ -117,7 +124,7 @@ function DefectDetailContent() {
   const [detailError, setDetailError] = useState<string | null>(null);
 
   const reloadDetail = useCallback(
-    async (_forceLive = false) => {
+    async () => {
       if (!projectId || !defectId) return;
 
       setDetailLoading(true);
@@ -158,7 +165,7 @@ function DefectDetailContent() {
   );
 
   useEffect(() => {
-    void reloadDetail(false);
+    void reloadDetail();
   }, [reloadDetail]);
 
   const defect = detail?.defect ?? null;
@@ -199,6 +206,10 @@ function DefectDetailContent() {
     useState(false);
   const [assigneePickerOpen, setAssigneePickerOpen] =
     useState(false);
+  const [workImpactPickerOpen, setWorkImpactPickerOpen] = useState(false);
+  const [activityPickerOpen, setActivityPickerOpen] = useState(false);
+  const [notifyPickerOpen, setNotifyPickerOpen] = useState(false);
+  const [workflowOptions, setWorkflowOptions] = useState<{workImpactOptions:string[];affectedActivityOptions:string[]}>({workImpactOptions:["No Immediate Impact","May Delay Work","Blocks Work"],affectedActivityOptions:["Assembly","Erection","Revision","Stringing","Delivery","Inspection","Other"]});
 
   const [photoModalOpen, setPhotoModalOpen] =
     useState(false);
@@ -294,6 +305,7 @@ function DefectDetailContent() {
 
   useEffect(() => {
     if (!projectId) return;
+    void getDefectWorkflowOptions(projectId).then(setWorkflowOptions).catch(()=>{});
     void getDefectAssignees(projectId)
       .then(setAssignees)
       .catch(() => setAssignees([]));
@@ -406,6 +418,11 @@ function DefectDetailContent() {
       assignedToUserId:
         clean(defect.assigned_to_user_id) ||
         null,
+      notifyUserIds: defect.notify_user_ids || [],
+      requiredBy: defect.required_by ? defectRequiredByDisplay(defect.required_by) : "",
+      workImpact: defect.work_impact || "",
+      affectedActivity: defect.affected_activity || "",
+      urgencyNote: defect.urgency_note || "",
     });
   }
 
@@ -441,9 +458,14 @@ function DefectDetailContent() {
             clean(edit.resolutionNotes) || null,
           assignedToUserId:
             clean(edit.assignedToUserId) || null,
+          notifyUserIds: edit.notifyUserIds,
+          requiredBy: edit.requiredBy.trim() || null,
+          workImpact: edit.workImpact || null,
+          affectedActivity: edit.affectedActivity.trim() || null,
+          urgencyNote: edit.urgencyNote.trim() || null,
         }});
       setEdit(null);
-      if(online) {await syncNow({manual:false});await reloadDetail(true);}
+      if(online) {await syncNow({manual:false});await reloadDetail();}
       Alert.alert("Changes saved", "Pending updates remain queued until the server confirms them.");
     } catch (error) {
       Alert.alert(
@@ -550,13 +572,13 @@ function DefectDetailContent() {
       await enqueueDefectUpdate({projectId,towerId,defectId,photos:lifecyclePhotos,patch:{status:targetStatus,...(mode!=="reopen"?{resolutionNotes:comment}:{})}});
       if(online) await syncNow({manual:false});
       setLifecycleMode(null);setLifecyclePhotos([]);setLifecycleComment("");
-      if(online) await reloadDetail(true);
+      if(online) await reloadDetail();
       Alert.alert("Saved for sync","Evidence is uploaded before the controlled status change. Pending work is retained until the server confirms it.");
     }catch(error){Alert.alert("Changes remain pending",error instanceof Error?error.message:"Tap Sync now to retry.");}
     finally{setLifecycleSaving(false);}
   }
 
-  async function openFile(file: any) {
+  async function openFile(file: QualityFile) {
     try {
       const uri = await downloadQualityFile(
         clean(file.id),
@@ -590,7 +612,7 @@ function DefectDetailContent() {
       if(online) await syncNow({manual:false});
       setNewPhotos([]);
       setPhotoModalOpen(false);
-      await reloadDetail(true);
+      await reloadDetail();
     } catch (error) {
       Alert.alert(
         "Photos could not be uploaded",
@@ -661,6 +683,7 @@ function DefectDetailContent() {
           value={defect.status}
         />
       </View>
+      {defect.required_by ? <View style={styles.urgencyCard}><Text style={styles.urgencyText}>{defectRequiredByState(defect.required_by,defect.status,data?.project?.timezone)?.overdue ? "OVERDUE · " : "Required "}{defectRequiredByState(defect.required_by,defect.status,data?.project?.timezone)?.relative || ""} · {defectRequiredByDisplay(defect.required_by)}</Text>{defect.work_impact?<Text style={styles.urgencyImpact}>{defect.work_impact}</Text>:null}{defect.urgency_note?<Text style={styles.helper}>{defect.urgency_note}</Text>:null}</View>:null}
 
       <View style={styles.infoCard}>
         <Info label="Leg" value={defect.leg || "Not specified"} />
@@ -686,6 +709,7 @@ function DefectDetailContent() {
             defect.assigned_to_user_id ? qualityDisplayName(defect.assigned_to_label) : "Unassigned"
           }
         />
+        {defect.affected_activity?<Info label="Affected activity" value={defect.affected_activity}/>:null}
         <Info
           label="Responsibility"
           value={
@@ -991,6 +1015,15 @@ function DefectDetailContent() {
                 }
               />
 
+              <FieldLabel text="Work impact" />
+              <Pressable style={styles.selector} onPress={()=>setWorkImpactPickerOpen(true)}><Text style={styles.selectorText}>{edit.workImpact||"Not specified"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+              <FieldLabel text="Required By · DD/MM/YYYY" />
+              <TextInput value={edit.requiredBy} onChangeText={requiredBy=>setEdit(current=>current?({...current,requiredBy}):null)} placeholder="Optional · 01/11/2026" keyboardType="numbers-and-punctuation" style={styles.input}/>
+              <FieldLabel text="Affected activity" />
+              <Pressable style={styles.selector} onPress={()=>setActivityPickerOpen(true)}><Text style={styles.selectorText}>{edit.affectedActivity||"Not specified"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+              <FieldLabel text="Urgency / impact note" />
+              <TextInput value={edit.urgencyNote} onChangeText={urgencyNote=>setEdit(current=>current?({...current,urgencyNote}):null)} placeholder="What work is at risk?" style={styles.input}/>
+
               <FieldLabel text="Severity" />
               <Pressable
                 style={styles.selector}
@@ -1026,6 +1059,9 @@ function DefectDetailContent() {
                   color="#64748b"
                 />
               </Pressable>
+              <FieldLabel text="Also notify (optional)" />
+              {edit.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setEdit(current=>current?({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}):null)} style={styles.recipientChip}><Text style={styles.recipientChipText}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
+              <Pressable style={styles.selector} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>{edit.notifyUserIds.length?`${edit.notifyUserIds.length} additional recipient${edit.notifyUserIds.length===1?"":"s"}`:"Choose people"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 
               <FieldLabel text="Responsibility" />
               <TextInput
@@ -1139,6 +1175,10 @@ function DefectDetailContent() {
                 setIssuePickerOpen(false);
               }}
             />
+
+            <QualitySelector visible={workImpactPickerOpen} title="Work impact" options={[{id:"",label:"Not specified"},...workflowOptions.workImpactOptions.map(value=>({id:value,label:value}))]} onClose={()=>setWorkImpactPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,workImpact:option.id}):null);setWorkImpactPickerOpen(false);}}/>
+            <QualitySelector visible={activityPickerOpen} title="Affected activity" options={[{id:"",label:"Not specified"},...workflowOptions.affectedActivityOptions.map(value=>({id:value,label:value}))]} onClose={()=>setActivityPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,affectedActivity:option.id}):null);setActivityPickerOpen(false);}}/>
+            <QualitySelector visible={notifyPickerOpen} title="Also notify" options={assignees.filter(person=>person.id!==edit.assignedToUserId&&!edit.notifyUserIds.includes(person.id)).map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} onClose={()=>setNotifyPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,notifyUserIds:[...current.notifyUserIds,option.id]}):null);setNotifyPickerOpen(false);}}/>
 
             <QualitySelector
               visible={severityPickerOpen}
@@ -1385,6 +1425,8 @@ function DefectDetailContent() {
                 source={{ uri: preview.uri }}
                 style={styles.previewImage}
                 contentFit="contain"
+                accessibilityLabel={preview.name}
+                alt={preview.name}
               />
             ) : null}
             <Text style={styles.previewName}>
@@ -1454,6 +1496,11 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
+  urgencyCard:{borderRadius:14,borderWidth:1,borderColor:"#fecaca",backgroundColor:"#fff7ed",padding:12,gap:4},
+  urgencyText:{fontSize:13,fontWeight:"900",color:"#9a3412"},
+  urgencyImpact:{alignSelf:"flex-start",borderRadius:999,backgroundColor:"#fee2e2",paddingHorizontal:9,paddingVertical:4,color:"#991b1b",fontSize:11,fontWeight:"900"},
+  recipientChip:{alignSelf:"flex-start",borderRadius:999,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#f8fafc",paddingHorizontal:11,paddingVertical:7,marginBottom:6},
+  recipientChipText:{fontSize:12,fontWeight:"700",color:"#334155"},
   infoCard: {
     flexDirection: "row",
     flexWrap: "wrap",

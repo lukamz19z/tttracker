@@ -183,13 +183,15 @@ export async function GET(request: Request) {
       kind === "all" || kind === "bolt"
         ? service
             .from("tower_material_bolts")
-            .select("id,tower_id,tower_segment,bolt_diameter,dn_sn,length,qty")
+            .select("id,tower_id,item_type,tower_segment,drawing_number,bolt_diameter,dn_sn,length,packer_no,packer_mark,qty")
             .in("tower_id", towerIds)
             .or(
               [
                 `bolt_diameter.ilike.${pattern}`,
                 `dn_sn.ilike.${pattern}`,
                 `length.ilike.${pattern}`,
+                `packer_no.ilike.${pattern}`,
+                `packer_mark.ilike.${pattern}`,
                 `tower_segment.ilike.${pattern}`,
               ].join(","),
             )
@@ -274,16 +276,20 @@ export async function GET(request: Request) {
       const towerId = cleanMaterialValue(raw.tower_id);
       const diameter = cleanMaterialValue(raw.bolt_diameter);
       const length = cleanMaterialValue(raw.length);
+      const isPacker = cleanMaterialValue(raw.item_type) === "packer";
 
       results.push({
         kind: "bolt",
         id: cleanMaterialValue(raw.id),
         towerId,
         towerName: towerNames.get(towerId) ?? "Tower",
-        title: [diameter, length].filter(Boolean).join(" × ") || "Bolt",
+        title: isPacker
+          ? `${[diameter, cleanMaterialValue(raw.packer_no)].filter(Boolean).join(" mm ")} Packer${raw.packer_mark ? ` · ${cleanMaterialValue(raw.packer_mark)}` : ""}`
+          : [diameter, length].filter(Boolean).join(" × ") || "Bolt",
         subtitle: [
-          cleanMaterialValue(raw.dn_sn),
+          isPacker ? cleanMaterialValue(raw.packer_mark) : cleanMaterialValue(raw.dn_sn),
           cleanMaterialValue(raw.tower_segment),
+          cleanMaterialValue(raw.drawing_number),
         ]
           .filter(Boolean)
           .join(" · "),

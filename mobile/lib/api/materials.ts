@@ -6,6 +6,7 @@ import type {
   MaterialPayload,
   MemberCheckRecord,
   RecordMissingReceiptInput,
+  CreateMissingMaterialInput,
   SaveBundleCheckInput,
   SaveMemberCheckInput,
   TransferRecord,
@@ -178,4 +179,24 @@ export async function recordMissingReceipt(
     response,
     "Missing material receipt could not be recorded.",
   );
+}
+
+export async function createMissingMaterial(input: CreateMissingMaterialInput) {
+  const response = await apiFetch("/api/mobile/materials/missing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    timeoutMs: 30_000,
+  });
+  return readJson<{ ok: boolean; issue: { event_id: string; issue_key: string; duplicate: boolean } }>(response, "Missing material could not be reported.");
+}
+
+export async function resolveMissingMaterial(input: { projectId: string; towerId: string; issueKey: string }) {
+  const response = await apiFetch("/api/mobile/materials/missing/resolve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    timeoutMs: 30_000,
+  });
+  await readJson<{ ok: boolean }>(response, "Missing material could not be resolved.");
 }

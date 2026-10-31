@@ -37,6 +37,11 @@ export type OfflineDefectCreate = {
   clientReference: string | null;
   severity: DefectSeverity;
   assignedToUserId: string | null;
+  notifyUserIds?: string[];
+  requiredBy?: string | null;
+  workImpact?: string | null;
+  affectedActivity?: string | null;
+  urgencyNote?: string | null;
   photos: LocalQualityPhoto[];
 };
 export type OfflineDefectUpdate = {projectId:string;towerId:string;defectId:string;photos:LocalQualityPhoto[];patch?:Parameters<typeof updateDefect>[1]};

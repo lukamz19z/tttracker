@@ -55,10 +55,14 @@ export type MemberRecord = MaterialRow & {
 export type BoltRecord = MaterialRow & {
   id?: string | null;
   tower_id: string;
+  item_type?: "bolt" | "packer" | string | null;
   tower_segment?: string | null;
+  drawing_number?: string | null;
   bolt_diameter?: string | null;
   dn_sn?: string | null;
   length?: string | null;
+  packer_no?: string | null;
+  packer_mark?: string | null;
   qty?: number | null;
 };
 
@@ -119,6 +123,11 @@ export type MaterialEventItemRecord = MaterialRow & {
   notes?: string | null;
   issue_key?: string | null;
   source_issue_key?: string | null;
+  material_category?: string | null;
+  specification?: string | null;
+  segment?: string | null;
+  member_number?: string | null;
+  drawing_number?: string | null;
 };
 
 export type MaterialEventRecord = MaterialRow & {
@@ -136,6 +145,11 @@ export type MaterialEventRecord = MaterialRow & {
   affected_section?: string | null;
   current_effect?: string | null;
   notes?: string | null;
+  urgency?: string | null;
+  required_by?: string | null;
+  issue_status?: string | null;
+  created_by_user_id?: string | null;
+  client_mutation_id?: string | null;
   tower_material_event_items?: MaterialEventItemRecord[] | null;
 };
 
@@ -200,4 +214,30 @@ export type RecordMissingReceiptInput = {
   issueKey: string;
   quantity: number;
   notes?: string;
+  clientMutationId?: string;
+  deliveryReference?: string;
+  occurredAt?: string;
+};
+
+export type CreateMissingMaterialInput = {
+  projectId: string;
+  towerId: string;
+  clientMutationId: string;
+  itemReference: string;
+  description: string;
+  quantity: number;
+  unit?: string;
+  category?: string;
+  specification?: string;
+  sourceTable?: string;
+  sourceRecordId?: string;
+  materialType?: string;
+  boltSize?: string;
+  segment?: string;
+  memberNumber?: string;
+  drawingNumber?: string;
+  urgency?: string;
+  requiredBy?: string | null;
+  notes?: string;
+  occurredAt?: string;
 };
