@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
 import { qualityPdfName } from "@/lib/quality/file-names";
 import { qualityTimeZone } from "@/lib/quality/date-time";
+import { populatedDetailEntries, type DetailSchema } from "@/lib/quality/operational-details";
 
 import { loadSystemPdfBranding } from "@/lib/branding/server";
 import {
@@ -140,14 +141,14 @@ export async function POST(request: Request, context: RouteContext) {
         service
           .from("tower_revision_items")
           .select(
-            "id,source_type,external_reference,source_date,inspector_name,imported_by_label,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
+            "id,source_type,external_reference,source_date,inspector_name,imported_by_label,inspector_comment,actioned_by_label,actioned_at,item_number,fli_number,leg,assigned_flag,issue_type_id,other_issue_text,tower_segment,member_number,drawing_number,finding,rectification_comment,operational_details,status,before_taken_at,before_taken_by_label,after_taken_at,after_taken_by_label,sort_order",
           )
           .eq("revision_id", revision.id)
           .order("sort_order")
           .order("item_number"),
         service
           .from("project_field_issue_types")
-          .select("id,name")
+          .select("id,name,detail_schema")
           .eq("project_id", revision.project_id),
         service
           .from("tower_quality_files")
@@ -169,6 +170,7 @@ export async function POST(request: Request, context: RouteContext) {
     const issueTypeMap = new Map(
       (issueTypeResult.data ?? []).map((item) => [item.id, item.name]),
     );
+    const issueSchemaMap = new Map((issueTypeResult.data ?? []).map((item) => [item.id, item.detail_schema as DetailSchema|null]));
 
     if (items.length === 0) {
       return NextResponse.json(
@@ -241,6 +243,8 @@ export async function POST(request: Request, context: RouteContext) {
         towerSegment: item.tower_segment,
         memberNumber: item.member_number,
         drawingNumber: item.drawing_number,
+        operationalDetails:item.operational_details,
+        operationalDetailFields:populatedDetailEntries(issueSchemaMap.get(item.issue_type_id)||null,item.operational_details),
         inspectorName:item.inspector_name,importedByLabel:item.imported_by_label,sourceType:item.source_type,externalReference:item.external_reference,sourceDate:item.source_date,inspectorComment:item.inspector_comment,actionedBy:item.actioned_by_label,actionedAt:item.actioned_at,
         finding: String(item.finding ?? ""),
         rectificationComment: String(item.rectification_comment ?? ""),

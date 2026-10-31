@@ -11,6 +11,7 @@ export type FieldItem = {
   tower_segment?: string | null; issue_type_id?: string | null; other_issue_text?: string | null;
   assigned_flag?: string | null; source_type?: string | null; external_reference?: string | null;
   member_number?: string | null; leg?: string | null; finding?: string | null;
+  drawing_number?: string | null;
   rectification_comment?: string | null; operational_details?: DetailValues | null;
 };
 export type FieldRow<T extends FieldItem = FieldItem> = { item: T; section: string; defectType: string; issueName: string; workflow: string; source: string; assignment: string; search: string };

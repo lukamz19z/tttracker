@@ -1,7 +1,6 @@
 import { FieldFindingCard } from "@/components/quality/FieldFindingCard";
-import { findingReadiness } from "../../../lib/quality/finding-readiness";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
-import { QualityEvidenceGallery, QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
+import { QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { fieldListRows, filterFieldRows, groupFieldRows, fieldStateKey } from "../../../lib/quality/field-list";
 import { materialRequirements, validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../lib/quality/operational-details";
 import { OperationalDetailFields } from "@/components/quality/OperationalDetailFields";
@@ -23,7 +22,6 @@ import {
   Camera,
   ChevronDown,
   Plus,
-  Send,
   Wrench,
   X,
 } from "lucide-react-native";
@@ -697,18 +695,6 @@ export default function RevisionDetailScreen() {
   ]);
 
 
-  function issueName(item: QualityRevisionItem) {
-    return (
-      (item.issue_type_id
-        ? data?.issueTypes?.find(
-            (row) => row.id === item.issue_type_id,
-          )?.name
-        : null) ||
-      clean(item.other_issue_text) ||
-      "Other"
-    );
-  }
-
   function openAddFinding() {
     setFindingForm({...BLANK_FINDING,...nextFindingLocation(workspace?.workingLocation)});
     setFindingModalOpen(true);
@@ -1024,10 +1010,10 @@ export default function RevisionDetailScreen() {
     <QualityShell
       permission="mobile.rectifications"
       title={title}
-      virtualRows={serverRevision?.source_type === "punchlist" ? fieldGroups.flatMap(group => [
+      virtualRows={fieldGroups.flatMap(group => [
         { id: `group:${group.label}`, content: <Text style={styles.title}>{group.label} · {group.rows.length}</Text> },
-        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} locked={Boolean(serverRevision.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision.status)} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision.id)}/${encodeURIComponent(row.item.id)}`)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
-      ]) : undefined}
+        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
+      ])}
       subtitle={`${revisionItems.length + pendingFindingCount} FLI${revisionItems.length + pendingFindingCount === 1 ? "" : "s"} · ${online ? "Online" : "Offline"}`}
     >
       <View style={styles.revisionCard}>
@@ -1083,17 +1069,12 @@ export default function RevisionDetailScreen() {
         ) : null}
       </View>
 
-      <Pressable style={[styles.addFinding, { backgroundColor: "#047857" }]} onPress={() => void finalise()}><Text style={styles.addFindingText}>{workspace?.finalisedAt || serverRevision?.finalised_at ? "Finalised - ready to submit" : workspace?.finaliseRequested ? "Pending sync - Finalise when synced" : online ? "Finalise Rectification" : "Finalise when synced"}</Text></Pressable>
-      <Pressable style={styles.addFinding} onPress={() => void syncNow().then(()=>reloadDetail())}><Text style={styles.addFindingText}>Sync now</Text></Pressable>
-      <Pressable
-        style={styles.addFinding}
-        onPress={openAddFinding}
-      >
-        <Plus size={18} color="#fff" />
-        <Text style={styles.addFindingText}>
-          Add Manual FLI
-        </Text>
-      </Pressable>
+      <View style={{flexDirection:"row",gap:8,alignItems:"center",paddingVertical:5}}>
+        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:1,minHeight:46,marginVertical:0}]} onPress={openAddFinding}><Plus size={17} color="#fff"/><Text style={[styles.addFindingText,{fontSize:14}]}>Add FLI</Text></Pressable>
+        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:0,minWidth:82,minHeight:46,marginVertical:0,backgroundColor:"#334155"}]} onPress={()=>void syncNow().then(()=>reloadDetail())}><Text style={[styles.addFindingText,{fontSize:12}]}>{syncing?"Syncing…":failedCount?`Retry ${failedCount}`:pendingFindingCount?`Sync ${pendingFindingCount}`:"Synced"}</Text></Pressable>
+        {serverRevision&&!['Ready for Review','Closed'].includes(serverRevision.status)?<Pressable accessibilityRole="button" disabled={submitBusy} style={[styles.addFinding,{flex:0,minWidth:86,minHeight:46,marginVertical:0,backgroundColor:"#0369a1",opacity:submitBusy?0.65:1}]} onPress={()=>void submit()}><Text style={[styles.addFindingText,{fontSize:12}]}>{submitBusy?"Sending…":"Submit Review"}</Text></Pressable>:null}
+        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:0,minWidth:60,minHeight:46,marginVertical:0,backgroundColor:"#475569"}]} onPress={()=>Alert.alert("Rectification actions",workspace?.finalisedAt||serverRevision?.finalised_at?"This Rectification is finalised.":"Finalise the Rectification when field work is complete.",[{text:"Cancel",style:"cancel"},{text:workspace?.finalisedAt||serverRevision?.finalised_at?"Done":"Finalise",onPress:()=>{if(!workspace?.finalisedAt&&!serverRevision?.finalised_at)void finalise();}}])}><Text style={[styles.addFindingText,{fontSize:12}]}>More</Text></Pressable>
+      </View>
 
       {workspace?.findings.filter(finding=>serverRevision?.source_type!=="punchlist" || filteredRows.some(row=>row.item.id===finding.clientMutationId)).map(
         (finding) => (
@@ -1194,13 +1175,12 @@ export default function RevisionDetailScreen() {
         ),
       )}
 
-      {serverRevision?.source_type === "punchlist" ? <>
-        <View style={styles.card}>
+      {serverRevision?.source_type === "punchlist" ? <View style={styles.card}>
           <View style={styles.head}><View style={styles.grow}><Text style={styles.issueName}>Offline Punchlist pack</Text><Text style={styles.meta}>{offlinePack?.status==="ready"?"✓ Available Offline":offlinePack?.status==="preparing"?`Preparing offline pack · ${offlinePack.previews?Math.floor(offlinePack.cachedPreviews/offlinePack.previews*100):100}%`:"Preparing required findings and Before previews"}</Text></View><Pressable onPress={()=>void prepareOfflinePack(true)} disabled={!online || offlinePackBusy} style={[styles.photoButton,(!online || offlinePackBusy)&&{opacity:0.5}]}><Text style={styles.photoText}>{offlinePack?.status==="ready"?"Refresh Offline Pack":"Download for Offline"}</Text></Pressable></View>
           {offlinePack?<><Text style={styles.meta}>{offlinePack.cachedFindings} / {offlinePack.findings} findings · {offlinePack.cachedPreviews} / {offlinePack.previews} photo previews</Text>{offlinePack.failedFileIds.length>0?<Pressable disabled={!online || offlinePackBusy} onPress={()=>void prepareOfflinePack(true)}><Text style={styles.notes}>Retry {offlinePack.failedFileIds.length}</Text></Pressable>:null}</>:null}
           <Pressable onPress={()=>setOfflineStorageOpen(true)}><Text style={styles.meta}>Offline Storage · {offlineStorage.packs.length} cached Punchlists · {offlineStorage.megabytes} MB · Manage</Text></Pressable>
           {offlineSettings?<View style={{gap:4,marginTop:4}}><View style={styles.head}><Text style={styles.meta}>Auto-cache on open</Text><Switch value={offlineSettings.autoCacheOnOpen && !offlineSettings.manualOnly} onValueChange={value=>{const next={autoCacheOnOpen:value,manualOnly:!value};setOfflineSettings({...offlineSettings,...next});void saveQualityOfflineSettings(projectId,next);}}/></View><View style={styles.head}><Text style={styles.meta}>Wi-Fi only</Text><Switch value={offlineSettings.wifiOnly} onValueChange={value=>{setOfflineSettings({...offlineSettings,wifiOnly:value});void saveQualityOfflineSettings(projectId,{wifiOnly:value});}}/></View></View>:null}
-        </View>
+        </View> : null}
         <FieldListControls rows={fieldRows} state={fieldState.state} onChange={fieldState.update} disabled={!fieldState.ready} sections={Array.from(new Set([...memberCatalog.map(member=>member.towerSegment || ""),...fieldRows.map(row=>row.section)].filter(Boolean)))} issueTypes={(data?.issueTypes || []).filter(issue=>["revision","both"].includes(issue.applies_to))}/>
         {fieldState.error ? <Text style={styles.notes}>{fieldState.error}</Text> : null}
         <View style={styles.card}>
@@ -1212,138 +1192,6 @@ export default function RevisionDetailScreen() {
           <Text style={styles.meta}>Structured quantities only. Packer quantities are stated action quantities, not an inferred difference.</Text>
         </View>
         {!filteredRows.length ? <Text style={styles.notes}>No FLIs match these filters.</Text> : null}
-      </> : null}
-      {revisionItems.filter(()=>serverRevision?.source_type!=="punchlist").map((item, index) => {
-        const fli =
-          clean(item.fli_number) ||
-          `FLI-${String(
-            Number(
-              item.item_number ?? index + 1,
-            ),
-          ).padStart(3, "0")}`;
-
-        const evidence = revisionFiles.filter(
-          (file) =>
-            clean(file.revision_item_id) ===
-            item.id &&
-            ["before_photo", "after_photo"].includes(
-              clean(file.file_role),
-            ),
-        );
-
-        const pendingUpdate =
-          workspace?.pendingUpdates.find(
-            (row) => row.itemId === item.id,
-          );
-
-        return (
-          <View key={item.id} style={styles.card}>
-            <Pressable accessibilityLabel={`${fli} actions`} hitSlop={8} style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>confirmDeleteFinding(fli,item.id,item.mobile_client_mutation_id || undefined)}><Text style={{fontSize:24}}>⋯</Text></Pressable>
-            <View style={styles.head}>
-              <View style={styles.grow}>
-                <Text style={styles.fli}>
-                  {fli}
-                </Text>
-                <Text style={styles.issueName}>
-                  {issueName(item)}
-                </Text>
-              </View>
-
-              <QualityStatusPill
-                value={
-                  pendingUpdate?.status ??
-                  findingReadiness(item,evidence.filter(file=>file.file_role==="before_photo").length,evidence.filter(file=>file.file_role==="after_photo").length).workflow
-                }
-              />
-            </View>
-
-            <Text style={styles.meta}>
-              {[
-                item.member_number
-                  ? `Member ${item.member_number}`
-                  : "",
-                item.leg && `Leg ${item.leg}`, item.assigned_flag && `Flag ${item.assigned_flag}`,
-                item.tower_segment,
-                item.drawing_number
-                  ? `Drawing ${item.drawing_number}`
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </Text>
-
-            {clean(item.finding) ? (
-              <Text style={styles.finding}>
-                {clean(item.finding)}
-              </Text>
-            ) : null}
-
-            {clean(
-              pendingUpdate?.rectificationComment ??
-                item.rectification_comment,
-            ) ? (
-              <Text style={styles.rectificationText}>
-                Rectification:{" "}
-                {clean(
-                  pendingUpdate?.rectificationComment ??
-                    item.rectification_comment,
-                )}
-              </Text>
-            ) : null}
-
-            <QualityEvidenceGallery files={evidence} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review","Closed"].includes(serverRevision?.status || "") || item.status==="Verified"} onChanged={()=>void reloadDetail()}/>
-            <View style={styles.evidenceRow}>
-              {pendingUpdate?.afterPhotos.map(
-                (photo, photoIndex) => (
-                  <Pressable
-                    key={photo.id}
-                    style={styles.photoButton}
-                    onPress={() =>
-                      openLocalPhoto(photo, "AFTER")
-                    }
-                  >
-                    <Camera
-                      size={14}
-                      color="#0f172a"
-                    />
-                    <Text style={styles.photoText}>
-                      Pending After{" "}
-                      {photoIndex + 1}
-                    </Text>
-                  </Pressable>
-                ),
-              )}
-            </View>
-
-            {item.status !== "Verified" ? (
-              <Pressable
-                style={styles.rectifyButton}
-                onPress={() =>
-                  setRectification({
-                    item,
-                    rectificationComment:
-                      clean(
-                        item.rectification_comment,
-                      ),
-                    afterPhotos: [],
-                  })
-                }
-              >
-                <Wrench
-                  size={15}
-                  color="#334155"
-                />
-                <Text
-                  style={styles.rectifyText}
-                >
-                  Add After Photos / Rectify
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
-        );
-      })}
-
       {!revisionItems.length &&
       !pendingFindingCount ? (
         <View style={styles.empty}>
@@ -1356,29 +1204,6 @@ export default function RevisionDetailScreen() {
             revisited later.
           </Text>
         </View>
-      ) : null}
-
-      {serverRevision &&
-      !["Ready for Review", "Closed"].includes(
-        clean(serverRevision.status),
-      ) ? (
-        <Pressable
-          style={[
-            styles.submit,
-            submitBusy && styles.disabled,
-          ]}
-          disabled={submitBusy}
-          onPress={() => void submit()}
-        >
-          {submitBusy ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Send size={18} color="#fff" />
-          )}
-          <Text style={styles.submitText}>
-            Submit for Review
-          </Text>
-        </Pressable>
       ) : null}
 
       {!serverRevision ? (

@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import { formatQualityDateTime, qualityCaptureLabel } from "./date-time";
 import { sourceDateDisplay } from "./punchlist-import-values";
+import type { DetailValues } from "./operational-details";
 
 export type RevisionPdfBranding = {
   logoDataUrl?: string | null;
@@ -47,6 +48,8 @@ export type RevisionPdfItem = {
   towerSegment?: string | null;
   memberNumber?: string | null;
   drawingNumber?: string | null;
+  operationalDetails?: DetailValues | null;
+  operationalDetailFields?: {key:string;label:string;value:string}[];
   finding?: string | null;
   rectificationComment?: string | null;
   status: string;
@@ -400,6 +403,8 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     iy += 3;
     const audit=[item.sourceType==="punchlist"?"Punchlist":"Manual",item.externalReference && `External: ${item.externalReference}`,item.sourceDate && `Source Date: ${sourceDateDisplay(item.sourceDate)}`,item.inspectorName && `Inspector: ${item.inspectorName}`,item.importedByLabel && `Imported By: ${item.importedByLabel}`,item.actionedBy && `Actioned by: ${item.actionedBy}`,item.actionedAt && formatQualityDateTime(item.actionedAt,data.timeZone)].filter(Boolean).join(" / ");
     const auditLines=doc.splitTextToSize(audit,contentWidth) as string[];doc.text(auditLines,margin,iy);iy+=auditLines.length*3.5+5;
+    const detailLines=item.operationalDetailFields||[];
+    if(detailLines.length){doc.setFont("helvetica","bold");doc.setFontSize(8);setText(C.slate);doc.text("OPERATIONAL DETAILS",margin,iy);iy+=4;doc.setFont("helvetica","normal");doc.setFontSize(8);setText(C.navy);for(const entry of detailLines.slice(0,12)){const line=`${entry.label}: ${entry.value}`;const wrapped=doc.splitTextToSize(line,contentWidth) as string[];doc.text(wrapped,margin,iy);iy+=wrapped.length*3.7;}iy+=3;}
     drawPhoto(item.beforePhotos[0], margin, iy, 88, 76, `BEFORE - ${item.beforePhotos.length?1:0} of ${item.beforePhotos.length}`);
     drawPhoto(item.afterPhotos[0], margin + 96, iy, 88, 76, `AFTER - ${item.afterPhotos.length?1:0} of ${item.afterPhotos.length}`);
     iy += 84;

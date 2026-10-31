@@ -18,6 +18,10 @@ export type DetailSchema = {
     actionField?: string;
   };
 };
+export function populatedDetailEntries(schema:DetailSchema|undefined|null,values:DetailValues|undefined|null) {
+  if(!schema?.fields?.length || !values)return [];
+  return schema.fields.flatMap(field=>{const value=values[field.key];if(value===undefined||value===""||Array.isArray(value)&&!value.length)return [];const text=Array.isArray(value)?value.join(", "):typeof value==="boolean"?(value?"Yes":"No"):String(value);return [{key:field.key,label:field.label,value:field.unit?`${text} ${field.unit}`:text}];});
+}
 export const EMPTY_DETAIL_SCHEMA: DetailSchema = { fields: [] };
 
 export function validateDetailSchema(input: unknown): string | null {

@@ -7,6 +7,8 @@ import { uploadBrowserEvidence, emptyCaptureDetails, type CaptureDetails } from 
 import EvidenceCaptureFields from "@/components/quality/EvidenceCaptureFields";
 import { findingReadiness } from "@/lib/quality/finding-readiness";
 import { qualityDisplayName } from "@/lib/quality/display-name";
+import { OperationalDetailEditor } from "@/components/quality/OperationalDetailEditor";
+import { populatedDetailEntries, type DetailSchema, type DetailValues } from "@/lib/quality/operational-details";
 
 import {
   Camera,
@@ -54,6 +56,7 @@ type IssueType = {
   name: string;
   active: boolean;
   sort_order: number;
+  detail_schema?: DetailSchema | null;
 };
 
 type RevisionRow = {
@@ -109,6 +112,7 @@ type RevisionItem = {
   after_taken_at: string | null;
   after_taken_by_label: string | null;
   sort_order: number;
+  operational_details?: DetailValues | null;
   created_at: string;
 };
 
@@ -144,6 +148,7 @@ type FindingDraft = {
   drawing_number: string;
   finding: string;
   rectification_comment: string;
+  operational_details: DetailValues;
   beforeFiles: File[];
   afterFiles: File[];
 };
@@ -160,6 +165,7 @@ type FindingEdit = {
   drawing_number: string;
   finding: string;
   rectification_comment: string;
+  operational_details: DetailValues;
   status: RevisionItem["status"];
 };
 
@@ -210,6 +216,7 @@ const BLANK_FINDING: FindingDraft = {
   drawing_number: "",
   finding: "",
   rectification_comment: "",
+  operational_details: {},
   beforeFiles: [],
   afterFiles: [],
 };
@@ -322,7 +329,7 @@ export default function TowerRevisionsPage() {
         .order("created_at"),
       supabase
         .from("project_field_issue_types")
-        .select("id,applies_to,name,active,sort_order")
+        .select("id,applies_to,name,active,sort_order,detail_schema")
         .eq("project_id", projectId)
         .order("sort_order")
         .order("name"),
@@ -521,6 +528,7 @@ export default function TowerRevisionsPage() {
           towerSegment:findingDraft.tower_segment,memberNumber:findingDraft.member_number,
           drawingNumber:findingDraft.drawing_number,finding:findingDraft.finding,
           rectificationComment:findingDraft.rectification_comment,
+          operationalDetails:findingDraft.operational_details,
         }),
       });
       const text=await response.text();
@@ -567,6 +575,7 @@ export default function TowerRevisionsPage() {
       drawing_number: item.drawing_number || "",
       finding: item.finding,
       rectification_comment: item.rectification_comment || "",
+      operational_details: item.operational_details || {},
       status: item.status,
     });
   }
@@ -592,7 +601,7 @@ export default function TowerRevisionsPage() {
           expectedVersion:findingEdit.expectedVersion,clientMutationId:findingEdit.clientMutationId,
           issueTypeId:isOtherIssue?null:findingEdit.issue_type_id,otherIssueText:isOtherIssue?findingEdit.other_issue_text:null,
           towerSegment:findingEdit.tower_segment,memberNumber:findingEdit.member_number,drawingNumber:findingEdit.drawing_number,
-          finding:findingEdit.finding,rectificationComment:findingEdit.rectification_comment,status:markRectified?"Rectified":findingEdit.status,
+          finding:findingEdit.finding,rectificationComment:findingEdit.rectification_comment,operationalDetails:findingEdit.operational_details,status:markRectified?"Rectified":findingEdit.status,
         }),
       });
       const result=await response.json();if(!response.ok)throw new Error(result.error || "Finding update failed.");
@@ -1002,6 +1011,7 @@ export default function TowerRevisionsPage() {
                                 <div className="mt-1 font-bold text-slate-900">{issueName(item.issue_type_id,item.other_issue_text)}</div>
                                 {item.source_type==="punchlist"?<div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500"><span>Inspector: {item.inspector_name || "Not supplied"}</span>{item.source_date?<span>Source Date: {sourceDateDisplay(item.source_date)}</span>:null}<span>Imported By: {qualityDisplayName(item.imported_by_label)}</span></div>:null}
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3"><span>Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
+                                {populatedDetailEntries(issueTypes.find(type=>type.id===item.issue_type_id)?.detail_schema,item.operational_details).length?<div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">{populatedDetailEntries(issueTypes.find(type=>type.id===item.issue_type_id)?.detail_schema,item.operational_details).map(entry=><span key={entry.key}>{entry.label}: <b className="text-slate-800">{entry.value}</b></span>)}</div>:null}
                                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Client Finding</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{[item.assigned_flag && `Flag: ${item.assigned_flag}`, item.leg && `Leg ${item.leg}`, item.finding || "No additional client comment."].filter(Boolean).join(" / ")}</div></div><div><div className="text-[10px] font-black uppercase tracking-wide text-slate-400">Rectification Comment</div><div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{item.rectification_comment || "No additional rectification comment."}</div></div></div>
                                 <div className="mt-3 flex flex-wrap gap-3 text-xs"><span>Before: {beforeCount}</span><span>After: {afterCount}</span></div>
                               </div>
@@ -1047,6 +1057,7 @@ export default function TowerRevisionsPage() {
         <Modal title="Add Flagged Issue" subtitle={revisions.find((revision) => revision.id === findingDraft.revision_id)?.fli_number} onClose={() => setFindingDraft(null)} wide>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Field label="Common issue"><select value={findingDraft.issue_type_id} onChange={(event) => setFindingDraft((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
+          <OperationalDetailEditor schema={revisionIssueTypes.find(type=>type.id===findingDraft.issue_type_id)?.detail_schema} values={findingDraft.operational_details} onChange={operational_details=>setFindingDraft(current=>current?{...current,operational_details}:current)}/>
             {findingDraft.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingDraft.other_issue_text} onChange={(event) => setFindingDraft((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
             <TowerMemberFields
               members={towerMembers}
@@ -1109,6 +1120,7 @@ export default function TowerRevisionsPage() {
             <Field label="Common issue"><select value={findingEdit.issue_type_id} onChange={(event) => setFindingEdit((current) => current ? { ...current, issue_type_id: event.target.value, other_issue_text: event.target.value === "__other__" ? current.other_issue_text : "" } : current)} className="input"><option value="">Select common issue...</option>{revisionIssueTypes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}<option value="__other__">Other</option></select></Field>
             {findingEdit.issue_type_id === "__other__" ? <Field label="Other issue details"><input value={findingEdit.other_issue_text} onChange={(event) => setFindingEdit((current) => current ? { ...current, other_issue_text: event.target.value } : current)} placeholder="Describe the issue identified by the inspector" className="input" /></Field> : null}
             <Field label="Status"><select value={findingEdit.status} onChange={(event) => setFindingEdit((current) => current ? { ...current, status: event.target.value as RevisionItem["status"] } : current)} className="input"><option>Open</option><option>Rectified</option><option>Verified</option></select></Field>
+            <OperationalDetailEditor schema={revisionIssueTypes.find(type=>type.id===findingEdit.issue_type_id)?.detail_schema} values={findingEdit.operational_details} onChange={operational_details=>setFindingEdit(current=>current?{...current,operational_details}:current)}/>
             <TowerMemberFields
               members={towerMembers}
               segment={findingEdit.tower_segment}

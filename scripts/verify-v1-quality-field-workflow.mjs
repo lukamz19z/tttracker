@@ -12,8 +12,18 @@ function load(file, mocks = {}) {
 }
 const details = load("lib/quality/operational-details.ts");
 const list = load("lib/quality/field-list.ts", { "./finding-readiness": load("lib/quality/finding-readiness.ts") });
+const punchlist = load("lib/quality/punchlist.ts", {});
 const bolt = details.DETAIL_TEMPLATES[0].schema, packer = details.DETAIL_TEMPLATES[1].schema;
 const types = [{ id: "bolt", name: "Wrong Bolt", detail_schema: bolt }, { id: "packer", name: "Packers", detail_schema: packer }];
+const importedRows=punchlist.mapPunchlistRows([{Tower:"136", "External Defect Number":"B-1",Defect:"Wrong Bolt","Existing Diameter":"20","Existing Length":"80","Required Diameter":"20","Required Length":"100",Qty:"4",Change:"Increase"}],punchlist.suggestPunchlistMapping(["Tower","External Defect Number","Defect","Existing Diameter","Existing Length","Required Diameter","Required Length","Qty","Change"],types),types);
+assert.equal(importedRows[0].operationalDetails.quantity,4);assert.equal(importedRows[0].operationalDetails.required_length,100);assert.equal(importedRows[0].issueTypeId,"bolt");
+const importedPacker=punchlist.mapPunchlistRows([{Tower:"136", "External Defect Number":"P-1",Defect:"Packers","Existing Thickness":"3","Existing Quantity":"1","Required Thickness":"6","Required Quantity":"2",Action:"Replace"}],punchlist.suggestPunchlistMapping(["Tower","External Defect Number","Defect","Existing Thickness","Existing Quantity","Required Thickness","Required Quantity","Action"],types),types);
+assert.equal(importedPacker[0].operationalDetails.required_thickness,6);assert.equal(importedPacker[0].operationalDetails.action,"Replace");
+const automaticHeaders=["Tower No","Finding No","Finding Type","Description","Member No","Section","Leg","Drawing No","Inspected By","Date"];
+const automaticMapping=punchlist.suggestPunchlistMapping(automaticHeaders);
+assert.deepEqual([automaticMapping.tower,automaticMapping.externalReference,automaticMapping.defectType,automaticMapping.description,automaticMapping.member,automaticMapping.segment,automaticMapping.leg,automaticMapping.drawing,automaticMapping.inspector,automaticMapping.sourceDate],automaticHeaders);
+assert.equal(punchlist.punchlistSourceKey("project-1","Tower 92 Punchlist"),punchlist.punchlistSourceKey("project-1","Tower 92 Punchlist"),"same source name yields stable hidden import key");assert.notEqual(punchlist.punchlistSourceKey("project-1","Tower 92 Punchlist"),punchlist.punchlistSourceKey("project-2","Tower 92 Punchlist"));
+const photoReview=punchlist.matchPunchlistPhotos(importedRows,[{name:"B-1_01.jpg"},{name:"unknown.jpg"},{name:"multi.jpg"}],{2:"skip"});assert.equal(photoReview.matches.filter(match=>match.state==="matched").length,1);assert.equal(photoReview.matches.filter(match=>match.state==="unmatched"||match.state==="ambiguous").length,1);assert.equal(photoReview.matches.filter(match=>match.state==="skipped").length,1);
 for (const schema of [bolt, packer]) {
   assert.equal(details.validateDetailSchema(schema), null);
   assert.equal(details.validateDetailValues(schema, {}), null, "All template fields optional");
@@ -84,6 +94,14 @@ prefs.render().update({...state,group:"Section"});prefs.render().update(state);a
 prefs=mountPreferences(prefKey);prefs.render();await tick();assert.deepEqual(prefs.render().state,state);prefs.unmount();
 assert.equal(stored.size,1,"Mounting never overwrites saved filters with defaults");
 console.log("PASS actual filter persistence hook: ordered writes, navigating away/remounting, preserved stacked filters and grouping, no default overwrite.");
+
+const importerSource=fs.readFileSync("components/quality/PunchlistImport.tsx","utf8");
+for(const label of ["Upload Punchlist","Add Punchlist Photos","Review import","Advanced","matched automatically","Tower issues","Date issues","Punchlist imported","Create a separate Punchlist instead"])assert.ok(importerSource.includes(label),`guided importer includes ${label}`);
+assert.match(importerSource,/const effectiveSourceKey=sourceKeyOverride\|\|automaticSourceKey/);
+assert.match(importerSource,/const unresolved=review\.matches\.filter\(match=>match\.state==="unmatched" \|\| match\.state==="ambiguous"\)/);
+assert.match(importerSource,/filter\(row=>!row\.towerId\)/);
+assert.ok(importerSource.includes("Photo details (optional)"));
+console.log("PASS guided importer: automatic source key, mapped required aliases, Advanced mapping/source metadata, photo counts, exception-only reconciliation, optional photo metadata and re-import detection.");
 
 const jsx={jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
 const native=Object.fromEntries(["View","Text","Pressable"].map(name=>[name,name]));
