@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),ts=require('typescript'),sharp=require('sharp');
 const {PGlite}=require('@electric-sql/pglite');
-function load(file,mocks={}){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});if(name.endsWith("punchlist-import-values")) return load("lib/quality/punchlist-import-values.ts",{});if(name.endsWith("revision-deletions"))return {revisionDeletion:async()=>null};if(name.endsWith("quality-photo-tombstones"))return {withoutDeletedPhotos:async value=>value,photoDeleted:async()=>false};if(name.endsWith("quality-photo-deletion"))return {syncQualityPhotoDelete:async()=>{throw Error("Unexpected delete in upload regression")}};assert.ok(name in mocks,name);return mocks[name]},exports);return exports;}
+function load(file,mocks={}){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>{if(name.endsWith("/date-time")) return load("lib/quality/date-time.ts",{});if(name.endsWith("punchlist-import-values")) return load("lib/quality/punchlist-import-values.ts",{});if(name.endsWith("operational-details"))return load("lib/quality/operational-details.ts",{});if(name.endsWith("revision-deletions"))return {revisionDeletion:async()=>null};if(name.endsWith("quality-photo-tombstones"))return {withoutDeletedPhotos:async value=>value,photoDeleted:async()=>false};if(name.endsWith("quality-photo-deletion"))return {syncQualityPhotoDelete:async()=>{throw Error("Unexpected delete in upload regression")}};assert.ok(name in mocks,name);return mocks[name]},exports);return exports;}
 const db=new PGlite(),ids=Array.from({length:6},(_,i)=>`00000000-0000-0000-0000-${String(i+1).padStart(12,'0')}`);
 try {
  await db.exec('create role service_role; create table tower_quality_files(id uuid primary key,revision_item_id uuid,defect_id uuid); create table tower_quality_upload_sessions(id uuid primary key,revision_item_id uuid,defect_id uuid); create table tower_revisions(id uuid primary key,pdf_revision int);');
@@ -43,11 +43,12 @@ const fixture=path.join(os.tmpdir(),'tt-quality-readable-watermark.jpg');fs.writ
 
 // Exercise the actual controlled PDF handler, including publication failure.
 const revision={id:'RECT',project_id:'P',tower_id:'T',revision_number:'RECT-01',status:'In Progress',pdf_revision:0};
-const item={id:'I',item_number:3,fli_number:'FLI-003',issue_type_id:'ISSUE',status:'Rectified',rectification_comment:'Corrected',finding:'Finding'};
+const boltSchema=load('lib/quality/operational-details.ts').DETAIL_TEMPLATES[0].schema;
+const item={id:'I',item_number:3,fli_number:'FLI-003',issue_type_id:'ISSUE',operational_details:{existing_diameter:20,existing_length:80,required_diameter:20,required_length:100,quantity:4,change:'Increase'},status:'Rectified',rectification_comment:'Corrected',finding:'Finding'};
 const evidence=['before_photo','after_photo'].map((role,i)=>({id:'F'+i,project_id:'P',tower_id:'T',revision_id:'RECT',revision_item_id:'I',defect_id:null,file_role:role,file_name:role+'.jpg',mime_type:'image/jpeg',sharepoint_drive_id:'DRIVE',sharepoint_item_id:'ORIGINAL',annotated_sharepoint_item_id:'ANNOTATED'+i,captured_at:null,uploaded_by_label:'Test'}));
 evidence.push(...['imported-before','website-before','website-after'].map((source,i)=>({...evidence[source.endsWith('after')?1:0],id:'EXTRA'+i,file_name:source+'.jpg',evidence_metadata:{capturedBy:'Michael Brown',capturedDate:'2026-10-29'}})));
 let failPublish=false,authFailure=false,inserted=0,pointers=0,generated,uploadedName;
-const service={rpc:async()=>({data:1,error:null}),from(table){const q={select(){return q},eq(){return q},in(){return q},order(){return q},neq(){return q},or(){return q},update(){if(table==='tower_revisions')pointers++;return q},insert(){inserted++;return q},single:async()=>({data:table==='tower_revisions'?revision:{id:'PDF',file_name:uploadedName},error:null}),then(resolve,reject){return Promise.resolve({data:table==='tower_revision_items'?[item]:table==='project_field_issue_types'?[{id:'ISSUE',name:'Wrong orientation'}]:evidence,error:null}).then(resolve,reject)}};return q}};
+const service={rpc:async()=>({data:1,error:null}),from(table){const q={select(){return q},eq(){return q},in(){return q},order(){return q},neq(){return q},or(){return q},update(){if(table==='tower_revisions')pointers++;return q},insert(){inserted++;return q},single:async()=>({data:table==='tower_revisions'?revision:{id:'PDF',file_name:uploadedName},error:null}),then(resolve,reject){return Promise.resolve({data:table==='tower_revision_items'?[item]:table==='project_field_issue_types'?[{id:'ISSUE',name:'Incorrect Bolt',detail_schema:boltSchema}]:evidence,error:null}).then(resolve,reject)}};return q}};
 const pdfText=[],RealPdf=require('jspdf').jsPDF;
 const pdfRenderer=load('lib/quality/revision-pdf.ts',{jspdf:{jsPDF:function(...args){const doc=new RealPdf(...args),text=doc.text;doc.text=function(value,...rest){pdfText.push(value);return text.call(this,value,...rest);};return doc;}}});
 const route=load('app/api/quality/files/revisions/[revisionId]/pdf/route.ts',{
@@ -71,9 +72,9 @@ try {
  for(const sourceType of ['punchlist','manual'])for(const comment of [null,'','   ','Optional action recorded']) {
    item.source_type=sourceType;item.rectification_comment=comment;pdfText.length=0;
    const response=await call();assert.equal(response.status,200,JSON.stringify(await response.json()));
-   assert.equal(generated.reportState,'Rectified');assert.equal(generated.items[0].rectificationComment,comment ?? '');
-   const text=pdfText.flat().join(' ');assert.ok(text.includes(comment?.trim() || 'No additional rectification comment.'));
+   assert.equal(generated.reportState,'Rectified');assert.equal(generated.items[0].rectificationComment,comment ?? '');assert.ok(generated.items[0].operationalDetailFields.some(field=>field.label==='Required Length'&&field.value==='100 mm'));
+   const text=pdfText.flat().join(' ');assert.ok(text.includes(comment?.trim() || 'No additional rectification comment.'));assert.ok(text.includes('Required Length: 100 mm'),'PDF prints the configured required bolt length');
  }
- console.log('PASS actual PDF handler and real PDF renderer for Punchlist/Manual findings with null, empty and whitespace comments; report remains Rectified and entered comments are included.');
+ console.log('PASS actual PDF handler and real PDF renderer for Punchlist/Manual findings with populated configured bolt details, null/empty/whitespace comments; report remains Rectified and entered comments are included.');
 } finally {globalThis.fetch=fetchOriginal;}
 console.log('PASS actual PDF handler: JSON auth/error responses, SharePoint failure leaves published metadata untouched, successful annotated Before/After generation publishes clean PDF and then updates pointer.');

@@ -63,6 +63,7 @@ const styles = StyleSheet.create({
   },
   compact: {
     gap: 5,
+    minHeight: 28,
   },
   text: {
     flexShrink: 1,

@@ -22,6 +22,34 @@ export function populatedDetailEntries(schema:DetailSchema|undefined|null,values
   if(!schema?.fields?.length || !values)return [];
   return schema.fields.flatMap(field=>{const value=values[field.key];if(value===undefined||value===""||Array.isArray(value)&&!value.length)return [];const text=Array.isArray(value)?value.join(", "):typeof value==="boolean"?(value?"Yes":"No"):String(value);return [{key:field.key,label:field.label,value:field.unit?`${text} ${field.unit}`:text}];});
 }
+export function operationalDetailSummary(schema:DetailSchema|undefined|null,values:DetailValues|undefined|null) {
+  if(!schema?.material||!values)return populatedDetailEntries(schema,values).map(entry=>`${entry.label}: ${entry.value}`).join(" · ");
+  const fields=new Map(schema.fields.map(field=>[field.key,field]));
+  const valueText=(value:DetailValues[string]|undefined)=>value===undefined||value===""?"":Array.isArray(value)?value.join(", "):typeof value==="boolean"?(value?"Yes":"No"):String(value);
+  const counterpart=(fieldKey:string,side:"current"|"required")=>{
+    const field=fields.get(fieldKey);if(!field)return null;
+    const candidateKeys=side==="current"?[fieldKey.replace(/^required_/i,"existing_"),fieldKey.replace(/^required_/i,"current_")]:[fieldKey];
+    for(const key of candidateKeys){if(key===fieldKey)continue;const found=fields.get(key);if(found&&valueText(values[found.key]))return found;}
+    const label=field.label.replace(/^required\s+/i,side==="current"?"Existing ":"Required ").toLowerCase();
+    return schema.fields.find(candidate=>candidate.key!==fieldKey&&candidate.label.toLowerCase()===label&&valueText(values[candidate.key]))||null;
+  };
+  type MaterialDimension=NonNullable<DetailSchema["material"]>["dimensions"][number];
+  const format=(field:DetailField,value:DetailValues[string]|undefined,part:MaterialDimension)=>{const text=valueText(value);if(!text)return "";const suffix=part.suffix??(!part.prefix&&field.unit?` ${field.unit}`:"");return `${part.prefix||""}${text}${suffix}`;};
+  const requiredParts=schema.material.dimensions.map(part=>({part,field:fields.get(part.field)})).filter((entry):entry is {part:MaterialDimension;field:DetailField}=>Boolean(entry.field));
+  const consumed=new Set<string>();
+  const currentValues=requiredParts.map(({part,field})=>{consumed.add(field.key);const existing=counterpart(field.key,"current");if(existing){consumed.add(existing.key);return format(existing,values[existing.key],part);}return "";});
+  const requiredValues=requiredParts.map(({part,field})=>format(field,values[field.key],part));
+  const quantityField=fields.get(schema.material.quantityField);const quantity=valueText(values[schema.material.quantityField]);
+  const existingQuantity=quantityField?counterpart(quantityField.key,"current"):null;
+  if(quantityField)consumed.add(quantityField.key);if(existingQuantity)consumed.add(existingQuantity.key);
+  let current=currentValues.filter(Boolean).join(" × ");let required=requiredValues.filter(Boolean).join(" × ");
+  if(existingQuantity&&quantity){current+=`${current?" × ":""}${valueText(values[existingQuantity.key])}`;required+=`${required?" × ":""}${quantity}`;}
+  const parts:string[]=[];if(current||required)parts.push(current&&required?`${current} → ${required}`:current||required);if(quantity&&!existingQuantity)parts.push(`Qty ${quantity}`);
+  const action=schema.material.actionField?valueText(values[schema.material.actionField]):"";if(action)parts.push(action);
+  if(schema.material.actionField)consumed.add(schema.material.actionField);
+  for(const field of schema.fields){if(consumed.has(field.key))continue;const value=valueText(values[field.key]);if(value)parts.push(`${field.label}: ${field.unit?`${value} ${field.unit}`:value}`);}
+  const material=schema.material.label.replace(/s$/i,"");return parts.length?`${material.charAt(0).toUpperCase()+material.slice(1)} ${parts.join(" · ")}`:"";
+}
 export const EMPTY_DETAIL_SCHEMA: DetailSchema = { fields: [] };
 
 export function validateDetailSchema(input: unknown): string | null {

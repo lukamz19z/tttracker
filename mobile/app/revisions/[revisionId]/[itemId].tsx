@@ -1,6 +1,6 @@
 import { OperationalDetailFields } from "@/components/quality/OperationalDetailFields";
 import { QualitySelector } from "@/components/quality/QualitySelector";
-import { validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../../lib/quality/operational-details";
+import { validateDetailValues, EMPTY_DETAIL_SCHEMA, operationalDetailSummary, type DetailValues } from "../../../../lib/quality/operational-details";
 import { findingReadiness } from "../../../../lib/quality/finding-readiness";
 import { sourceDateDisplay } from "../../../../lib/quality/punchlist-import-values";
 import { qualityDisplayName } from "../../../../lib/quality/display-name";
@@ -279,6 +279,7 @@ export default function RevisionItemScreen() {
   return (
     <QualityShell
       permission="mobile.rectifications"
+      compactHeader
       title={`Finding ${String(
         item.item_number ?? "",
       ).padStart(3, "0")}`}
@@ -329,6 +330,11 @@ export default function RevisionItemScreen() {
             .join(" · ") ||
             "No steel reference"}
         </Text>
+        {operationalDetailSummary(selectedIssue?.detail_schema||issue?.detail_schema,operationalDetails)?<Text style={[q.cardTitle,{fontSize:13,color:"#1e3a8a"}]}>{operationalDetailSummary(selectedIssue?.detail_schema||issue?.detail_schema,operationalDetails)}</Text>:null}
+        <Text style={q.fieldLabel}>Defect type</Text>
+        <Pressable disabled={locked} style={[q.select,{minHeight:40,padding:9}]} onPress={()=>setIssuePickerOpen(true)}><Text style={q.selectText}>{selectedIssue?.name||item.other_issue_text||"Select defect type"}</Text></Pressable>
+        <QualitySelector visible={issuePickerOpen} title="Defect type" options={(data?.issueTypes||[]).filter(type=>type.active&&["revision","both"].includes(type.applies_to)).map(type=>({id:type.id,label:type.name}))} onClose={()=>setIssuePickerOpen(false)} onSelect={option=>{dirty.current=true;setSelectedIssueId(option.id);setIssuePickerOpen(false);}}/>
+        <OperationalDetailFields schema={selectedIssue?.detail_schema} values={operationalDetails} disabled={locked} onChange={values=>{dirty.current=true;setOperationalDetails(values);}}/>
       </View>
 
       <View style={q.card}>
@@ -339,11 +345,6 @@ export default function RevisionItemScreen() {
         {item.source_type==="punchlist"?<><Text>Inspector: {item.inspector_name || "Not supplied"}</Text>{item.source_date?<Text>Source Date: {sourceDateDisplay(item.source_date)}</Text>:null}<Text>Imported By: {qualityDisplayName(item.imported_by_label)}</Text></>:null}
         <Text>{findingReadiness(item,files.filter(file=>file.file_role==="before_photo").length,afterFiles.length).photosComplete?"Photos Complete":"Photos Incomplete"}</Text>
         {item.inspector_comment?<Text>{item.inspector_comment}</Text>:null}
-        <Text style={q.fieldLabel}>Configured defect type</Text>
-        <Pressable disabled={locked} style={q.select} onPress={()=>setIssuePickerOpen(true)}><Text style={q.selectText}>{selectedIssue?.name || item.other_issue_text || "Select defect type"}</Text></Pressable>
-        {!selectedIssueId ? <Text style={q.muted}>Select a configured type to capture its optional operational details. The imported description is preserved.</Text> : null}
-        <QualitySelector visible={issuePickerOpen} title="Defect type" options={(data?.issueTypes || []).filter(type=>type.active && ["revision","both"].includes(type.applies_to)).map(type=>({id:type.id,label:type.name}))} onClose={()=>setIssuePickerOpen(false)} onSelect={option=>{dirty.current=true;setSelectedIssueId(option.id);setIssuePickerOpen(false);}}/>
-        <OperationalDetailFields schema={selectedIssue?.detail_schema} values={operationalDetails} disabled={locked} onChange={values=>{dirty.current=true;setOperationalDetails(values);}}/>
         <Text style={q.fieldLabel}>
           Rectification / Action Taken (optional)
         </Text>

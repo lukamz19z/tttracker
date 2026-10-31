@@ -24,6 +24,7 @@ export function QualityShell({
   title,
   subtitle,
   root = false,
+  compactHeader = false,
   children,
   virtualRows,
 }: PropsWithChildren<{
@@ -31,12 +32,13 @@ export function QualityShell({
   title: string;
   subtitle?: string;
   root?: boolean;
+  compactHeader?: boolean;
   virtualRows?: {id:string;content:ReactNode}[];
 }>) {
   const { profile } = useAuth();
   const { refreshing, refresh, cachedAt, error, data } = useQuality();
 
-  const content=<View style={{gap:10}}>
+  const content=<View style={{gap:compactHeader?5:10}}>
           {!root ? (
             <Pressable style={styles.back} onPress={() => router.back()}>
               <ArrowLeft size={16} color="#334155" />
@@ -47,7 +49,7 @@ export function QualityShell({
           <Text style={styles.eyebrow}>
             QUALITY · {profile?.projectNumber || profile?.projectName || "PROJECT"}
           </Text>
-          <Text style={styles.heading}>{title}</Text>
+          <Text style={[styles.heading,compactHeader&&styles.compactHeading]}>{title}</Text>
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           <SyncStatus compact />
           {cachedAt ? (
@@ -57,7 +59,7 @@ export function QualityShell({
           {children}
   </View>;
   return <PermissionScreen permission={permission}><SafeAreaView style={styles.safe}>
-    {virtualRows?<FlatList data={virtualRows} keyExtractor={row=>row.id} renderItem={({item})=><View style={{marginBottom:8}}>{item.content}</View>} contentContainerStyle={styles.content} ListHeaderComponent={content} ListFooterComponent={<AppFooter/>} initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>}/>:<ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} keyboardShouldPersistTaps="handled">{content}<AppFooter/></ScrollView>}
+    {virtualRows?<FlatList data={virtualRows} keyExtractor={row=>row.id} renderItem={({item})=><View style={{marginBottom:compactHeader?4:8}}>{item.content}</View>} contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} ListHeaderComponent={content} ListFooterComponent={<AppFooter/>} initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>}/>:<ScrollView contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} keyboardShouldPersistTaps="handled">{content}<AppFooter/></ScrollView>}
   </SafeAreaView></PermissionScreen>;
 }
 
@@ -88,6 +90,8 @@ const styles = StyleSheet.create({
   backText: { color: "#334155", fontWeight: "800" },
   eyebrow: { fontSize: 11, fontWeight: "900", letterSpacing: 1.1, color: "#2563eb" },
   heading: { fontSize: 28, fontWeight: "900", color: "#0f172a" },
+  compactHeading:{fontSize:22},
+  compactContent:{padding:10,gap:6,paddingBottom:10},
   subtitle: { color: "#64748b", lineHeight: 20 },
   cache: { fontSize: 11, color: "#64748b" },
   error: { padding: 11, borderRadius: 11, backgroundColor: "#fff7ed", color: "#9a3412", fontWeight: "700" },

@@ -2,7 +2,7 @@ import { FieldFindingCard } from "@/components/quality/FieldFindingCard";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
 import { QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { fieldListRows, filterFieldRows, groupFieldRows, fieldStateKey } from "../../../lib/quality/field-list";
-import { materialRequirements, validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../lib/quality/operational-details";
+import { materialRequirements, operationalDetailSummary, validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../lib/quality/operational-details";
 import { OperationalDetailFields } from "@/components/quality/OperationalDetailFields";
 import { FieldListControls } from "@/components/quality/FieldListControls";
 import { useQualityFieldState } from "@/lib/quality-field-state";
@@ -140,7 +140,7 @@ export default function RevisionDetailScreen() {
   const [deleteConfirmation,setDeleteConfirmation]=useState("");
   const [deleting,setDeleting]=useState(false);
   const { profile } = useAuth();
-  const { online, syncing, failedCount, syncNow, refresh: refreshSync } = useSync();
+  const { online, syncing, failedCount, pendingCount, syncNow, refresh: refreshSync } = useSync();
 
   const projectId =
     clean(data?.projectId) || clean(profile?.projectId);
@@ -191,6 +191,7 @@ export default function RevisionDetailScreen() {
   const [offlineSettings,setOfflineSettings]=useState<QualityOfflineSettings|null>(null);
   const [offlineStorage,setOfflineStorage]=useState<{packs:QualityOfflinePack[];bytes:number;megabytes:number}>({packs:[],bytes:0,megabytes:0});
   const [offlinePackBusy,setOfflinePackBusy]=useState(false);
+  const [offlineOptionsExpanded,setOfflineOptionsExpanded]=useState(false);
   const [offlineStorageOpen,setOfflineStorageOpen]=useState(false);
 
   const serverRevision = detail?.revision ?? null;
@@ -1009,12 +1010,13 @@ export default function RevisionDetailScreen() {
   return (
     <QualityShell
       permission="mobile.rectifications"
-      title={title}
+      compactHeader
+      title={rectCode}
       virtualRows={fieldGroups.flatMap(group => [
         { id: `group:${group.label}`, content: <Text style={styles.title}>{group.label} · {group.rows.length}</Text> },
-        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
+        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} issueTypes={data?.issueTypes||[]} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
       ])}
-      subtitle={`${revisionItems.length + pendingFindingCount} FLI${revisionItems.length + pendingFindingCount === 1 ? "" : "s"} · ${online ? "Online" : "Offline"}`}
+      subtitle={[qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel),clean(serverRevision?.client_reference||workspace?.clientReference)?`Punchlist ${clean(serverRevision?.client_reference||workspace?.clientReference)}`:null,`${revisionItems.length+pendingFindingCount} FLI${revisionItems.length+pendingFindingCount===1?"":"s"}`,online?"Online":"Offline"].filter(Boolean).join(" · ")}
     >
       <View style={styles.revisionCard}>
         {can("mobile.rectifications") ? <Pressable accessibilityLabel="Rectification actions" style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>Alert.alert("Rectification actions",deleteLabel,[{text:"Cancel",style:"cancel"},{text:"Delete Rectification",style:"destructive",onPress:()=>{setDeleteConfirmation("");setDeleteOpen(true);}}])}><Text style={{fontSize:24}}>⋮</Text></Pressable> : null}
@@ -1033,7 +1035,7 @@ export default function RevisionDetailScreen() {
         <View style={styles.head}>
           <View style={styles.grow}>
             <Text style={styles.title}>
-              {title}
+              {qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel)}
             </Text>
             <Text style={styles.meta}>
               {prettyDate(
@@ -1041,10 +1043,7 @@ export default function RevisionDetailScreen() {
                   workspace?.inspectionDate,
               )}{" "}
               ·{" "}
-              {clean(
-                serverRevision?.inspection_stage ??
-                  workspace?.inspectionStage,
-              )}
+              {serverRevision?.source_type==="punchlist"?`Punchlist ${clean(serverRevision.client_reference||workspace?.clientReference)}`.trim():clean(serverRevision?.inspection_stage??workspace?.inspectionStage)}
             </Text>
           </View>
 
@@ -1069,11 +1068,13 @@ export default function RevisionDetailScreen() {
         ) : null}
       </View>
 
-      <View style={{flexDirection:"row",gap:8,alignItems:"center",paddingVertical:5}}>
-        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:1,minHeight:46,marginVertical:0}]} onPress={openAddFinding}><Plus size={17} color="#fff"/><Text style={[styles.addFindingText,{fontSize:14}]}>Add FLI</Text></Pressable>
-        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:0,minWidth:82,minHeight:46,marginVertical:0,backgroundColor:"#334155"}]} onPress={()=>void syncNow().then(()=>reloadDetail())}><Text style={[styles.addFindingText,{fontSize:12}]}>{syncing?"Syncing…":failedCount?`Retry ${failedCount}`:pendingFindingCount?`Sync ${pendingFindingCount}`:"Synced"}</Text></Pressable>
-        {serverRevision&&!['Ready for Review','Closed'].includes(serverRevision.status)?<Pressable accessibilityRole="button" disabled={submitBusy} style={[styles.addFinding,{flex:0,minWidth:86,minHeight:46,marginVertical:0,backgroundColor:"#0369a1",opacity:submitBusy?0.65:1}]} onPress={()=>void submit()}><Text style={[styles.addFindingText,{fontSize:12}]}>{submitBusy?"Sending…":"Submit Review"}</Text></Pressable>:null}
-        <Pressable accessibilityRole="button" style={[styles.addFinding,{flex:0,minWidth:60,minHeight:46,marginVertical:0,backgroundColor:"#475569"}]} onPress={()=>Alert.alert("Rectification actions",workspace?.finalisedAt||serverRevision?.finalised_at?"This Rectification is finalised.":"Finalise the Rectification when field work is complete.",[{text:"Cancel",style:"cancel"},{text:workspace?.finalisedAt||serverRevision?.finalised_at?"Done":"Finalise",onPress:()=>{if(!workspace?.finalisedAt&&!serverRevision?.finalised_at)void finalise();}}])}><Text style={[styles.addFindingText,{fontSize:12}]}>More</Text></Pressable>
+      <View style={{gap:6,paddingVertical:2}}>
+        <Pressable accessibilityRole="button" style={styles.addIssuePrimary} onPress={openAddFinding}><Plus size={19} color="#fff"/><Text style={styles.addIssuePrimaryText}>Add Flagged Issue</Text></Pressable>
+        <View style={{flexDirection:"row",alignItems:"center",gap:6}}>
+          <Pressable accessibilityRole="button" style={[styles.compactAction,{backgroundColor:failedCount?"#fef2f2":pendingCount?"#fffbeb":"#ecfdf5",borderColor:failedCount?"#fecaca":pendingCount?"#fde68a":"#bbf7d0"}]} onPress={()=>void syncNow().then(()=>reloadDetail())}><Text style={{fontSize:11,fontWeight:"800",color:failedCount?"#b91c1c":pendingCount?"#92400e":"#166534"}}>{syncing?"Syncing…":failedCount?`Retry ${failedCount}`:pendingCount?`Sync ${pendingCount}`:"✓ Synced"}</Text></Pressable>
+          {serverRevision&&!['Ready for Review','Closed'].includes(serverRevision.status)?<Pressable accessibilityRole="button" disabled={submitBusy} style={[styles.compactAction,{backgroundColor:"#eff6ff",borderColor:"#bfdbfe",opacity:submitBusy?0.65:1}]} onPress={()=>void submit()}><Text style={{fontSize:11,fontWeight:"800",color:"#1d4ed8"}}>{submitBusy?"Sending…":"Submit Review"}</Text></Pressable>:null}
+          <Pressable accessibilityRole="button" style={[styles.compactAction,{backgroundColor:"#f1f5f9",borderColor:"#e2e8f0"}]} onPress={()=>Alert.alert("Rectification actions",workspace?.finalisedAt||serverRevision?.finalised_at?"This Rectification is finalised.":"Finalise the Rectification when field work is complete.",[{text:"Cancel",style:"cancel"},{text:workspace?.finalisedAt||serverRevision?.finalised_at?"Done":"Finalise",onPress:()=>{if(!workspace?.finalisedAt&&!serverRevision?.finalised_at)void finalise();}}])}><Text style={{fontSize:11,fontWeight:"800",color:"#475569"}}>More</Text></Pressable>
+        </View>
       </View>
 
       {workspace?.findings.filter(finding=>serverRevision?.source_type!=="punchlist" || filteredRows.some(row=>row.item.id===finding.clientMutationId)).map(
@@ -1108,6 +1109,8 @@ export default function RevisionDetailScreen() {
                 finding.otherIssueText ||
                 "Other"}
             </Text>
+
+            {operationalDetailSummary(data?.issueTypes.find(type=>type.id===finding.issueTypeId)?.detail_schema,finding.operationalDetails)?<Text style={[styles.meta,{color:"#1e3a8a",fontWeight:"800"}]}>{operationalDetailSummary(data?.issueTypes.find(type=>type.id===finding.issueTypeId)?.detail_schema,finding.operationalDetails)}</Text>:null}
 
             <Text style={styles.meta}>
               {[
@@ -1175,21 +1178,19 @@ export default function RevisionDetailScreen() {
         ),
       )}
 
-      {serverRevision?.source_type === "punchlist" ? <View style={styles.card}>
-          <View style={styles.head}><View style={styles.grow}><Text style={styles.issueName}>Offline Punchlist pack</Text><Text style={styles.meta}>{offlinePack?.status==="ready"?"✓ Available Offline":offlinePack?.status==="preparing"?`Preparing offline pack · ${offlinePack.previews?Math.floor(offlinePack.cachedPreviews/offlinePack.previews*100):100}%`:"Preparing required findings and Before previews"}</Text></View><Pressable onPress={()=>void prepareOfflinePack(true)} disabled={!online || offlinePackBusy} style={[styles.photoButton,(!online || offlinePackBusy)&&{opacity:0.5}]}><Text style={styles.photoText}>{offlinePack?.status==="ready"?"Refresh Offline Pack":"Download for Offline"}</Text></Pressable></View>
-          {offlinePack?<><Text style={styles.meta}>{offlinePack.cachedFindings} / {offlinePack.findings} findings · {offlinePack.cachedPreviews} / {offlinePack.previews} photo previews</Text>{offlinePack.failedFileIds.length>0?<Pressable disabled={!online || offlinePackBusy} onPress={()=>void prepareOfflinePack(true)}><Text style={styles.notes}>Retry {offlinePack.failedFileIds.length}</Text></Pressable>:null}</>:null}
-          <Pressable onPress={()=>setOfflineStorageOpen(true)}><Text style={styles.meta}>Offline Storage · {offlineStorage.packs.length} cached Punchlists · {offlineStorage.megabytes} MB · Manage</Text></Pressable>
-          {offlineSettings?<View style={{gap:4,marginTop:4}}><View style={styles.head}><Text style={styles.meta}>Auto-cache on open</Text><Switch value={offlineSettings.autoCacheOnOpen && !offlineSettings.manualOnly} onValueChange={value=>{const next={autoCacheOnOpen:value,manualOnly:!value};setOfflineSettings({...offlineSettings,...next});void saveQualityOfflineSettings(projectId,next);}}/></View><View style={styles.head}><Text style={styles.meta}>Wi-Fi only</Text><Switch value={offlineSettings.wifiOnly} onValueChange={value=>{setOfflineSettings({...offlineSettings,wifiOnly:value});void saveQualityOfflineSettings(projectId,{wifiOnly:value});}}/></View></View>:null}
+      {serverRevision?.source_type === "punchlist" ? <View style={[styles.card,{padding:9,gap:5}]}>
+          <View style={{flexDirection:"row",alignItems:"center",gap:8}}><View style={styles.grow}><Text style={{fontSize:12,fontWeight:"900",color:offlinePack?.status==="ready"?"#166534":"#334155"}}>{offlinePack?.status==="ready"?"✓ Available Offline":offlinePack?.status==="preparing"?`Preparing offline · ${offlinePack.previews?Math.floor(offlinePack.cachedPreviews/offlinePack.previews*100):100}%`:"Offline pack preparing"}</Text><Text style={styles.meta}>{offlinePack?.status==="ready"?`${offlinePack.findings} findings · ${offlinePack.previews} photos · ${offlineStorage.megabytes} MB cached`:offlinePack?`${offlinePack.cachedFindings}/${offlinePack.findings} findings · ${offlinePack.cachedPreviews}/${offlinePack.previews} photos`:"Punchlist details and supplied Before previews"}</Text></View><Pressable onPress={()=>setOfflineStorageOpen(true)} style={{minHeight:36,paddingHorizontal:10,justifyContent:"center"}}><Text style={{fontSize:11,fontWeight:"800",color:"#334155"}}>Manage</Text></Pressable></View>
+          {offlinePack?.failedFileIds.length? <Pressable disabled={!online||offlinePackBusy} onPress={()=>void prepareOfflinePack(true)}><Text style={{fontSize:11,fontWeight:"800",color:"#b45309"}}>Retry {offlinePack.failedFileIds.length} photos</Text></Pressable>:null}
+          <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between"}}><Pressable onPress={()=>setOfflineOptionsExpanded(value=>!value)}><Text style={{fontSize:10,fontWeight:"700",color:"#64748b"}}>Offline settings {offlineOptionsExpanded?"⌃":"⌄"}</Text></Pressable><Pressable disabled={!online||offlinePackBusy} onPress={()=>void prepareOfflinePack(true)}><Text style={{fontSize:10,fontWeight:"800",color:online?"#1d4ed8":"#94a3b8"}}>{offlinePack?.status==="ready"?"Refresh":"Download"}</Text></Pressable></View>
+          {offlineOptionsExpanded&&offlineSettings?<View style={{gap:3,borderTopWidth:1,borderTopColor:"#e2e8f0",paddingTop:5}}><View style={styles.head}><Text style={styles.meta}>Auto-cache on open</Text><Switch value={offlineSettings.autoCacheOnOpen&&!offlineSettings.manualOnly} onValueChange={value=>{const next={autoCacheOnOpen:value,manualOnly:!value};setOfflineSettings({...offlineSettings,...next});void saveQualityOfflineSettings(projectId,next);}}/></View><View style={styles.head}><Text style={styles.meta}>Wi-Fi only</Text><Switch value={offlineSettings.wifiOnly} onValueChange={value=>{setOfflineSettings({...offlineSettings,wifiOnly:value});void saveQualityOfflineSettings(projectId,{wifiOnly:value});}}/></View><Pressable onPress={()=>setOfflineStorageOpen(true)}><Text style={styles.meta}>Storage · {offlineStorage.packs.length} cached Punchlists · {offlineStorage.megabytes} MB · Manage</Text></Pressable></View>:null}
         </View> : null}
         <FieldListControls rows={fieldRows} state={fieldState.state} onChange={fieldState.update} disabled={!fieldState.ready} sections={Array.from(new Set([...memberCatalog.map(member=>member.towerSegment || ""),...fieldRows.map(row=>row.section)].filter(Boolean)))} issueTypes={(data?.issueTypes || []).filter(issue=>["revision","both"].includes(issue.applies_to))}/>
         {fieldState.error ? <Text style={styles.notes}>{fieldState.error}</Text> : null}
-        <View style={styles.card}>
-          <Text style={styles.fli}>{filteredRows.length} matching FLIs · {revisionItems.filter(item=>["Rectified","Verified"].includes(item.status)).length} of {revisionItems.length} rectified</Text>
-          <Text style={styles.issueName}>Materials for filtered findings</Text>
-          {requirements.rows.map(row=><Text key={`${row.label}:${row.action}`} style={styles.finding}>{row.quantity} × {row.label}{row.action ? ` · ${row.action}` : ""}</Text>)}
-          {!requirements.rows.length ? <Text style={styles.meta}>No complete structured material requirements in this selection.</Text> : null}
-          {requirements.incomplete ? <Text style={styles.notes}>{requirements.incomplete} FLI(s) have incomplete material details and are excluded from totals.</Text> : null}
-          <Text style={styles.meta}>Structured quantities only. Packer quantities are stated action quantities, not an inferred difference.</Text>
+        <View style={[styles.card,{padding:9,gap:4}]}>
+          <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between",gap:8}}><Text style={styles.issueName}>Materials · {filteredRows.length} filtered FLIs</Text><Text style={styles.meta}>{revisionItems.filter(item=>["Rectified","Verified"].includes(item.status)).length}/{revisionItems.length} rectified</Text></View>
+          {requirements.rows.map(row=><Text key={`${row.label}:${row.action}`} style={[styles.finding,{fontSize:12,fontWeight:"800"}]}>{row.quantity} × {row.label}{row.action ? ` · ${row.action}` : ""}</Text>)}
+          {!requirements.rows.length ? <Text style={styles.meta}>No structured material requirements in this filter.</Text> : null}
+          {requirements.incomplete ? <Text style={[styles.notes,{fontSize:11}]}>{requirements.incomplete} incomplete detail set(s) excluded.</Text> : null}
         </View>
         {!filteredRows.length ? <Text style={styles.notes}>No FLIs match these filters.</Text> : null}
       {!revisionItems.length &&
@@ -1592,16 +1593,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 16,
-    padding: 15,
-    gap: 8,
+    padding: 10,
+    gap: 5,
   },
   card: {
     backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 16,
-    padding: 15,
-    gap: 9,
+    padding: 11,
+    gap: 6,
   },
   head: {
     flexDirection: "row",
@@ -1682,6 +1683,9 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "900",
   },
+  addIssuePrimary:{minHeight:50,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:8,backgroundColor:"#1d4ed8",borderRadius:13,paddingHorizontal:16},
+  addIssuePrimaryText:{color:"#fff",fontWeight:"900",fontSize:15},
+  compactAction:{minHeight:36,borderWidth:1,borderRadius:18,paddingHorizontal:11,alignItems:"center",justifyContent:"center"},
   evidenceRow: {
     flexDirection: "row",
     flexWrap: "wrap",

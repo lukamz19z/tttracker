@@ -17,6 +17,7 @@ const bolt = details.DETAIL_TEMPLATES[0].schema, packer = details.DETAIL_TEMPLAT
 const types = [{ id: "bolt", name: "Wrong Bolt", detail_schema: bolt }, { id: "packer", name: "Packers", detail_schema: packer }];
 const importedRows=punchlist.mapPunchlistRows([{Tower:"136", "External Defect Number":"B-1",Defect:"Wrong Bolt","Existing Diameter":"20","Existing Length":"80","Required Diameter":"20","Required Length":"100",Qty:"4",Change:"Increase"}],punchlist.suggestPunchlistMapping(["Tower","External Defect Number","Defect","Existing Diameter","Existing Length","Required Diameter","Required Length","Qty","Change"],types),types);
 assert.equal(importedRows[0].operationalDetails.quantity,4);assert.equal(importedRows[0].operationalDetails.required_length,100);assert.equal(importedRows[0].issueTypeId,"bolt");
+assert.match(details.operationalDetailSummary(bolt,importedRows[0].operationalDetails),/M20 × 80 mm → M20 × 100 mm · Qty 4/);
 const importedPacker=punchlist.mapPunchlistRows([{Tower:"136", "External Defect Number":"P-1",Defect:"Packers","Existing Thickness":"3","Existing Quantity":"1","Required Thickness":"6","Required Quantity":"2",Action:"Replace"}],punchlist.suggestPunchlistMapping(["Tower","External Defect Number","Defect","Existing Thickness","Existing Quantity","Required Thickness","Required Quantity","Action"],types),types);
 assert.equal(importedPacker[0].operationalDetails.required_thickness,6);assert.equal(importedPacker[0].operationalDetails.action,"Replace");
 const automaticHeaders=["Tower No","Finding No","Finding Type","Description","Member No","Section","Leg","Drawing No","Inspected By","Date"];
@@ -32,6 +33,12 @@ const boltValues = quantity => ({ existing_diameter: 16, existing_length: 65, re
 const packerValues = quantity => ({ existing_thickness: 2, existing_quantity: 1, required_thickness: 5, required_quantity: quantity, action: "Add" });
 assert.equal(details.validateDetailValues(bolt, boltValues(4)), null);
 assert.equal(details.validateDetailValues(packer, packerValues(3)), null);
+assert.match(details.operationalDetailSummary(bolt, boltValues(4)), /M16 × 65 mm → M20 × 80 mm · Qty 4/);
+assert.match(details.operationalDetailSummary(packer, packerValues(2)), /2 mm × 1 → 5 mm × 2 · Add/);
+const fieldBoltValues={existing_diameter:20,existing_length:80,required_diameter:20,required_length:100,quantity:4,change:"Increase"};
+assert.match(details.operationalDetailSummary(bolt,fieldBoltValues),/M20 × 80 mm → M20 × 100 mm · Qty 4/);
+const materialPrep=details.materialRequirements([{issue_type_id:"bolt",operational_details:fieldBoltValues},{issue_type_id:"bolt",operational_details:{...fieldBoltValues,quantity:2}}],types);
+assert.deepEqual(materialPrep.rows,[{label:"M20 × 100 bolts",quantity:6,action:"",findings:2}]);
 assert.match(details.validateDetailValues(bolt, { quantity: "four" }), /quantity/i);
 assert.match(details.validateDetailValues(packer, { action: "Guess" }), /configured/);
 assert.match(details.validateDetailValues({ fields: [{ key: "quantity", label: "Quantity", type: "quantity", required: true }] }, {}), /required/);
@@ -105,7 +112,7 @@ console.log("PASS guided importer: automatic source key, mapped required aliases
 
 const jsx={jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
 const native=Object.fromEntries(["View","Text","Pressable"].map(name=>[name,name]));
-const card=load("mobile/components/quality/FieldFindingCard.tsx",{"react/jsx-runtime":jsx,"react-native":native,"lucide-react-native":{MoreVertical:()=>null},"./QualityStatusPill":{QualityStatusPill:()=>null},"./QualityShell":{qualityStyles:{primary:{},primaryText:{},secondary:{},card:{},row:{},grow:{},muted:{},cardTitle:{}}}}).FieldFindingCard;
+const card=load("mobile/components/quality/FieldFindingCard.tsx",{"react/jsx-runtime":jsx,"react-native":native,"lucide-react-native":{MoreVertical:()=>null},"./QualityStatusPill":{QualityStatusPill:()=>null},"./QualityShell":{qualityStyles:{primary:{},primaryText:{},secondary:{},card:{},row:{},grow:{},muted:{},cardTitle:{}}},"../../../lib/quality/operational-details":details}).FieldFindingCard;
 let opened=0,menus=0,stopped=0;
 function nodes(node,type,result=[]){if(!node)return result;if(Array.isArray(node)){node.forEach(child=>nodes(child,type,result));return result;}if(node.type===type)result.push(node);if(node.props)nodes(node.props.children,type,result);return result;}
 const renderStart=performance.now();
@@ -117,7 +124,27 @@ for(const row of list.fieldListRows(scale,types,[])) {
 }
 assert.equal(opened,200);assert.equal(menus,200);assert.equal(stopped,400);
 assert.match(fs.readFileSync("mobile/components/quality/QualityShell.tsx","utf8"),/<FlatList data=\{virtualRows\}/);
+const sampleCard=card({row:rows[0],locked:false,onOpen:()=>{},onActions:()=>{},issueTypes:types});
+const cardSummary=nodes(sampleCard,"Text").map(node=>node.props.children).flat(Infinity).filter(value=>typeof value==="string").join(" ");
+assert.match(cardSummary,/M16 × 65 mm → M20 × 80 mm · Qty 4/);
 console.log(`PASS actual 200-card JSX construction and 48-point actions, isolated menu taps, FlatList integration (${(performance.now()-renderStart).toFixed(1)}ms). Physical-device rendering remains a deployment check.`);
+
+const revisionScreen=fs.readFileSync("mobile/app/revisions/[revisionId].tsx","utf8");
+assert.ok(revisionScreen.includes("Add Flagged Issue"));
+assert.ok(revisionScreen.includes("✓ Synced")&&revisionScreen.includes("Retry ${failedCount}")&&revisionScreen.includes("Sync ${pendingCount}"));
+assert.ok(revisionScreen.includes("Submit Review")&&revisionScreen.includes(">More</Text>"));
+assert.ok(revisionScreen.includes("operationalDetailSummary(data?.issueTypes.find(type=>type.id===finding.issueTypeId)?.detail_schema,finding.operationalDetails)"),"pending Manual FLIs display their configured summary");
+const detailFieldsSource=fs.readFileSync("mobile/components/quality/OperationalDetailFields.tsx","utf8");
+assert.ok(detailFieldsSource.includes('side("Current",true)')&&detailFieldsSource.includes('side("Required",false)'));
+assert.ok(detailFieldsSource.includes('accessibilityLabel={field.label}')&&detailFieldsSource.includes('field.options'));
+assert.ok(revisionScreen.includes("<OperationalDetailFields schema={data?.issueTypes.find(issue=>issue.id===findingForm.issueTypeId)?.detail_schema}"),"Manual FLI uses the configured editor");
+const detailEditor=load("mobile/components/quality/OperationalDetailFields.tsx",{"react/jsx-runtime":jsx,"react-native":Object.fromEntries(["View","Text","Pressable","ScrollView","TextInput"].map(name=>[name,name])),"./QualityShell":{qualityStyles:{cardTitle:{},primary:{},secondary:{}}}}).OperationalDetailFields;
+const editorTree=detailEditor({schema:bolt,values:boltValues(4),onChange:()=>{}});
+const editorText=nodes(editorTree,"Text").map(node=>node.props.children).flat(Infinity).filter(value=>typeof value==="string").join(" ");
+assert.match(editorText,/Current/);assert.match(editorText,/Required/);assert.match(editorText,/Change/);
+const editorInputs=nodes(editorTree,"TextInput").map(node=>node.props.accessibilityLabel);
+assert.ok(editorInputs.includes("Existing Diameter")&&editorInputs.includes("Required Diameter"),"Configured current/required controls are rendered with stable field labels");
+console.log("PASS mobile workflow exposes configured Current/Required/action fields for manual and imported findings; compact primary/sync/review actions and pending Manual FLI summaries are present.");
 
 // Existing update queue must upload extra Manual Before evidence before completion.
 globalThis.__DEV__=false;
