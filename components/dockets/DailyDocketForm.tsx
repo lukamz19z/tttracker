@@ -7,6 +7,7 @@ import TowerMemberFields, { type TowerMaterialMember } from "@/components/qualit
 import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { selectDocketMaterialSnapshot } from "@/lib/dockets/material-issue-snapshot.mjs";
 import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
 import {
   resolveSystemUserIdentity,
@@ -169,6 +170,16 @@ type MaterialCatalogItem = {
 };
 
 type MissingMaterialIssue = {
+  issue_type?: "missing" | "excess";
+  status?: string;
+  daily_activity?: Array<{
+    action: string;
+    quantity: number;
+    occurred_at: string;
+    source_tower_id: string | null;
+    destination_tower_id: string | null;
+    reference: string | null;
+  }>;
   issue_key: string;
   source_table: string;
   source_record_id: string;
@@ -183,6 +194,8 @@ type MissingMaterialIssue = {
   unit: string;
   first_reported_at: string;
   source_docket_id: string;
+  collected_today_quantity?: number;
+  transferred_today_quantity?: number;
 };
 
 
@@ -459,6 +472,7 @@ type DocketRecord = {
   travel_out_minutes?: number | null;
   mobilisation_hours?: number | null;
   mobilisation_notes?: string | null;
+  material_issue_snapshot?: MissingMaterialIssue[] | null;
   raw_manhours?: number | null;
   production_manhours?: number | null;
   incident_occurred?: boolean | null;
@@ -1346,7 +1360,10 @@ export default function DailyDocketForm({
   const [additionalTowerWork, setAdditionalTowerWork] = useState<AdditionalTowerWork[]>([]);
   const additionalTowerProgressRequests = useRef(new Map<string, symbol>());
   const [materialCatalog, setMaterialCatalog] = useState<MaterialCatalogItem[]>([]);
-  const [missingMaterialIssues, setMissingMaterialIssues] = useState<MissingMaterialIssue[]>([]);
+  const [missingMaterialIssues, setMissingMaterialIssues] = useState<MissingMaterialIssue[]>(() =>
+    Array.isArray(initialDocket?.material_issue_snapshot) ? initialDocket.material_issue_snapshot : []
+  );
+  const [missingMaterialsLoading, setMissingMaterialsLoading] = useState(true);
   const [bundleTransfers, setBundleTransfers] = useState<BundleTransferRecord[]>([]);
   const [towerTransferHistory, setTowerTransferHistory] = useState<BundleTransferRecord[]>([]);
   const [bundleCheckQtyById, setBundleCheckQtyById] = useState<Record<string, number>>({});
@@ -1798,13 +1815,33 @@ export default function DailyDocketForm({
 
   useEffect(() => {
     async function loadMissingMaterialIssues() {
-      const [missingEventsRes, receivedEventsRes] = await Promise.all([
+      setMissingMaterialsLoading(true);
+      if (docketId) {
+        const snapshotResult = await supabase
+          .from("tower_daily_dockets")
+          .select("approval_status,material_issue_snapshot")
+          .eq("id", docketId)
+          .maybeSingle();
+        if (!snapshotResult.error && snapshotResult.data && Array.isArray(snapshotResult.data.material_issue_snapshot)) {
+          const historicalSnapshot = selectDocketMaterialSnapshot<MissingMaterialIssue>(snapshotResult.data.approval_status, snapshotResult.data.material_issue_snapshot, []);
+          if (historicalSnapshot === snapshotResult.data.material_issue_snapshot) {
+            setMissingMaterialIssues(historicalSnapshot);
+            setMissingMaterialsLoading(false);
+            return;
+          }
+        }
+        if (snapshotResult.error) console.warn("Saved Daily Docket material snapshot could not be loaded; using the legacy date-based material history.", snapshotResult.error);
+      }
+      const [missingEventsRes, receivedEventsRes, transferRes] = await Promise.all([
         supabase
           .from("tower_material_events")
           .select(`
             id,
             docket_id,
             occurred_at,
+            event_type,
+            issue_status,
+            cancelled_at,
             items:tower_material_event_items(
               id,
               issue_key,
@@ -1823,7 +1860,7 @@ export default function DailyDocketForm({
             )
           `)
           .eq("tower_id", towerId)
-          .eq("event_type", "missing")
+          .in("event_type", ["missing", "excess"])
           .order("occurred_at", { ascending: true }),
         supabase
           .from("tower_material_events")
@@ -1831,26 +1868,39 @@ export default function DailyDocketForm({
             id,
             docket_id,
             occurred_at,
+            event_type,
+            tower_id,
+            delivery_reference,
             items:tower_material_event_items(
               source_issue_key,
               quantity
             )
           `)
           .eq("tower_id", towerId)
-          .eq("event_type", "found_received"),
+          .in("event_type", ["found_received", "excess_collected"]),
+        supabase
+          .from("tower_material_transfers")
+          .select("source_issue_key,quantity,status,transferred_at,received_at,source_tower_id,destination_tower_id,notes")
+          .eq("source_tower_id", towerId)
+          .not("source_issue_key", "is", null)
+          .in("status", ["in_transit", "received"]),
       ]);
 
       if (missingEventsRes.error) {
         console.warn("Outstanding missing material could not be loaded", missingEventsRes.error);
         setMissingMaterialIssues([]);
+        setMissingMaterialsLoading(false);
         return;
       }
 
       if (receivedEventsRes.error) {
         console.warn("Material receipt history could not be loaded", receivedEventsRes.error);
       }
+      if (transferRes.error) console.warn("Excess transfer history could not be loaded", transferRes.error);
 
       const receivedByIssue = new Map<string, number>();
+      const collectedTodayByIssue = new Map<string, number>();
+      const dailyActivityByIssue = new Map<string, MissingMaterialIssue["daily_activity"]>();
 
       for (const event of (receivedEventsRes.data || []) as any[]) {
         // Keep a saved/previous-day docket at its own material cut-off. Later
@@ -1863,6 +1913,30 @@ export default function DailyDocketForm({
             sourceIssueKey,
             (receivedByIssue.get(sourceIssueKey) || 0) + Math.max(toNumber(item.quantity), 0)
           );
+          if (toStringValue(event.event_type) === "excess_collected" && toStringValue(event.occurred_at).slice(0, 10) === docketDate) {
+            collectedTodayByIssue.set(sourceIssueKey, (collectedTodayByIssue.get(sourceIssueKey) || 0) + Math.max(toNumber(item.quantity), 0));
+          }
+          if (toStringValue(event.occurred_at).slice(0, 10) === docketDate) {
+            const activity = dailyActivityByIssue.get(sourceIssueKey) || [];
+            activity.push({ action: toStringValue(event.event_type) === "excess_collected" ? "collected" : "received", quantity: Math.max(toNumber(item.quantity), 0), occurred_at: toStringValue(event.occurred_at), source_tower_id: toStringValue(event.event_type) === "excess_collected" ? towerId : null, destination_tower_id: toStringValue(event.event_type) === "found_received" ? towerId : null, reference: toStringValue(event.delivery_reference) || null });
+            dailyActivityByIssue.set(sourceIssueKey, activity);
+          }
+        }
+      }
+
+      const reservedByIssue = new Map<string, number>();
+      const transferredTodayByIssue = new Map<string, number>();
+      for (const transfer of (transferRes.data || []) as any[]) {
+        const key = toStringValue(transfer.source_issue_key);
+        const transferDate = toStringValue(transfer.transferred_at).slice(0, 10);
+        if (!key || (docketDate && transferDate > docketDate)) continue;
+        const receivedAfterDocket = !transfer.received_at || toStringValue(transfer.received_at).slice(0, 10) > docketDate;
+        if (receivedAfterDocket) reservedByIssue.set(key, (reservedByIssue.get(key) || 0) + Math.max(toNumber(transfer.quantity), 0));
+        if (transferDate === docketDate) {
+          transferredTodayByIssue.set(key, (transferredTodayByIssue.get(key) || 0) + Math.max(toNumber(transfer.quantity), 0));
+          const activity = dailyActivityByIssue.get(key) || [];
+          activity.push({ action: "transferred", quantity: Math.max(toNumber(transfer.quantity), 0), occurred_at: toStringValue(transfer.transferred_at), source_tower_id: toStringValue(transfer.source_tower_id) || null, destination_tower_id: toStringValue(transfer.destination_tower_id) || null, reference: toStringValue(transfer.notes) || null });
+          dailyActivityByIssue.set(key, activity);
         }
       }
 
@@ -1870,14 +1944,24 @@ export default function DailyDocketForm({
 
       for (const event of (missingEventsRes.data || []) as any[]) {
         if (docketDate && toStringValue(event.occurred_at).slice(0, 10) > docketDate) continue;
+        if (toStringValue(event.issue_status) === "cancelled" && (!docketDate || !event.cancelled_at || toStringValue(event.cancelled_at).slice(0, 10) <= docketDate)) continue;
+        const issueType = toStringValue(event.event_type) === "excess" ? "excess" : "missing";
         for (const item of event.items || []) {
           const issueKey = toStringValue(item.issue_key);
           if (!issueKey) continue;
 
           const originalQuantity = Math.max(toNumber(item.quantity), 0);
           const receivedQuantity = Math.max(receivedByIssue.get(issueKey) || 0, 0);
+          const reserved = issueType === "excess" ? reservedByIssue.get(issueKey) || 0 : 0;
+          const remainingQuantity = Math.max(originalQuantity - receivedQuantity - reserved, 0);
+          const issueStatus = toStringValue(event.issue_status).toLowerCase();
+          const status = issueType === "excess"
+            ? remainingQuantity <= 0 ? "resolved" : receivedQuantity > 0 ? "partially_collected" : "available"
+            : remainingQuantity <= 0 ? issueStatus === "resolved" ? "resolved" : "received" : receivedQuantity > 0 ? "partially_received" : "outstanding";
 
           issues.push({
+            issue_type: issueType,
+            status,
             issue_key: issueKey,
             source_table: toStringValue(item.source_table),
             source_record_id: toStringValue(item.source_record_id),
@@ -1891,20 +1975,24 @@ export default function DailyDocketForm({
             item_description: toStringValue(item.item_description),
             original_quantity: originalQuantity,
             received_quantity: receivedQuantity,
-            remaining_quantity: Math.max(originalQuantity - receivedQuantity, 0),
+            remaining_quantity: remainingQuantity,
             unit: toStringValue(item.unit) || "ea",
             first_reported_at: toStringValue(event.occurred_at),
             source_docket_id: toStringValue(event.docket_id),
+            collected_today_quantity: collectedTodayByIssue.get(issueKey) || 0,
+            transferred_today_quantity: transferredTodayByIssue.get(issueKey) || 0,
+            daily_activity: dailyActivityByIssue.get(issueKey) || [],
           });
         }
       }
 
       setMissingMaterialIssues(issues);
+      setMissingMaterialsLoading(false);
     }
 
     const timer = window.setTimeout(() => void loadMissingMaterialIssues(), 0);
     return () => window.clearTimeout(timer);
-  }, [docketDate, supabase, towerId]);
+  }, [docketDate, docketId, initialDocket?.material_issue_snapshot, supabase, towerId]);
 
   useEffect(() => {
     async function loadBundleTransferContext() {
@@ -3006,7 +3094,11 @@ export default function DailyDocketForm({
   }, [delayRows]);
 
   const outstandingMissingIssues = useMemo(
-    () => missingMaterialIssues.filter((issue) => issue.remaining_quantity > 0),
+    () => missingMaterialIssues.filter((issue) => (issue.issue_type || "missing") === "missing" && issue.remaining_quantity > 0),
+    [missingMaterialIssues]
+  );
+  const outstandingExcessIssues = useMemo(
+    () => missingMaterialIssues.filter((issue) => issue.issue_type === "excess" && issue.remaining_quantity > 0),
     [missingMaterialIssues]
   );
 
@@ -3177,6 +3269,15 @@ export default function DailyDocketForm({
 
   function projectTowerName(id: string) {
     return projectTowers.find((tower) => tower.id === id)?.name || "Tower";
+  }
+
+  function materialActivitySummary(activity: NonNullable<MissingMaterialIssue["daily_activity"]>[number]) {
+    const movement = activity.action === "transferred"
+      ? `${projectTowerName(activity.source_tower_id || "")} → ${projectTowerName(activity.destination_tower_id || "")}`
+      : activity.action === "received"
+        ? `received at ${projectTowerName(activity.destination_tower_id || "")}`
+        : `collected from ${projectTowerName(activity.source_tower_id || "")}`;
+    return `${activity.quantity} ${activity.action} · ${movement}${activity.reference ? ` · ${activity.reference}` : ""}`;
   }
 
   function transferOutQuantity(bundleId: string) {
@@ -6070,14 +6171,19 @@ const deleteRes = await supabase
   }
 
   async function handleCreate(options?: { navigate?: boolean }) {
+    if (missingMaterialsLoading) throw new Error("Daily Docket material history is still loading. Please try saving again in a moment.");
     const docketFileUrl = await uploadFileIfNeeded();
+    const docketHeader = {
+      ...buildDocketPayload(docketFileUrl, null),
+      material_issue_snapshot: missingMaterialIssues,
+    };
 
     const { data: docket, error: docketError } = await supabase
       .from("tower_daily_dockets")
       .insert({
         project_id: projectId,
         tower_id: towerId,
-        ...buildDocketPayload(docketFileUrl, null),
+        ...docketHeader,
       })
       .select()
       .single();
@@ -6139,6 +6245,7 @@ const deleteRes = await supabase
 
   async function handleUpdate(options?: { navigate?: boolean }) {
     if (!docketId) throw new Error("Missing docket id");
+    if (missingMaterialsLoading) throw new Error("Daily Docket material history is still loading. Please try saving again in a moment.");
 
     const { data: existing, error: existingError } = await supabase
       .from("tower_daily_dockets")
@@ -6155,10 +6262,14 @@ const deleteRes = await supabase
     }
 
     const docketFileUrl = await uploadFileIfNeeded();
+    const docketHeader = {
+      ...buildDocketPayload(docketFileUrl, existing.signed_date),
+      material_issue_snapshot: missingMaterialIssues,
+    };
 
     const updateRes = await supabase
       .from("tower_daily_dockets")
-      .update(buildDocketPayload(docketFileUrl, existing.signed_date))
+      .update(docketHeader)
       .eq("id", docketId);
 
     if (updateRes.error) {
@@ -9277,6 +9388,7 @@ const deleteRes = await supabase
                                   Remaining <strong>{issue.remaining_quantity}</strong>
                                 </span>
                               </div>
+                              {issue.daily_activity?.length ? <div className="mt-2 text-xs text-slate-600">Today: {issue.daily_activity.map(materialActivitySummary).join(" · ")}</div> : null}
                             </div>
 
                             {!locked && !isView && (
@@ -9297,6 +9409,16 @@ const deleteRes = await supabase
                 )}
               </div>
             )}
+          </div>
+
+          <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-black text-blue-950">Excess / Available</h4>
+              <span className="rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[10px] font-black text-blue-900 md:text-xs">
+                {outstandingExcessIssues.length} open · {outstandingExcessIssues.reduce((sum, issue) => sum + issue.remaining_quantity, 0).toFixed(0)} qty available
+              </span>
+            </div>
+            {outstandingExcessIssues.length ? <div className="mt-2 grid gap-2">{outstandingExcessIssues.map((issue) => <div key={issue.issue_key} className="rounded-lg border border-blue-100 bg-white p-2.5"><div className="text-sm font-bold text-slate-900">{issue.item_reference}</div>{issue.item_description ? <div className="mt-0.5 text-xs text-slate-500">{issue.item_description}</div> : null}<div className="mt-1 text-xs text-blue-900">{issue.remaining_quantity} {issue.unit} available{issue.bundle_section ? ` · ${issue.bundle_section}` : ""}{issue.daily_activity?.length ? <div className="mt-1 text-slate-600">Today: {issue.daily_activity.map(materialActivitySummary).join(" · ")}</div> : null}</div></div>)}</div> : <p className="mt-2 text-xs text-slate-600">No unresolved excess material for this tower.</p>}
           </div>
 
           {materialEvents.filter((event) => event.event_type !== "excess").length === 0 ? (

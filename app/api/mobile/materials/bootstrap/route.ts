@@ -174,7 +174,7 @@ export async function GET(request: NextRequest) {
       paged((from, to) =>
         service
           .from("tower_material_transfers")
-          .select("id,project_id,source_tower_id,destination_tower_id,source_bundle_id,destination_bundle_id,bundle_no,bundle_section,quantity,status,transferred_by,transferred_by_name,transferred_at,received_by,received_by_name,received_at,cancelled_by,cancelled_by_name,cancelled_at,notes")
+          .select("id,project_id,source_tower_id,destination_tower_id,source_bundle_id,destination_bundle_id,bundle_no,bundle_section,quantity,status,transferred_by,transferred_by_name,transferred_at,received_by,received_by_name,received_at,cancelled_by,cancelled_by_name,cancelled_at,notes,source_issue_key,destination_issue_key,item_snapshot,create_client_mutation_id,receive_client_mutation_id")
           .eq("project_id", projectId)
           .order("transferred_at", { ascending: false })
           .range(from, to),

@@ -409,6 +409,15 @@ export function DailyDocketSiteEvents({
     label: tower.name,
     subtitle: tower.line || undefined,
   }));
+  const towerLabel = (towerId: string | null) => towerId ? towerOptions.find((tower) => tower.value === towerId)?.label || "Tower" : "";
+  const materialActivityLabel = (activity: NonNullable<DailyDocketDraft["outstandingMaterials"][number]["daily_activity"]>[number]) => {
+    const movement = activity.action === "transferred"
+      ? `${towerLabel(activity.source_tower_id)} → ${towerLabel(activity.destination_tower_id)}`
+      : activity.action === "received"
+        ? `received at ${towerLabel(activity.destination_tower_id)}`
+        : `collected from ${towerLabel(activity.source_tower_id)}`;
+    return `${activity.quantity} ${activity.action} · ${movement}${activity.reference ? ` · ${activity.reference}` : ""}`;
+  };
 
   const workerNames = useMemo(
     () =>
@@ -1265,13 +1274,11 @@ export function DailyDocketSiteEvents({
           </Pressable>
         }
       >
-        {draft.outstandingMaterials.filter(
-          (issue) => issue.remaining_quantity > 0,
-        ).length > 0 ? (
+        {draft.outstandingMaterials.filter((issue) => (issue.issue_type||"missing")!=="excess"&&issue.remaining_quantity>0).length > 0 ? (
           <View style={styles.outstandingWrap}>
-            <Text style={styles.subHeading}>Outstanding from prior dockets</Text>
+            <Text style={styles.subHeading}>MISSING / OUTSTANDING</Text>
             {draft.outstandingMaterials
-              .filter((issue) => issue.remaining_quantity > 0)
+              .filter((issue) => (issue.issue_type||"missing")!=="excess"&&issue.remaining_quantity > 0)
               .map((issue) => (
                 <View key={issue.issue_key} style={styles.outstandingRow}>
                   <View style={{ flex: 1 }}>
@@ -1282,6 +1289,7 @@ export function DailyDocketSiteEvents({
                       {issue.remaining_quantity} {issue.unit} remaining
                       {issue.bundle_no ? ` · Bundle ${issue.bundle_no}` : ""}
                     </Text>
+                    {issue.daily_activity?.length ? <Text style={styles.helper}>{issue.daily_activity.map(materialActivityLabel).join(" · ")}</Text> : null}
                   </View>
                   <Pressable
                     disabled={locked}
@@ -1294,6 +1302,8 @@ export function DailyDocketSiteEvents({
               ))}
           </View>
         ) : null}
+
+        {draft.outstandingMaterials.filter((issue) => issue.issue_type === "excess" && issue.remaining_quantity > 0).length > 0 ? <View style={styles.outstandingWrap}><Text style={styles.subHeading}>EXCESS / AVAILABLE</Text>{draft.outstandingMaterials.filter(issue => issue.issue_type === "excess" && issue.remaining_quantity > 0).map(issue => <View key={issue.issue_key} style={styles.outstandingRow}><View style={{ flex: 1 }}><Text style={styles.outstandingTitle}>{issue.item_reference}</Text><Text style={styles.helper}>{issue.remaining_quantity} {issue.unit} available{issue.bundle_no ? ` · Bundle ${issue.bundle_no}` : ""}</Text>{issue.daily_activity?.length ? <Text style={styles.helper}>{issue.daily_activity.map(materialActivityLabel).join(" · ")}</Text> : null}</View></View>)}</View> : null}
 
         {draft.materialEvents.length === 0 ? (
           <Text style={styles.empty}>No material events recorded.</Text>

@@ -100,7 +100,7 @@ type Value = {
   createTransfer: (input: CreateTransferInput) => Promise<void>;
   receiveTransfer: (transfer: TransferRecord) => Promise<void>;
   cancelTransfer: (transfer: TransferRecord) => Promise<void>;
-  recordMissingReceipt: (input: RecordMissingReceiptInput, photos?: Array<{id:string;uri:string;name:string;mimeType:string}>) => Promise<void>;
+  recordMissingReceipt: (input: RecordMissingReceiptInput, photos?: {id:string;uri:string;name:string;mimeType:string}[]) => Promise<void>;
   reportMissingMaterial: (input: Omit<CreateMissingMaterialInput,"projectId">) => Promise<void>;
   resolveMissingMaterial: (input: { towerId: string; issueKey: string }) => Promise<void>;
 };
@@ -245,6 +245,24 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
               setData(next);
               persist(next);
             }
+            for (const photo of mutation.input.initialEvidence || []) {
+              try {
+                await uploadMaterialReceiptEvidence({
+                  projectId: mutation.input.projectId,
+                  issueKey: result.issue.issue_key,
+                  receiptMutationId: mutation.input.clientMutationId,
+                  receiptEventId: result.issue.event_id,
+                  clientEvidenceId: photo.clientEvidenceId,
+                  localPhotoId: photo.localPhotoId,
+                  uri: photo.uri,
+                  name: photo.name,
+                  mimeType: photo.mimeType,
+                });
+              } catch (evidenceError) {
+                throw new Error(`Excess reported, photo needs retry: ${evidenceError instanceof Error ? evidenceError.message : "Evidence upload failed."}`);
+              }
+            }
+            for (const photo of mutation.input.initialEvidence || []) await removeOfflineFile(photo.uri);
           } else if (mutation.kind === "resolve_missing") {
             const issueKey = canonicalIssueKeys.get(mutation.input.issueKey) || mutation.input.issueKey;
             await resolveMissingMaterialApi({ ...mutation.input, issueKey });
@@ -1225,7 +1243,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   );
 
   const recordMissingReceipt = useCallback(
-    async (input: RecordMissingReceiptInput, photos:Array<{id:string;uri:string;name:string;mimeType:string}>=[]) => {
+    async (input: RecordMissingReceiptInput, photos:{id:string;uri:string;name:string;mimeType:string}[]=[]) => {
       setBusyIssueKey(input.issueKey);
       try {
         const receiptCandidate=makeReceiveMissingMutation(input, projectId || undefined);
@@ -1256,7 +1274,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     const queued=await enqueue(makeReportMissingMutation({...input,projectId}));
     const mutation=queued.find(row=>row.id===queued[queued.length-1]?.id);
     const local=mutation?.kind==="report_missing"?mutation.input:null;
-    if(local&&dataRef.current){const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:"outstanding",client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||"other",material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
+    if(local&&dataRef.current){const isExcess=local.issueType==="excess";const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:isExcess?"excess":"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:isExcess?"available":"outstanding",current_effect:local.location||null,work_outcome:local.disposition||null,client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||"other",material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
     if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true);}
   },[dataRef,enqueue,flushQueue,load,online,persist,projectId]);
 

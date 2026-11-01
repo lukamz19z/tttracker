@@ -223,8 +223,11 @@ type MaterialTransfer = {
   project_id: string;
   source_tower_id: string;
   destination_tower_id: string;
-  source_bundle_id: string;
-  destination_bundle_id: string;
+  source_bundle_id: string | null;
+  destination_bundle_id: string | null;
+  source_issue_key?: string | null;
+  destination_issue_key?: string | null;
+  item_snapshot?: Record<string, unknown> | null;
   bundle_no: string;
   bundle_section: string;
   quantity: number;
@@ -2568,6 +2571,8 @@ function useMaterialsData(projectId: string, towerId: string) {
       return transfer.status === "received";
     }
 
+    if(transfer.source_issue_key){setSaving(true);try{const {data:{session}}=await supabase.auth.getSession();if(!session?.access_token)throw new Error("Your session has expired.");const response=await fetch(`/api/materials/missing/transfers/${encodeURIComponent(transfer.id)}/receive`,{method:"POST",headers:{Authorization:`Bearer ${session.access_token}`,"Content-Type":"application/json"},body:JSON.stringify({clientMutationId:`website-material-transfer-receive-${transfer.id}`})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Material transfer could not be received.");await load();return true;}catch(error){alert(error instanceof Error?error.message:"Material transfer could not be received.");return false;}finally{setSaving(false);}}
+
     const destinationBundle = bundles.find(
       (bundle) => bundle.id === transfer.destination_bundle_id,
     );
@@ -3602,7 +3607,7 @@ function TransfersWorkspace({
                     </div>
 
                     <div className="mt-2 text-lg font-black text-slate-950">
-                      {transfer.bundle_no} · {transfer.bundle_section}
+                      {transfer.source_issue_key?([safeString(transfer.item_snapshot?.item_reference),safeString(transfer.item_snapshot?.item_description),safeString(transfer.item_snapshot?.specification)].filter(Boolean).join(" · ")||"Material"):transfer.bundle_no} · {transfer.bundle_section}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-slate-600">
                       <span className="font-bold">{sourceName}</span>
@@ -4003,7 +4008,7 @@ function IssuesWorkspace({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end"><button type="button" onClick={()=>setReportOpen(true)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-xs font-black text-white">+ Report Missing Material</button></div>
+      <div className="flex justify-end"><button type="button" onClick={()=>setReportOpen(true)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-xs font-black text-white">+ Report Material Issue</button></div>
       {reportOpen?<ReportMissingMaterialForm projectId={projectId} towerId={towerId} bundles={data.bundles} members={data.members} bolts={data.bolts} onDone={()=>{setReportOpen(false);void data.refresh();}}/>:null}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
         <IssueMetric label="Open" value={open.length} tone="red" />
@@ -4173,9 +4178,18 @@ function IssuesWorkspace({
               <IssueEmpty text="No excess material is currently recorded." />
             ) : (
               <>
-                {excessEvents.map((event) => (
-                  <MaterialEventCard key={event.id} event={event} data={data} tone="blue" />
-                ))}
+                {excessEvents.map((event) => {
+                  const issueKey = event.items[0]?.issue_key || "";
+                  const collections = data.materialEvents
+                    .filter((row) => row.event_type === "excess_collected")
+                    .filter((row) => row.items.some((item) => item.source_issue_key === issueKey))
+                    .map((row) => ({ id: row.id, occurred_at: row.occurred_at, notes: row.notes, event_type: row.event_type }));
+                  return <div key={event.id}>
+                    <MaterialEventCard event={event} data={data} tone="blue" />
+                    <ExcessCollectionControl event={event} data={data} />
+                    {issueKey ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={issueKey} status={event.issue_status || "available"} receipts={collections} /> : null}
+                  </div>;
+                })}
                 {overReceived.map(({ bundle, received, excess }) => (
                   <div key={bundleUiKey(bundle)} className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3">
                     <div className="flex items-center justify-between gap-3">
@@ -4280,6 +4294,117 @@ function IssueQty({ label, value, tone = "slate" }: { label: string; value: numb
 
 function DetailCard({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-wide text-slate-400">{label}</div><div className="mt-1 text-sm font-black text-slate-900">{value}</div></div>;
+}
+
+function ExcessCollectionControl({ event, data }: { event: MaterialEvent; data: MaterialsData }) {
+  const [open, setOpen] = useState(false);
+  const [quantity, setQuantity] = useState("");
+  const [reference, setReference] = useState("");
+  const [location, setLocation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [clientMutationId] = useState(() => `website-excess-${crypto.randomUUID()}`);
+  const [error, setError] = useState("");
+  const [transferOpen,setTransferOpen]=useState(false);
+  const [destinationTowerId,setDestinationTowerId]=useState("");
+  const [destinationIssueKey,setDestinationIssueKey]=useState("");
+  const [transferQuantity,setTransferQuantity]=useState("");
+  const [transferBusy,setTransferBusy]=useState(false);
+  const [transferMutationId]=useState(()=>`website-excess-transfer-${crypto.randomUUID()}`);
+  const item = event.items[0];
+  const issueKey = item?.issue_key;
+  const collected = data.materialEvents
+    .filter((row) => row.event_type === "excess_collected")
+    .flatMap((row) => row.items)
+    .filter((row) => row.source_issue_key === issueKey)
+    .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const reserved = data.transfers.filter((row) => row.source_issue_key === issueKey && row.status === "in_transit").reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const remaining = Math.max(Number(item?.quantity || 0) - collected - reserved, 0);
+
+  async function submit() {
+    if (!issueKey || !event.project_id) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { data: { session } } = await createSupabaseBrowser().auth.getSession();
+      if (!session?.access_token) throw new Error("Your session has expired.");
+      const response = await fetch("/api/materials/missing/collect-excess", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: event.project_id,
+          towerId: event.tower_id,
+          issueKey,
+          quantity: Number(quantity),
+          clientMutationId,
+          reference,
+          location,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Collection could not be recorded.");
+      const receiptEventId = String(result.collection?.event_id || "");
+      for (const file of photos) {
+        const bytes = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const hash = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+        const form = new FormData();
+        form.set("projectId", event.project_id);
+        form.set("issueKey", issueKey);
+        form.set("receiptEventId", receiptEventId);
+        form.set("clientEvidenceId", `${receiptEventId}:${hash}`);
+        form.set("file", file);
+        const evidenceResponse = await fetch("/api/mobile/materials/missing/evidence", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          body: form,
+        });
+        const evidenceResult = await evidenceResponse.json();
+        if (!evidenceResponse.ok) throw new Error(evidenceResult.error || "Collection was recorded, but evidence upload failed. Retry to attach the selected photos.");
+      }
+      window.location.reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Collection failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitTransfer(){if(!issueKey||!event.project_id||!destinationTowerId)return;setTransferBusy(true);setError("");try{const {data:{session}}=await createSupabaseBrowser().auth.getSession();if(!session?.access_token)throw new Error("Your session has expired.");const response=await fetch("/api/materials/missing/transfers",{method:"POST",headers:{Authorization:`Bearer ${session.access_token}`,"Content-Type":"application/json"},body:JSON.stringify({projectId:event.project_id,sourceTowerId:event.tower_id,destinationTowerId,sourceIssueKey:issueKey,destinationIssueKey:destinationIssueKey||null,quantity:Number(transferQuantity),clientMutationId:transferMutationId})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Transfer could not be created.");window.location.reload();}catch(reason){setError(reason instanceof Error?reason.message:"Transfer failed.");}finally{setTransferBusy(false);}}
+
+  if (!issueKey || remaining <= 0) return null;
+  return (
+    <div className="mt-2">
+      <div className="mb-2 text-xs font-bold text-blue-800">{collected} collected · {remaining} available</div>
+      <button type="button" onClick={() => setOpen((value) => !value)} className="min-h-9 rounded-lg border border-blue-200 bg-white px-3 text-xs font-black text-blue-800">
+        {open ? "Close" : "Collect / Action"}
+      </button>
+      {open ? (
+        <div className="mt-2 grid gap-2 rounded-xl border border-blue-100 bg-white p-3 sm:grid-cols-2">
+          <label className="text-xs font-bold text-slate-600">Quantity Collected
+            <input type="number" min="0.01" max={remaining} step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} className="mt-1 min-h-9 w-full rounded-lg border px-2" />
+          </label>
+          <label className="text-xs font-bold text-slate-600">Destination / Location
+            <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Laydown or destination tower" className="mt-1 min-h-9 w-full rounded-lg border px-2" />
+          </label>
+          <label className="text-xs font-bold text-slate-600">Docket / Reference
+            <input value={reference} onChange={(event) => setReference(event.target.value)} className="mt-1 min-h-9 w-full rounded-lg border px-2" />
+          </label>
+          <label className="text-xs font-bold text-slate-600 sm:col-span-2">Collection Evidence · Optional
+            <input type="file" accept="image/jpeg,image/png,application/pdf" multiple onChange={(event) => setPhotos(Array.from(event.currentTarget.files || []))} className="mt-1 block w-full rounded-lg border border-slate-200 p-2 text-xs" />
+          </label>
+          <div className="flex items-end">
+            <button disabled={busy || !quantity || Number(quantity) <= 0} onClick={() => void submit()} className="min-h-9 rounded-lg bg-blue-700 px-4 text-xs font-black text-white disabled:opacity-50">
+              {busy ? "Saving…" : "Record Collection"}
+            </button>
+          </div>
+          {error ? <p role="alert" className="text-xs text-rose-700 sm:col-span-2">{error}</p> : null}
+        </div>
+      ) : null}
+      <button type="button" onClick={()=>setTransferOpen(value=>!value)} className="mt-2 min-h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-black text-slate-700">{transferOpen?"Close Transfer":"Transfer to Tower"}</button>
+      {transferOpen?<div className="mt-2 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2"><label className="text-xs font-bold text-slate-600">Destination Tower<select value={destinationTowerId} onChange={event=>{setDestinationTowerId(event.target.value);setDestinationIssueKey("");}} className="mt-1 min-h-9 w-full rounded-lg border bg-white px-2"><option value="">Choose tower</option>{data.projectTowers.filter(tower=>tower.id!==event.tower_id).map(tower=><option key={tower.id} value={tower.id}>{tower.name||tower.line}</option>)}</select></label><label className="text-xs font-bold text-slate-600">Destination Missing requirement · Optional<select value={destinationIssueKey} onChange={event=>setDestinationIssueKey(event.target.value)} className="mt-1 min-h-9 w-full rounded-lg border bg-white px-2"><option value="">Transfer without linking a Missing item</option>{data.materialEvents.filter(row=>row.event_type==="missing"&&row.tower_id===destinationTowerId&&row.items.some(item=>item.issue_key)).flatMap(row=>row.items.filter(item=>item.issue_key).map(item=><option key={item.issue_key} value={item.issue_key || ""}>{item.item_reference||item.item_description} · {item.quantity} {item.unit||"ea"}</option>))}</select></label><label className="text-xs font-bold text-slate-600">Quantity to Transfer<input type="number" min="0.01" max={remaining} step="any" value={transferQuantity} onChange={event=>setTransferQuantity(event.target.value)} className="mt-1 min-h-9 w-full rounded-lg border px-2"/></label><button type="button" disabled={transferBusy||!destinationTowerId||!transferQuantity||Number(transferQuantity)>remaining} onClick={()=>void submitTransfer()} className="self-end min-h-9 rounded-lg bg-slate-900 px-3 text-xs font-black text-white disabled:opacity-50">{transferBusy?"Saving…":"Start Transfer"}</button></div>:null}
+    </div>
+  );
 }
 
 function MaterialEventCard({ event, data, tone }: { event: MaterialEvent; data: MaterialsData; tone: "rose" | "blue" }) {

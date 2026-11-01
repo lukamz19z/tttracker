@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
 import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
+import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export async function POST(request: NextRequest) {
     const projectId = clean(body.projectId);
     const towerId = clean(body.towerId);
     const clientMutationId = clean(body.clientMutationId);
+    const issueType = clean(body.issueType) === "excess" ? "excess" : "missing";
     const quantity = positive(body.quantity);
     const description = clean(body.description);
     const assignedToUserId = clean(body.assignedToUserId) || null;
@@ -31,11 +33,18 @@ export async function POST(request: NextRequest) {
     if (!access) return NextResponse.json({ error: "You do not have access to this project." }, { status: 403 });
     const requestedUsers = [...new Set([...(assignedToUserId ? [assignedToUserId] : []), ...notifyUserIds])];
     if (requestedUsers.length) {
+      const eligible = await eligibleMaterialUsers(service, projectId);
+      const assignmentIds = new Set(eligible.assignmentUsers.map(user => user.id));
+      const notifyIds = new Set(eligible.notifyUsers.map(user => user.id));
+      if (assignedToUserId && !assignmentIds.has(assignedToUserId)) return NextResponse.json({ error: "Select an authorised Materials manager for assignment." }, { status: 400 });
+      if (notifyUserIds.some(id => !notifyIds.has(id))) return NextResponse.json({ error: "Additional recipients must be configured Materials notification recipients." }, { status: 400 });
+    }
+    if (requestedUsers.length) {
       const { data: userAccess, error: userAccessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).in("user_id", requestedUsers);
       if (userAccessError) throw new Error(userAccessError.message);
       if ((userAccess || []).length !== requestedUsers.length) return NextResponse.json({ error: "One or more selected users do not have access to this project." }, { status: 400 });
     }
-    const result = await service.rpc("tttracker_v1_create_missing_material", {
+    const result = await service.rpc(issueType === "excess" ? "tttracker_v1_create_excess_material" : "tttracker_v1_create_missing_material", {
       p_project_id: projectId,
       p_tower_id: towerId,
       p_client_mutation_id: clientMutationId,
@@ -58,9 +67,10 @@ export async function POST(request: NextRequest) {
         memberNumber: clean(body.memberNumber) || null,
         drawingNumber: clean(body.drawingNumber) || null,
       },
-      p_urgency: clean(body.urgency) || null,
-      p_required_by: clean(body.requiredBy) || null,
+      p_urgency: issueType === "missing" ? clean(body.urgency) || null : null,
+      p_required_by: issueType === "missing" ? clean(body.requiredBy) || null : null,
       p_notes: clean(body.notes) || null,
+      ...(issueType === "excess" ? { p_location: clean(body.location) || null, p_disposition: clean(body.disposition) || null } : {}),
       p_occurred_at: clean(body.occurredAt) || new Date().toISOString(),
     });
     if (result.error) throw new Error(result.error.message);
@@ -69,7 +79,7 @@ export async function POST(request: NextRequest) {
       const { error: assignmentError } = await service.from("tower_material_events").update({ assigned_to_user_id: assignedToUserId, notify_user_ids: notifyUserIds }).eq("id", issue.event_id).eq("project_id", projectId);
       if (assignmentError) throw new Error(`Missing material was saved but assignment could not be applied: ${assignmentError.message}`);
     }
-    await notifyMissingMaterialEvent({ service, projectId, sourceEventId: issue.event_id, kind: "raised", actorUserId: identity.userId });
+    if (!issue.duplicate) await notifyMissingMaterialEvent({ service, projectId, sourceEventId: issue.event_id, kind: issueType === "excess" ? "excess_raised" : "raised", actorUserId: identity.userId });
     return NextResponse.json({ ok: true, issue });
   } catch (error) {
     if (error instanceof Error && /tower_material_event_items_material_type_check/.test(error.message)) {

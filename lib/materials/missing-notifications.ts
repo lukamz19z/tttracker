@@ -4,22 +4,22 @@ import { sendDailyDocketEmail, docketEmailShell } from "@/lib/email/daily-docket
 import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
 import { resolveUserDisplayName } from "@/lib/materials/project-users";
 
-export type MissingMaterialNotificationKind = "raised" | "partial_receipt" | "full_receipt" | "resolved" | "assignment" | "update" | "cancelled";
+export type MissingMaterialNotificationKind = "raised" | "partial_receipt" | "full_receipt" | "resolved" | "assignment" | "update" | "cancelled" | "excess_raised" | "excess_partial_collection" | "excess_resolved" | "transfer";
 type Rule = { user_id:string;notify_raised:boolean;notify_urgent:boolean;notify_partial_receipt:boolean;notify_full_receipt:boolean;notify_resolved:boolean;notify_assignment:boolean;notify_update?:boolean;notify_cancel?:boolean;receives_in_app:boolean;receives_push:boolean;receives_email:boolean };
 const clean=(value:unknown)=>String(value??"").trim();
 const esc=(value:unknown)=>clean(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
-function applies(rule:Rule,kind:MissingMaterialNotificationKind){if(kind==="raised")return rule.notify_raised;if(kind==="partial_receipt")return rule.notify_partial_receipt;if(kind==="full_receipt")return rule.notify_full_receipt;if(kind==="resolved")return rule.notify_resolved;if(kind==="assignment")return rule.notify_assignment;if(kind==="update")return rule.notify_update===true;return rule.notify_cancel===true;}
+function applies(rule:Rule,kind:MissingMaterialNotificationKind){if(kind==="raised"||kind==="excess_raised")return rule.notify_raised;if(kind==="partial_receipt"||kind==="excess_partial_collection")return rule.notify_partial_receipt;if(kind==="full_receipt")return rule.notify_full_receipt;if(kind==="resolved"||kind==="excess_resolved")return rule.notify_resolved;if(kind==="assignment")return rule.notify_assignment;if(kind==="update"||kind==="transfer")return rule.notify_update===true;return rule.notify_cancel===true;}
 function eventType(kind:MissingMaterialNotificationKind,identity?:string){return `material_missing_${kind}${identity?`_${identity.replace(/[^a-zA-Z0-9]/g,"").slice(-24)}`:""}`;}
 
-export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;projectId:string;sourceEventId:string;issueEventId?:string;kind:MissingMaterialNotificationKind;actorUserId:string|null;remainingQuantity?:number;totalQuantity?:number;receivedQuantity?:number;deliveryReference?:string|null;actionId?:string;note?:string;cancellationReason?:string;assignedToUserId?:string|null}){
+export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;projectId:string;sourceEventId:string;issueEventId?:string;kind:MissingMaterialNotificationKind;actorUserId:string|null;remainingQuantity?:number;totalQuantity?:number;receivedQuantity?:number;deliveryReference?:string|null;actionId?:string;note?:string;cancellationReason?:string;assignedToUserId?:string|null;destinationTowerId?:string;transferQuantity?:number}){
   const {service,projectId,sourceEventId,kind}=args;
-  const {data:event,error:eventError}=await service.from("tower_material_events").select("id,project_id,tower_id,created_by_user_id,assigned_to_user_id,notify_user_ids,urgency,required_by,notes,delivery_reference,tower_material_event_items(issue_key,item_reference,item_description,quantity,unit,material_type,material_category,specification,segment,member_number,drawing_number)").eq("id",args.issueEventId||sourceEventId).eq("project_id",projectId).maybeSingle();
+  const {data:event,error:eventError}=await service.from("tower_material_events").select("id,project_id,tower_id,event_type,created_by_user_id,assigned_to_user_id,notify_user_ids,urgency,required_by,notes,delivery_reference,current_effect,work_outcome,tower_material_event_items(issue_key,item_reference,item_description,quantity,unit,material_type,material_category,specification,segment,member_number,drawing_number)").eq("id",args.issueEventId||sourceEventId).eq("project_id",projectId).maybeSingle();
   if(eventError)throw new Error(`Missing-material notification event lookup failed: ${eventError.message}`);if(!event)throw new Error("Missing-material notification source event no longer exists.");
-  const [{data:rawRules,error:rulesError},{data:tower,error:towerError},{data:project,error:projectError}]=await Promise.all([
+  const [{data:rawRules,error:rulesError},{data:tower,error:towerError},{data:project,error:projectError},{data:destinationTower,error:destinationTowerError}]=await Promise.all([
     service.from("project_material_notification_rules").select("user_id,notify_raised,notify_urgent,notify_partial_receipt,notify_full_receipt,notify_resolved,notify_assignment,notify_update,notify_cancel,receives_in_app,receives_push,receives_email").eq("project_id",projectId).eq("active",true),
-    service.from("towers").select("name,line").eq("id",event.tower_id).maybeSingle(),service.from("projects").select("name,project_number").eq("id",projectId).maybeSingle(),
+    service.from("towers").select("name,line").eq("id",event.tower_id).maybeSingle(),service.from("projects").select("name,project_number").eq("id",projectId).maybeSingle(),args.destinationTowerId?service.from("towers").select("name,line").eq("id",args.destinationTowerId).eq("project_id",projectId).maybeSingle():Promise.resolve({data:null,error:null}),
   ]);
-  if(towerError||projectError)throw new Error(`Missing-material notification context lookup failed: ${towerError?.message||projectError?.message}`);
+  if(towerError||projectError||destinationTowerError)throw new Error(`Missing-material notification context lookup failed: ${towerError?.message||projectError?.message||destinationTowerError?.message}`);
   const rulesByUser=new Map((rawRules||[]).map(row=>[row.user_id,row as Rule]));
   const {data:legacy,error:legacyError}=await service.from("project_defect_notification_rules").select("user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,notify_assignment,receives_email,receives_in_app,receives_push").eq("project_id",projectId).eq("active",true);
   if(!legacyError)for(const row of legacy||[])if(!rulesByUser.has(row.user_id))rulesByUser.set(row.user_id,{user_id:row.user_id,notify_raised:row.notify_new,notify_urgent:row.notify_critical,notify_partial_receipt:row.notify_status_change,notify_full_receipt:row.notify_status_change,notify_resolved:row.notify_closed,notify_assignment:row.notify_assignment,notify_update:row.notify_action,notify_cancel:row.notify_closed,receives_in_app:row.receives_in_app,receives_push:row.receives_push,receives_email:row.receives_email} as Rule);
@@ -27,7 +27,7 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   const rules=[...rulesByUser.values()];
   const channels=new Map<string,{inApp:boolean;push:boolean;email:boolean}>();
   const configuredRecipients=new Set<string>();
-  for(const rule of rules){if(!applies(rule,kind)&&!(kind==="raised"&&["urgent","critical"].includes(clean(event.urgency).toLowerCase())&&rule.notify_urgent))continue;configuredRecipients.add(rule.user_id);channels.set(rule.user_id,{inApp:rule.receives_in_app,push:rule.receives_push,email:rule.receives_email});}
+  for(const rule of rules){if(!applies(rule,kind)&&!((kind==="raised"||kind==="excess_raised")&&["urgent","critical"].includes(clean(event.urgency).toLowerCase())&&rule.notify_urgent))continue;configuredRecipients.add(rule.user_id);channels.set(rule.user_id,{inApp:rule.receives_in_app,push:rule.receives_push,email:rule.receives_email});}
   const directAssignee=kind==="assignment"?args.assignedToUserId:event.assigned_to_user_id;
   if(directAssignee){const configured=channels.get(directAssignee);channels.set(directAssignee,{inApp:configured?.inApp??true,push:configured?.push??true,email:configured?.email??false});}
   for(const id of Array.isArray(event.notify_user_ids)?event.notify_user_ids:[])if(clean(id)){const configured=channels.get(clean(id));channels.set(clean(id),{inApp:configured?.inApp??true,push:configured?.push??true,email:configured?.email??false});}
@@ -40,7 +40,7 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   const total=Number(args.totalQuantity||item.quantity||0),remaining=args.remainingQuantity;
   const due=event.required_by?`${String(event.required_by).slice(8,10)}/${String(event.required_by).slice(5,7)}/${String(event.required_by).slice(0,4)}`:"";
   const urgent=clean(event.urgency).toLowerCase(),severity=["urgent","critical"].includes(urgent)?`${urgent.toUpperCase()} `:"";
-  const titles:Record<MissingMaterialNotificationKind,string>={raised:`${severity}Missing Material - ${towerLabel}`,partial_receipt:`Material Partially Received - ${towerLabel}`,full_receipt:`Material Received - ${towerLabel}`,resolved:`Missing Material Resolved - ${towerLabel}`,assignment:`Missing Material Assigned - ${towerLabel}`,update:`Missing Material Update - ${towerLabel}`,cancelled:`Missing Material Cancelled - ${towerLabel}`};
+  const titles:Record<MissingMaterialNotificationKind,string>={raised:`${severity}Missing Material - ${towerLabel}`,partial_receipt:`Material Partially Received - ${towerLabel}`,full_receipt:`Material Received - ${towerLabel}`,resolved:`Missing Material Resolved - ${towerLabel}`,assignment:`Missing Material Assigned - ${towerLabel}`,update:`Missing Material Update - ${towerLabel}`,cancelled:`Missing Material Cancelled - ${towerLabel}`,excess_raised:`${severity}Excess Material - ${towerLabel}`,excess_partial_collection:`Excess Material Partially Collected - ${towerLabel}`,excess_resolved:`Excess Material Resolved - ${towerLabel}`,transfer:"Material Transfer"};
   const messages:Record<MissingMaterialNotificationKind,string>={
     raised:`${total} x ${itemLabel}${event.urgency?` - ${event.urgency}`:""}${due?` - Required ${due}`:""} - Raised by ${actorLabel}`,
     partial_receipt:`${args.receivedQuantity??(total-(remaining??0))} of ${total} x ${itemLabel} received - ${remaining} still outstanding${args.deliveryReference?` - ${args.deliveryReference}`:""}`,
@@ -49,6 +49,10 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
     assignment:`${total} x ${itemLabel}${event.urgency?` - ${event.urgency}`:""}${due?` - Required ${due}`:""} - Assigned to you by ${actorLabel}`,
     update:`${itemLabel} - ${args.note||"A material update was added."} - ${actorLabel}`,
     cancelled:`${towerLabel} - ${total} x ${itemLabel} - Cancelled by ${actorLabel}${args.cancellationReason?` - ${args.cancellationReason}`:""}`,
+    excess_raised:`${total} x ${itemLabel} - ${clean(event.work_outcome)||"Pickup required"}${event.current_effect?` - ${event.current_effect}`:""} - Reported by ${actorLabel}`,
+    excess_partial_collection:`${args.receivedQuantity??(total-(remaining??0))} of ${total} x ${itemLabel} collected - ${remaining} remaining${args.deliveryReference?` - ${args.deliveryReference}`:""}`,
+    excess_resolved:`${total} x ${itemLabel} collected/resolved by ${actorLabel}`,
+    transfer:`Tower ${towerLabel} → Tower ${clean(destinationTower?.name||destinationTower?.line)||"destination"} · ${args.transferQuantity||total} x ${itemLabel}`,
   };
   const title=titles[kind],message=messages[kind],linkData={type:"missing_material",eventId:event.id,issueKey:item.issue_key,projectId,towerId:event.tower_id,action:kind},actionParams={...linkData};let inApp=0;
   for(const [userId,selected] of channels){if(!selected.inApp||!appUsers.has(userId))continue;const recipientMessage=kind!=="assignment"&&userId===directAssignee?`${message} - Assigned to you by ${actorLabel}`:message;

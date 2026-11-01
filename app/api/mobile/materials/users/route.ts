@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
-import { resolveProjectUserLabels } from "@/lib/materials/project-users";
+import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -12,10 +12,8 @@ export async function GET(request: NextRequest) {
     const { data: access, error: accessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).eq("user_id", identity.userId).maybeSingle();
     if (accessError) throw new Error(accessError.message);
     if (!access) return NextResponse.json({ error: "Project access denied." }, { status: 403 });
-    const { data: rows, error } = await service.from("project_access").select("user_id").eq("project_id", projectId).limit(200);
-    if (error) throw new Error(error.message);
-    const users = await resolveProjectUserLabels(service, (rows || []).map(row => row.user_id));
-    return NextResponse.json({ users: users.sort((a, b) => a.name.localeCompare(b.name)) });
+    const users = await eligibleMaterialUsers(service, projectId);
+    return NextResponse.json(users);
   } catch (error) {
     const apiError = mobileApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });

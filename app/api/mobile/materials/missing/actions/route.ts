@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { userHasAccess } from "@/lib/access/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
+import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
 import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
 
 export const runtime="nodejs";
@@ -21,7 +22,7 @@ export async function GET(request:Request){
     const [{data:actions,error:actionsError},{data:files,error:filesError},{data:receipts,error:receiptsError}]=await Promise.all([
       service.from("tower_material_event_actions").select("id,action_type,body,previous_assignee_id,assigned_to_user_id,created_by_user_id,created_at").eq("material_event_id",item.event_id).order("created_at"),
       service.from("tower_material_receipt_files").select("id,receipt_event_id,file_name,mime_type,file_size_bytes,uploaded_by_user_id,uploaded_at,sharepoint_web_url,storage_bucket,storage_path").eq("missing_event_id",item.event_id).eq("project_id",projectId).order("uploaded_at"),
-      service.from("tower_material_events").select("id,occurred_at,delivery_reference,notes,created_by_user_id,tower_material_event_items!inner(source_issue_key,quantity,unit)").eq("project_id",projectId).eq("tower_id",event.tower_id).eq("event_type","found_received").eq("tower_material_event_items.source_issue_key",issueKey).order("occurred_at"),
+      service.from("tower_material_events").select("id,event_type,occurred_at,delivery_reference,notes,created_by_user_id,tower_material_event_items!inner(source_issue_key,quantity,unit)").eq("project_id",projectId).eq("tower_id",event.tower_id).in("event_type",["found_received","excess_collected"]).eq("tower_material_event_items.source_issue_key",issueKey).order("occurred_at"),
     ]);if(actionsError||filesError||receiptsError)throw new Error(actionsError?.message||filesError?.message||receiptsError?.message);
     const signed=await Promise.all((files||[]).map(async file=>{if(file.sharepoint_web_url)return {...file,preview_url:file.sharepoint_web_url};const {data,error}=await service.storage.from(file.storage_bucket).createSignedUrl(file.storage_path,300);if(error)throw new Error(error.message);return {...file,preview_url:data.signedUrl};}));
     return NextResponse.json({event,issueKey,actions:actions||[],files:signed,receipts:receipts||[]});
@@ -37,9 +38,10 @@ export async function POST(request:Request){
     if(["update","cancel"].includes(actionType)&&!text)return NextResponse.json({error:actionType==="cancel"?"Enter a cancellation reason.":"Enter an update."},{status:400});
     const permission=await Promise.all([userHasAccess(service,user.id,"materials.manage_issues"),userHasAccess(service,user.id,"mobile.materials"),service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",user.id).maybeSingle()]);
     if(!permission[2].data||(!permission[0]&&!permission[1]))return NextResponse.json({error:"You do not have permission to change Missing Materials."},{status:403});
-    if(assignedToUserId){const {data:assignee,error}=await service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",assignedToUserId).maybeSingle();if(error)throw new Error(error.message);if(!assignee)return NextResponse.json({error:"Assigned user must belong to this project."},{status:400});}
+    const eligible=await eligibleMaterialUsers(service,projectId);
+    if(assignedToUserId&&!eligible.assignmentUsers.some(row=>row.id===assignedToUserId))return NextResponse.json({error:"Select an authorised Materials manager for assignment."},{status:400});
     const notifyUserIds=Array.isArray(body.notifyUserIds)?[...new Set(body.notifyUserIds.map(clean).filter(Boolean))]:null;
-    if(notifyUserIds?.length){const {data:recipients,error}=await service.from("project_access").select("user_id").eq("project_id",projectId).in("user_id",notifyUserIds);if(error)throw new Error(error.message);if((recipients||[]).length!==notifyUserIds.length)return NextResponse.json({error:"Additional recipients must belong to this project."},{status:400});}
+    if(notifyUserIds?.some(id=>!eligible.notifyUsers.some(row=>row.id===id)))return NextResponse.json({error:"Additional recipients must be configured Materials notification recipients."},{status:400});
     const {data:result,error}=await service.rpc("tttracker_v1_missing_material_action",{p_project_id:projectId,p_tower_id:towerId,p_issue_key:issueKey,p_client_mutation_id:clientMutationId,p_action_type:actionType,p_body:text,p_user_id:user.id,p_assigned_to_user_id:assignedToUserId,p_notify_user_ids:notifyUserIds});if(error)throw new Error(error.message);
     const action=result as {action_id:string;event_id:string;duplicate:boolean};
     const {data:row,error:rowError}=await service.from("tower_material_event_actions").select("id,material_event_id,action_type,body,previous_assignee_id,assigned_to_user_id").eq("id",action.action_id).maybeSingle();if(rowError||!row)throw new Error(rowError?.message||"Material action was committed without an action ID.");

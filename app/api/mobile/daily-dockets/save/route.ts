@@ -44,6 +44,7 @@ import {
   uniqueStrings,
 } from "@/lib/dockets/mobile-docket-server";
 import {
+  loadOutstandingMobileMaterialIssues,
   syncMobileDocketDelayDayworks,
   syncMobileDocketMaterialEvents,
 } from "@/lib/dockets/mobile-docket-materials";
@@ -903,6 +904,7 @@ export async function POST(request: Request) {
         ...(draft.additionalTowerWork || []).map((work: any) => ({ towerId: clean(work.target_tower_id), progress: { progressModel: "section_v2" as const, sectionV2Rows: work.progress_rows || [], legacyRows: [], hasBodyExtension: work.has_body_extension } }))],
     });
 
+    const issueSnapshot = await loadOutstandingMobileMaterialIssues(service,towerId,clean(draft.docketDate));
     const header = docketPayload({
       draft: {
         ...draft,
@@ -919,6 +921,7 @@ export async function POST(request: Request) {
       labourTotals,
       progress,
     });
+    const headerWithMaterialSnapshot = { ...header, material_issue_snapshot: issueSnapshot };
 
     let savedDocketId = docketId;
 
@@ -926,7 +929,7 @@ export async function POST(request: Request) {
       const { data, error } = await service
         .from("tower_daily_dockets")
         .insert({
-          ...header,
+          ...headerWithMaterialSnapshot,
           approval_status: "draft",
         })
         .select("id")
@@ -943,7 +946,7 @@ export async function POST(request: Request) {
     } else {
       const { error } = await service
         .from("tower_daily_dockets")
-        .update(header)
+          .update(headerWithMaterialSnapshot)
         .eq("id", savedDocketId);
 
       if (error) throw new Error(error.message);

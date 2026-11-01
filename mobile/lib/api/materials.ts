@@ -137,13 +137,18 @@ export async function createMaterialTransfer(input: CreateTransferInput) {
 export async function receiveMaterialTransfer(transferId: string) {
   const response = await apiFetch(
     `/api/mobile/materials/transfers/${encodeURIComponent(transferId)}/receive`,
-    { method: "POST", timeoutMs: 30_000 },
+    { method: "POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({clientMutationId:`material-transfer-receive-${transferId}`}), timeoutMs: 30_000 },
   );
 
   await readJson<{ ok: boolean }>(
     response,
     "Transfer could not be received.",
   );
+}
+
+export async function createExcessTransfer(input:{projectId:string;sourceTowerId:string;destinationTowerId:string;sourceIssueKey:string;destinationIssueKey?:string|null;quantity:number;clientMutationId:string;notes?:string}){
+  const response=await apiFetch("/api/mobile/materials/missing/transfers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),timeoutMs:30_000});
+  return readJson<{ok:boolean;transfer:TransferRecord;duplicate:boolean}>(response,"Excess transfer could not be created.");
 }
 
 export async function cancelMaterialTransfer(transferId: string) {
@@ -184,7 +189,12 @@ export async function createMissingMaterial(input: CreateMissingMaterialInput) {
     body: JSON.stringify(input),
     timeoutMs: 30_000,
   });
-  return readJson<{ ok: boolean; issue: { event_id: string; issue_key: string; duplicate: boolean } }>(response, "Missing material could not be reported.");
+  return readJson<{ ok: boolean; issue: { event_id: string; issue_key: string; duplicate: boolean } }>(response, "Material issue could not be reported.");
+}
+
+export async function collectExcessMaterial(input:{projectId:string;towerId:string;issueKey:string;quantity:number;clientMutationId:string;location?:string;reference?:string;notes?:string}){
+  const response=await apiFetch("/api/mobile/materials/missing/collect-excess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),timeoutMs:30_000});
+  return readJson<{ok:boolean;collection:{event_id:string;duplicate:boolean;remaining_quantity:number;total_quantity:number;collected_quantity:number}}>(response,"Excess material could not be collected.");
 }
 
 export async function resolveMissingMaterial(input: { projectId: string; towerId: string; issueKey: string }) {
@@ -197,24 +207,24 @@ export async function resolveMissingMaterial(input: { projectId: string; towerId
   await readJson<{ ok: boolean }>(response, "Missing material could not be resolved.");
 }
 
-export async function uploadMaterialReceiptEvidence(input:MaterialReceiptEvidenceInput){
+export async function uploadMaterialReceiptEvidence(input:MaterialReceiptEvidenceInput & { receiptEventId?: string }){
   const local=new ExpoFile(input.uri);if(!local.exists)throw new Error("Receipt evidence file is missing from this device.");
-  const form=new FormData();form.append("projectId",input.projectId);form.append("issueKey",input.issueKey);form.append("receiptMutationId",input.receiptMutationId);form.append("clientEvidenceId",input.clientEvidenceId);form.append("file",local as unknown as Blob,input.name);
+  const form=new FormData();form.append("projectId",input.projectId);form.append("issueKey",input.issueKey);if(input.receiptEventId)form.append("receiptEventId",input.receiptEventId);else form.append("receiptMutationId",input.receiptMutationId);form.append("clientEvidenceId",input.clientEvidenceId);form.append("file",local as unknown as Blob,input.name);
   const response=await apiFetch("/api/mobile/materials/missing/evidence",{method:"POST",body:form,timeoutMs:120_000});
   return readJson<{file:{id:string}}>(response,"Receipt evidence could not be uploaded.");
 }
 
 export type MaterialProjectUser = { id: string; name: string; role: string };
+export type MaterialUserChoices = { assignmentUsers: MaterialProjectUser[]; notifyUsers: MaterialProjectUser[] };
 export async function loadMaterialProjectUsers(projectId: string) {
-  const result = await apiJson<{ users: MaterialProjectUser[] }>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
-  return result.users;
+  return apiJson<MaterialUserChoices>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
 }
 
 export async function loadMissingMaterialDetails(projectId:string,issueKey?:string,eventId?:string){
   const params=new URLSearchParams({projectId});
   if(issueKey)params.set("issueKey",issueKey);
   if(eventId)params.set("eventId",eventId);
-  return apiJson<{event:Record<string,unknown>;issueKey:string;actions:Array<Record<string,unknown>>;files:Array<Record<string,unknown>>;receipts:Array<Record<string,unknown>>}>(`/api/mobile/materials/missing/actions?${params.toString()}`,{timeoutMs:30_000});
+  return apiJson<{event:Record<string,unknown>;issueKey:string;actions:Record<string,unknown>[];files:Record<string,unknown>[];receipts:Record<string,unknown>[]}>(`/api/mobile/materials/missing/actions?${params.toString()}`,{timeoutMs:30_000});
 }
 
 export async function saveMissingMaterialAction(input:{projectId:string;towerId:string;issueKey:string;clientMutationId:string;actionType:"update"|"assignment"|"cancel";text?:string;assignedToUserId?:string|null;notifyUserIds?:string[]}){

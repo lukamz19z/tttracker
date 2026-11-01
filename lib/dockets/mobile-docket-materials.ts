@@ -31,6 +31,11 @@ type MaterialWorkOutcome =
   | "minor_impact";
 
 type MissingMaterialIssue = {
+  issue_type: "missing" | "excess";
+  status: string;
+  daily_activity: Array<{ action: string; quantity: number; occurred_at: string; source_tower_id: string | null; destination_tower_id: string | null; reference: string | null }>;
+  collected_today_quantity?: number;
+  transferred_today_quantity?: number;
   issue_key: string;
   source_table: string;
   source_record_id: string;
@@ -368,7 +373,7 @@ export async function loadOutstandingMobileMaterialIssues(
   towerId: string,
   asOfDate?: string,
 ): Promise<MissingMaterialIssue[]> {
-  const [missingResult, receivedResult] =
+  const [issuesResult, activityResult, transfersResult] =
     await Promise.all([
       service
         .from("tower_material_events")
@@ -376,6 +381,7 @@ export async function loadOutstandingMobileMaterialIssues(
           id,
           docket_id,
           occurred_at,
+          event_type,
           issue_status,
           cancelled_at,
           items:tower_material_event_items(
@@ -395,7 +401,7 @@ export async function loadOutstandingMobileMaterialIssues(
           )
         `)
         .eq("tower_id", towerId)
-        .eq("event_type", "missing")
+        .in("event_type", ["missing", "excess"])
         .order("occurred_at", {
           ascending: true,
         }),
@@ -405,29 +411,41 @@ export async function loadOutstandingMobileMaterialIssues(
           id,
           docket_id,
           occurred_at,
+          event_type,
+          tower_id,
+          delivery_reference,
           items:tower_material_event_items(
             source_issue_key,
             quantity
           )
         `)
         .eq("tower_id", towerId)
-        .eq("event_type", "found_received"),
+        .in("event_type", ["found_received", "excess_collected"]),
+      service.from("tower_material_transfers")
+        .select("source_issue_key,quantity,status,transferred_at,received_at,source_tower_id,destination_tower_id,notes")
+        .eq("source_tower_id", towerId)
+        .not("source_issue_key", "is", null)
+        .in("status", ["in_transit", "received"]),
     ]);
 
-  if (missingResult.error) {
+  if (issuesResult.error) {
     throw new Error(
-      `Outstanding missing material could not be loaded: ${missingResult.error.message}`,
+      `Outstanding material issues could not be loaded: ${issuesResult.error.message}`,
     );
   }
 
-  const receivedByIssue = new Map<
-    string,
-    number
-  >();
+  if (transfersResult.error && !/source_issue_key/i.test(transfersResult.error.message)) throw new Error(`Material transfer carry-forward could not be loaded: ${transfersResult.error.message}`);
 
-  if (!receivedResult.error) {
-    for (const event of receivedResult.data ?? []) {
-      if(asOfDate && clean((event as any).occurred_at).slice(0,10)>asOfDate) continue;
+  const quantityByIssue = new Map<string, number>();
+  const collectedTodayByIssue = new Map<string, number>();
+  const transferredTodayByIssue = new Map<string, number>();
+  const transfersByIssue = new Map<string, number>();
+  const dailyActivityByIssue = new Map<string, MissingMaterialIssue["daily_activity"]>();
+
+  if (!activityResult.error) {
+    for (const event of activityResult.data ?? []) {
+      const eventDate=clean((event as any).occurred_at).slice(0,10);
+      if(asOfDate && eventDate>asOfDate) continue;
       for (const item of
         (event as any).items ?? []) {
         const sourceIssueKey = clean(
@@ -436,23 +454,28 @@ export async function loadOutstandingMobileMaterialIssues(
 
         if (!sourceIssueKey) continue;
 
-        receivedByIssue.set(
+        quantityByIssue.set(
           sourceIssueKey,
-          (receivedByIssue.get(
+          (quantityByIssue.get(
             sourceIssueKey,
           ) ?? 0) +
             Math.max(num(item.quantity), 0),
         );
+        if(clean((event as any).event_type)==="excess_collected"&&(!asOfDate||eventDate===asOfDate))collectedTodayByIssue.set(sourceIssueKey,(collectedTodayByIssue.get(sourceIssueKey)||0)+Math.max(num(item.quantity),0));
+        if(!asOfDate||eventDate===asOfDate){const activity=dailyActivityByIssue.get(sourceIssueKey)||[];activity.push({action:clean((event as any).event_type)==="excess_collected"?"collected":"received",quantity:Math.max(num(item.quantity),0),occurred_at:clean((event as any).occurred_at),source_tower_id:clean((event as any).event_type)==="excess_collected"?towerId:null,destination_tower_id:clean((event as any).event_type)==="found_received"?towerId:null,reference:clean((event as any).delivery_reference)||null});dailyActivityByIssue.set(sourceIssueKey,activity);}
       }
     }
   }
 
+  for(const transfer of transfersResult.data||[]){const key=clean(transfer.source_issue_key),date=clean(transfer.transferred_at).slice(0,10);if(!key||(asOfDate&&date>asOfDate))continue;const stillInTransitAtCutoff=asOfDate?transfer.status==="in_transit"||!transfer.received_at||clean(transfer.received_at).slice(0,10)>asOfDate:transfer.status==="in_transit";if(stillInTransitAtCutoff)transfersByIssue.set(key,(transfersByIssue.get(key)||0)+Math.max(num(transfer.quantity),0));if(!asOfDate||date===asOfDate){transferredTodayByIssue.set(key,(transferredTodayByIssue.get(key)||0)+Math.max(num(transfer.quantity),0));const activity=dailyActivityByIssue.get(key)||[];activity.push({action:"transferred",quantity:Math.max(num(transfer.quantity),0),occurred_at:clean(transfer.transferred_at),source_tower_id:clean(transfer.source_tower_id)||null,destination_tower_id:clean(transfer.destination_tower_id)||null,reference:clean(transfer.notes)||null});dailyActivityByIssue.set(key,activity);}}
+
   const issues: MissingMaterialIssue[] =
     [];
 
-  for (const event of missingResult.data ?? []) {
+  for (const event of issuesResult.data ?? []) {
     if(asOfDate && clean((event as any).occurred_at).slice(0,10)>asOfDate) continue;
     if(clean((event as any).issue_status)==="cancelled"&&(!asOfDate||clean((event as any).cancelled_at).slice(0,10)<=asOfDate)) continue;
+    const issueType=clean((event as any).event_type)==="excess"?"excess":"missing";
     for (const item of
       (event as any).items ?? []) {
       const issueKey = clean(
@@ -467,11 +490,18 @@ export async function loadOutstandingMobileMaterialIssues(
       );
 
       const receivedQuantity = Math.max(
-        receivedByIssue.get(issueKey) ?? 0,
+        quantityByIssue.get(issueKey) ?? 0,
         0,
       );
+      const transferredQuantity=issueType==="excess"?transfersByIssue.get(issueKey)||0:0;
+      const remainingQuantity=Math.max(originalQuantity-receivedQuantity-transferredQuantity,0);
+      const currentStatus=clean((event as any).issue_status).toLowerCase();
+      const status=issueType==="excess"?(remainingQuantity<=0?"resolved":receivedQuantity>0?"partially_collected":"available"):(remainingQuantity<=0?(currentStatus==="resolved"?"resolved":"received"):receivedQuantity>0?"partially_received":"outstanding");
 
       issues.push({
+        issue_type: issueType,
+        status,
+        daily_activity: dailyActivityByIssue.get(issueKey)||[],
         issue_key: issueKey,
         source_table: clean(
           item.source_table,
@@ -495,11 +525,7 @@ export async function loadOutstandingMobileMaterialIssues(
           originalQuantity,
         received_quantity:
           receivedQuantity,
-        remaining_quantity: Math.max(
-          originalQuantity -
-            receivedQuantity,
-          0,
-        ),
+        remaining_quantity: remainingQuantity,
         unit: clean(item.unit) || "ea",
         first_reported_at: clean(
           (event as any).occurred_at,
@@ -507,6 +533,8 @@ export async function loadOutstandingMobileMaterialIssues(
         source_docket_id: clean(
           (event as any).docket_id,
         ),
+        collected_today_quantity: collectedTodayByIssue.get(issueKey)||0,
+        transferred_today_quantity: transferredTodayByIssue.get(issueKey)||0,
       });
     }
   }

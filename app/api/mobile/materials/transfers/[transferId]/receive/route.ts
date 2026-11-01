@@ -4,6 +4,7 @@ import {
   mobileApiError,
   requireMobilePermission,
 } from "@/lib/mobile/server";
+import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,13 +45,6 @@ export async function POST(
       return NextResponse.json({ error: "Transfer not found." }, { status: 404 });
     }
 
-    if (transfer.status !== "in_transit") {
-      return NextResponse.json(
-        { error: "Only an in-transit transfer can be received." },
-        { status: 409 },
-      );
-    }
-
     const { data: access, error: accessError } = await service
       .from("project_access")
       .select("project_id")
@@ -63,6 +57,27 @@ export async function POST(
       return NextResponse.json(
         { error: "You do not have access to this project." },
         { status: 403 },
+      );
+    }
+
+    if (clean(transfer.source_issue_key)) {
+      const body=await request.json().catch(()=>({})) as Record<string,unknown>;
+      const clientMutationId=clean(body.clientMutationId)||`material-transfer-receive-${transfer.id}`;
+      const {data:result,error}=await service.rpc("tttracker_v1_receive_excess_transfer",{p_project_id:transfer.project_id,p_transfer_id:transfer.id,p_client_mutation_id:clientMutationId,p_user_id:identity.userId,p_user_name:clean(identity.fullName)||"TTTracker",p_reference:clean(body.reference)||null,p_notes:clean(body.notes)||null});
+      if(error)throw new Error(error.message);
+      const output=result as {duplicate:boolean;transfer:Record<string,unknown>;source_collection?:Record<string,unknown>;destination_receipt?:Record<string,unknown>};
+      if(!output.duplicate){
+        const {data:sourceItem}=await service.from("tower_material_event_items").select("event_id").eq("issue_key",clean(transfer.source_issue_key)).maybeSingle();
+        if(sourceItem)await notifyMissingMaterialEvent({service,projectId:transfer.project_id,sourceEventId:String(output.source_collection?.event_id||""),issueEventId:sourceItem.event_id,kind:Number(output.source_collection?.remaining_quantity||0)<=0?"excess_resolved":"excess_partial_collection",actorUserId:identity.userId,totalQuantity:Number(output.source_collection?.total_quantity||transfer.quantity),receivedQuantity:Number(transfer.quantity),remainingQuantity:Number(output.source_collection?.remaining_quantity||0),deliveryReference:clean(body.reference)||null});
+        if(clean(transfer.destination_issue_key)){const {data:destinationItem}=await service.from("tower_material_event_items").select("event_id,quantity").eq("issue_key",clean(transfer.destination_issue_key)).maybeSingle();if(destinationItem)await notifyMissingMaterialEvent({service,projectId:transfer.project_id,sourceEventId:String(output.destination_receipt?.event_id||""),issueEventId:destinationItem.event_id,kind:clean(output.destination_receipt?.issue_status)==="received"?"full_receipt":"partial_receipt",actorUserId:identity.userId,totalQuantity:Number(destinationItem.quantity||0),receivedQuantity:Number(transfer.quantity),remainingQuantity:Number(output.destination_receipt?.remaining_quantity||0),deliveryReference:clean(body.reference)||null});}
+      }
+      return NextResponse.json({ok:true,...output});
+    }
+
+    if (transfer.status !== "in_transit") {
+      return NextResponse.json(
+        { error: "Only an in-transit transfer can be received." },
+        { status: 409 },
       );
     }
 

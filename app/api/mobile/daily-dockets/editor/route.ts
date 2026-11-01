@@ -13,6 +13,7 @@ import {
 import {
   loadOutstandingMobileMaterialIssues,
 } from "@/lib/dockets/mobile-docket-materials";
+import { selectDocketMaterialSnapshot } from "@/lib/dockets/material-issue-snapshot.mjs";
 import {
   loadMobileBundleTransferContext,
 } from "@/lib/dockets/mobile-docket-transfers";
@@ -836,6 +837,9 @@ export async function GET(request: Request) {
       sourceDocket = data?.[0] ?? null;
     }
 
+    const savedIssueSnapshot=Array.isArray(sourceDocket?.material_issue_snapshot)?sourceDocket.material_issue_snapshot:null;
+    const docketMaterialIssues=selectDocketMaterialSnapshot(sourceDocket?.approval_status,savedIssueSnapshot,outstandingMaterials);
+
     let draft: any = sourceDocket
       ? await loadDocketData(
           service,
@@ -907,7 +911,7 @@ export async function GET(request: Request) {
 
     draft = {
       ...draft,
-      outstandingMaterials,
+      outstandingMaterials: docketMaterialIssues,
       activeBundleTransfers:
         bundleTransferContext.activeBundleTransfers,
       bundleReplacementStatus:
@@ -951,7 +955,7 @@ export async function GET(request: Request) {
           ? []
           : defectsResult.data ?? [],
 
-      outstandingMaterials,
+      outstandingMaterials: docketMaterialIssues,
       activeBundleTransfers:
         bundleTransferContext.activeBundleTransfers,
       bundleReplacementStatus:

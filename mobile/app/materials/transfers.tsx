@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
@@ -7,6 +7,7 @@ import {
 } from "@/components/materials/MaterialsShell";
 import { MaterialRegisterFilters } from "@/components/materials/MaterialRegisterFilters";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import type { TransferRecord } from "@/types/materials";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -48,7 +49,7 @@ type IndexedTransfer = {
 };
 
 export default function Transfers() {
-  const { data, towerName } = useMaterials();
+  const { data, towerName, receiveTransfer, busyTransferId } = useMaterials();
 
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -75,16 +76,17 @@ export default function Transfers() {
         const destinationTowerId = clean(transfer.destination_tower_id);
         const sourceBundle = bundleById.get(clean(transfer.source_bundle_id));
         const destinationBundle = bundleById.get(clean(transfer.destination_bundle_id));
+        const snapshot=(transfer.item_snapshot&&typeof transfer.item_snapshot==="object"?transfer.item_snapshot:{}) as Record<string,unknown>;
         const bundleNo =
           clean(transfer.bundle_no) ||
           clean(sourceBundle?.bundle_no) ||
           clean(destinationBundle?.bundle_no) ||
-          "—";
+          clean(snapshot.item_reference)||clean(snapshot.item_description)||"Material";
         const section =
           clean(sourceBundle?.section) ||
           clean(destinationBundle?.section) ||
           clean(transfer.section) ||
-          "General";
+          clean(snapshot.segment)||clean(snapshot.bundle_section)||"General";
         const status = clean(transfer.status) || "recorded";
         const date =
           clean(transfer.transferred_at) ||
@@ -110,6 +112,8 @@ export default function Transfers() {
             towerName(destinationTowerId),
             transfer.transferred_by_name,
             transfer.notes,
+            snapshot.specification,
+            snapshot.item_description,
           ]
             .map(clean)
             .join(" ")
@@ -148,15 +152,7 @@ export default function Transfers() {
     ];
   }, [indexed, towerId]);
 
-  useEffect(() => {
-    setVisibleCount(20);
-  }, [deferredQuery, statusFilter, towerId]);
-
-  useEffect(() => {
-    if (!statusFilter) return;
-    if (statusOptions.some((option) => option.value === statusFilter)) return;
-    setStatusFilter("");
-  }, [statusFilter, statusOptions]);
+  const effectiveStatusFilter = statusOptions.some((option) => option.value === statusFilter) ? statusFilter : "";
 
   const rows = useMemo(() => {
     const search = deferredQuery.trim().toLowerCase();
@@ -169,11 +165,11 @@ export default function Transfers() {
       ) {
         return false;
       }
-      if (statusFilter && row.status !== statusFilter) return false;
+      if (effectiveStatusFilter && row.status !== effectiveStatusFilter) return false;
       if (search && !row.search.includes(search)) return false;
       return true;
     });
-  }, [deferredQuery, indexed, statusFilter, towerId]);
+  }, [deferredQuery, effectiveStatusFilter, indexed, towerId]);
 
   const summary = useMemo(() => {
     const inTransit = rows.filter((row) =>
@@ -192,15 +188,15 @@ export default function Transfers() {
       <MaterialRegisterFilters
         towers={data?.towers ?? []}
         towerId={towerId}
-        onTowerChange={setTowerId}
+        onTowerChange={(value) => { setVisibleCount(20); setTowerId(value); }}
         towerName={towerName}
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={(value) => { setVisibleCount(20); setQuery(value); }}
         placeholder="Search bundle, tower, section or person"
         filterLabel="Status"
         options={statusOptions}
         filterValue={statusFilter}
-        onFilterChange={setStatusFilter}
+        onFilterChange={(value) => { setVisibleCount(20); setStatusFilter(value); }}
         resultCount={rows.length}
       />
 
@@ -223,12 +219,14 @@ export default function Transfers() {
         const source = towerName(row.sourceTowerId) || "Source";
         const destination = towerName(row.destinationTowerId) || "Destination";
         const transferredBy = clean(row.transfer.transferred_by_name);
+        const snapshot=(row.transfer.item_snapshot&&typeof row.transfer.item_snapshot==="object"?row.transfer.item_snapshot:{}) as Record<string,unknown>;
+        const itemLabel=clean(snapshot.item_reference)||clean(snapshot.item_description)||`Bundle ${row.bundleNo}`;
 
         return (
+          <View key={row.id}>
           <MaterialCard
-            key={row.id}
-            title={`Bundle ${row.bundleNo} · Qty ${row.quantity}`}
-            subtitle={`${source} → ${destination} · ${row.section}`}
+            title={`${itemLabel} · Qty ${row.quantity}`}
+            subtitle={`${source} → ${destination} · ${row.section}${clean(snapshot.specification)?` · ${clean(snapshot.specification)}`:""}`}
             meta={[
               labelValue(row.status),
               row.date ? formatDate(row.date) : "",
@@ -237,6 +235,8 @@ export default function Transfers() {
               .filter(Boolean)
               .join(" · ")}
           />
+          {clean(row.transfer.source_issue_key)&&row.status==="in_transit"&&towerId===row.destinationTowerId?<Pressable disabled={busyTransferId===row.id} style={styles.receiveButton} onPress={()=>void receiveTransfer(row.transfer as unknown as TransferRecord)}><Text style={styles.receiveText}>{busyTransferId===row.id?"Receiving…":"Confirm Received"}</Text></Pressable>:null}
+          </View>
         );
       })}
 
@@ -304,6 +304,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
   },
+  receiveButton:{minHeight:40,marginTop:5,borderRadius:10,backgroundColor:"#0369a1",alignItems:"center",justifyContent:"center"},
+  receiveText:{color:"#fff",fontSize:12,fontWeight:"900"},
   loadMore: {
     minHeight: 44,
     borderRadius: 11,

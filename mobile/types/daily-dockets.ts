@@ -216,6 +216,16 @@ export type MaterialEventDraft = {
 };
 
 export type MissingMaterialIssue = {
+  issue_type?: "missing" | "excess";
+  status?: string;
+  daily_activity?: Array<{
+    action: string;
+    quantity: number;
+    occurred_at: string;
+    source_tower_id: string | null;
+    destination_tower_id: string | null;
+    reference: string | null;
+  }>;
   issue_key: string;
   source_table: string;
   source_record_id: string;
@@ -230,6 +240,8 @@ export type MissingMaterialIssue = {
   unit: string;
   first_reported_at: string;
   source_docket_id: string;
+  collected_today_quantity?: number;
+  transferred_today_quantity?: number;
 };
 
 export type BundleTransferRecord = {

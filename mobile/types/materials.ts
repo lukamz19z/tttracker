@@ -161,6 +161,11 @@ export type TransferRecord = MaterialRow & {
   destination_tower_id?: string | null;
   source_bundle_id?: string | null;
   destination_bundle_id?: string | null;
+  source_issue_key?: string | null;
+  destination_issue_key?: string | null;
+  item_snapshot?: Record<string, unknown> | null;
+  create_client_mutation_id?: string | null;
+  receive_client_mutation_id?: string | null;
   bundle_no?: string | null;
   bundle_section?: string | null;
   quantity?: number | null;
@@ -234,6 +239,7 @@ export type MaterialReceiptEvidenceInput = {
 export type CreateMissingMaterialInput = {
   projectId: string;
   towerId: string;
+  issueType?: "missing" | "excess";
   clientMutationId: string;
   itemReference: string;
   description: string;
@@ -250,8 +256,11 @@ export type CreateMissingMaterialInput = {
   drawingNumber?: string;
   urgency?: string;
   requiredBy?: string | null;
+  location?: string;
+  disposition?: string;
   notes?: string;
   assignedToUserId?: string | null;
   notifyUserIds?: string[];
   occurredAt?: string;
+  initialEvidence?: Array<Pick<MaterialReceiptEvidenceInput, "clientEvidenceId" | "localPhotoId" | "uri" | "name" | "mimeType">>;
 };

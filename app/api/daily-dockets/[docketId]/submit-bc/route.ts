@@ -1,4 +1,5 @@
 import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
+import { loadOutstandingMobileMaterialIssues } from "@/lib/dockets/mobile-docket-materials";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
@@ -43,6 +44,7 @@ type DocketRow = {
   incident_type?: string | null;
   delays_comments?: string | null;
   progress_model?: string | null;
+  material_issue_snapshot?: unknown;
 };
 
 type ProjectRow = {
@@ -585,7 +587,8 @@ export async function POST(
         incident_occurred,
         incident_type,
         delays_comments,
-        progress_model
+        progress_model,
+        material_issue_snapshot
       `)
       .eq("id", docketId)
       .single();
@@ -598,6 +601,9 @@ export async function POST(
     }
 
     const docket = docketData as DocketRow;
+    const materialIssueSnapshot = Array.isArray(docket.material_issue_snapshot)
+      ? docket.material_issue_snapshot
+      : await loadOutstandingMobileMaterialIssues(service, docket.tower_id, docket.docket_date || undefined);
     if (docket.docket_date && isFutureDocketDate(docket.docket_date, new Date(), _request.headers.get("X-TTTracker-Timezone"))) {
       return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
     }
@@ -735,6 +741,7 @@ export async function POST(
       .from("tower_daily_dockets")
       .update({
         approval_status: "submitted_bc",
+        material_issue_snapshot: materialIssueSnapshot,
         bc_submitted_at: submittedAt,
         bc_submitted_by: user.id,
         approval_revision: revision,

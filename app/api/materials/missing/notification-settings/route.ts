@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { userHasAccess } from "@/lib/access/server";
 import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
 import { resolveProjectUserLabels } from "@/lib/materials/project-users";
+import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,15 +26,11 @@ export async function GET(request: Request) {
     const projectId=clean(new URL(request.url).searchParams.get("projectId"));
     if(!projectId) return NextResponse.json({error:"Project is required."},{status:400});
     const {service}=await context(request,projectId);
-    const [{data:rules,error:rulesError},{data:access,error:accessError},{data:roles,error:rolesError}] = await Promise.all([
-      service.from("project_material_notification_rules").select("*").eq("project_id",projectId).order("updated_at"),
-      service.from("project_access").select("user_id").eq("project_id",projectId),
-      service.from("user_roles").select("user_id,role"),
-    ]);
-    if(rulesError||accessError||rolesError) throw new Error(rulesError?.message||accessError?.message||rolesError?.message);
-    const ids=[...new Set((access||[]).map(row=>clean(row.user_id)))];
-    const roleMap=new Map((roles||[]).map(row=>[clean(row.user_id),clean(row.role)]));
-    const users=(await resolveProjectUserLabels(service,ids)).map(label=>({...label,role:roleMap.get(label.id)||label.role||"user"}));
+    const {data:rules,error:rulesError}=await service.from("project_material_notification_rules").select("*").eq("project_id",projectId).order("updated_at");
+    if(rulesError) throw new Error(rulesError.message);
+    const eligible=await eligibleMaterialUsers(service,projectId);
+    const ids=[...new Set([...eligible.assignmentUsers,...eligible.notifyUsers].map(row=>row.id))];
+    const users=(await resolveProjectUserLabels(service,ids));
     users.sort((a,b)=>a.name.localeCompare(b.name));
     return NextResponse.json({users,rules:rules||[]});
   } catch(error) { const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status}); }
