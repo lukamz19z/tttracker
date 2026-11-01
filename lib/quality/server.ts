@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import { hasV1FullAccess, isV1FullAccessRole } from "@/lib/access/server";
 
 export type QualityProjectRow = {
   timezone?: string | null;
@@ -78,7 +79,7 @@ export async function requireQualityUser(request: Request) {
 }
 
 export function isQualityAdminRole(role: string) {
-  return ["admin", "administrator", "site_admin"].includes(role);
+  return isV1FullAccessRole(role);
 }
 
 export async function assertQualityProjectAccess({
@@ -92,7 +93,7 @@ export async function assertQualityProjectAccess({
   role: string;
   projectId: string;
 }) {
-  if (isQualityAdminRole(role)) return;
+  if (isQualityAdminRole(role) || await hasV1FullAccess(service, userId)) return;
 
   const { data, error } = await service
     .from("project_access")
@@ -175,6 +176,10 @@ export function qualityApiError(error: unknown) {
 
   if (message === "FORBIDDEN") {
     return { status: 403, message: "You do not have access to this project." };
+  }
+
+  if (message === "MATERIALS_CONFIGURATION_FORBIDDEN") {
+    return { status: 403, message: "You do not have permission to configure Materials." };
   }
 
   return { status: 500, message };

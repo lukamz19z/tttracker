@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
+import { hasV1FullAccess } from "@/lib/access/server";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -11,7 +12,7 @@ export async function GET(request: NextRequest) {
     if (!projectId) return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
     const { data: access, error: accessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).eq("user_id", identity.userId).maybeSingle();
     if (accessError) throw new Error(accessError.message);
-    if (!access) return NextResponse.json({ error: "Project access denied." }, { status: 403 });
+    if (!access && !await hasV1FullAccess(service, identity.userId)) return NextResponse.json({ error: "Project access denied." }, { status: 403 });
     const users = await eligibleMaterialUsers(service, projectId);
     return NextResponse.json(users);
   } catch (error) {

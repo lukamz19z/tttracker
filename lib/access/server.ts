@@ -3,6 +3,40 @@ import type { NextRequest } from "next/server";
 
 export type AccessService = SupabaseClient;
 
+export function isV1FullAccessRole(role: unknown) {
+  return ["admin", "administrator", "site_admin"].includes(String(role ?? "").trim().toLowerCase());
+}
+
+export async function hasV1FullAccess(service: AccessService, userId: string) {
+  const [{ data: legacy, error: legacyError }, { data: assignments, error: assignmentError }] = await Promise.all([
+    service.from("user_roles").select("role").eq("user_id", userId),
+    service.from("user_role_assignments").select("role_id").eq("user_id", userId),
+  ]);
+  if (legacyError || assignmentError) throw new Error(legacyError?.message || assignmentError?.message);
+  if ((legacy || []).some(row => isV1FullAccessRole(row.role))) return true;
+  const roleIds = [...new Set((assignments || []).map(row => String(row.role_id || "")).filter(Boolean))];
+  if (!roleIds.length) return false;
+  const { data: roles, error: rolesError } = await service.from("roles").select("grants_all").in("id", roleIds);
+  if (rolesError) throw new Error(rolesError.message);
+  return (roles || []).some(row => row.grants_all === true);
+}
+
+export async function fullAccessUserIds(service: AccessService) {
+  const [{ data: legacyRoles, error: legacyError }, { data: assignments, error: assignmentError }] = await Promise.all([
+    service.from("user_roles").select("user_id,role"),
+    service.from("user_role_assignments").select("user_id,role_id"),
+  ]);
+  if (legacyError || assignmentError) throw new Error(legacyError?.message || assignmentError?.message);
+  const legacyIds = (legacyRoles || []).filter(row => isV1FullAccessRole(row.role)).map(row => String(row.user_id));
+  const roleIds = [...new Set((assignments || []).map(row => String(row.role_id || "")).filter(Boolean))];
+  if (!roleIds.length) return [...new Set(legacyIds)];
+  const { data: roles, error: rolesError } = await service.from("roles").select("id,grants_all").in("id", roleIds);
+  if (rolesError) throw new Error(rolesError.message);
+  const fullRoleIds = new Set((roles || []).filter(row => row.grants_all === true).map(row => String(row.id)));
+  const dynamicIds = (assignments || []).filter(row => fullRoleIds.has(String(row.role_id))).map(row => String(row.user_id));
+  return [...new Set([...legacyIds, ...dynamicIds])];
+}
+
 function requiredEnv(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable: ${name}`);
@@ -57,7 +91,8 @@ export async function userHasAccess(
     .maybeSingle();
 
   if (error) throw new Error(error.message);
-  return data?.allowed === true;
+  if (data?.allowed === true) return true;
+  return hasV1FullAccess(service, userId);
 }
 
 export async function requireAccess(
