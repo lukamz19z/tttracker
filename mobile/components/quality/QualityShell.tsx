@@ -40,7 +40,7 @@ export function QualityShell({
 
   const content=<View style={{gap:compactHeader?5:10}}>
           {!root ? (
-            <Pressable style={styles.back} onPress={() => router.back()}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Back" style={styles.back} onPress={() => router.back()}>
               <ArrowLeft size={16} color="#334155" />
               <Text style={styles.backText}>Back</Text>
             </Pressable>
@@ -86,7 +86,7 @@ export const qualityStyles = StyleSheet.create({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#f8fafc" },
   content: { padding: 14, gap: 10, paddingBottom: 12 },
-  back: { flexDirection: "row", alignItems: "center", gap: 7, alignSelf: "flex-start", paddingVertical: 5 },
+  back: { minHeight: 44, minWidth: 64, flexDirection: "row", alignItems: "center", justifyContent:"center", gap: 7, alignSelf: "flex-start", paddingHorizontal:8 },
   backText: { color: "#334155", fontWeight: "800" },
   eyebrow: { fontSize: 11, fontWeight: "900", letterSpacing: 1.1, color: "#2563eb" },
   heading: { fontSize: 28, fontWeight: "900", color: "#0f172a" },

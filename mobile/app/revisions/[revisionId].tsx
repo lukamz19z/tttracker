@@ -1,6 +1,6 @@
 import { FieldFindingCard } from "@/components/quality/FieldFindingCard";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
-import { QualitySwipeViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
+import { QualitySwipeViewer, QualityFindingEvidenceViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { fieldListRows, filterFieldRows, groupFieldRows, fieldStateKey } from "../../../lib/quality/field-list";
 import { materialRequirements, operationalDetailSummary, validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../lib/quality/operational-details";
 import { OperationalDetailFields } from "@/components/quality/OperationalDetailFields";
@@ -171,6 +171,7 @@ export default function RevisionDetailScreen() {
     useState(false);
 
   const [localGallery,setLocalGallery]=useState<{photos:GalleryPhoto[];index:number}|null>(null);
+  const [findingEvidence,setFindingEvidence]=useState<{before:GalleryPhoto[];after:GalleryPhoto[]}|null>(null);
 
   const wasSyncingRef = useRef(false);
 
@@ -870,6 +871,21 @@ export default function RevisionDetailScreen() {
     }catch(error){Alert.alert("Photo unavailable",error instanceof Error?error.message:"Retry this photo.");}
   }
 
+  async function openFindingEvidence(itemId:string) {
+    try {
+      const localFinding=workspace?.findings.find(row=>row.clientMutationId===itemId || workspace.serverItems?.[row.clientMutationId]?.id===itemId);
+      const queued=queuedEdits.filter(row=>row.itemId===itemId).at(-1);
+      const beforeLocal=localFinding?.beforePhotos || queued?.beforePhotos || [];
+      const afterLocal=localFinding?.afterPhotos || queued?.afterPhotos || [];
+      const server=revisionFiles.filter(file=>file.revision_item_id===itemId && !file.deletion_pending);
+      const before:GalleryPhoto[]=server.filter(file=>file.file_role==="before_photo").map(file=>({id:file.id,role:file.file_role,file}));
+      const after:GalleryPhoto[]=server.filter(file=>file.file_role==="after_photo").map(file=>({id:file.id,role:file.file_role,file}));
+      for(const photo of beforeLocal)before.push({id:photo.id,role:"before_photo",uri:await evidencePreviewUri(photo)});
+      for(const photo of afterLocal)after.push({id:photo.id,role:"after_photo",uri:await evidencePreviewUri(photo)});
+      setFindingEvidence({before,after});
+    }catch(error){Alert.alert("Photos unavailable",error instanceof Error?error.message:"Could not open this FLI's photos.");}
+  }
+
   async function finalise() {
     if (!workspace) return;
     try {
@@ -1014,7 +1030,7 @@ export default function RevisionDetailScreen() {
       title={rectCode}
       virtualRows={fieldGroups.flatMap(group => [
         { id: `group:${group.label}`, content: <Text style={styles.title}>{group.label} · {group.rows.length}</Text> },
-        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} issueTypes={data?.issueTypes||[]} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
+        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} issueTypes={data?.issueTypes||[]} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onPhotos={()=>void openFindingEvidence(row.item.id)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
       ])}
       subtitle={[qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel),clean(serverRevision?.client_reference||workspace?.clientReference)?`Punchlist ${clean(serverRevision?.client_reference||workspace?.clientReference)}`:null,`${revisionItems.length+pendingFindingCount} FLI${revisionItems.length+pendingFindingCount===1?"":"s"}`,online?"Online":"Offline"].filter(Boolean).join(" · ")}
     >
@@ -1575,6 +1591,7 @@ export default function RevisionDetailScreen() {
 
       <Modal visible={offlineStorageOpen} transparent animationType="slide" onRequestClose={()=>setOfflineStorageOpen(false)}><SafeAreaView style={{flex:1,justifyContent:"center",padding:16,backgroundColor:"rgba(15,23,42,0.55)"}}><View style={[styles.card,{maxHeight:"80%"}]}><Text style={styles.issueName}>Offline Storage</Text><Text style={styles.meta}>{offlineStorage.packs.length} cached Punchlists · approximately {offlineStorage.megabytes} MB</Text>{offlineSettings?<><Text style={styles.meta}>Maximum cache size (MB)</Text><TextInput keyboardType="number-pad" value={String(offlineSettings.maxCacheMb)} onChangeText={value=>setOfflineSettings({...offlineSettings,maxCacheMb:Number(value)||64})} onEndEditing={()=>void saveQualityOfflineSettings(projectId,{maxCacheMb:offlineSettings.maxCacheMb})} style={styles.input}/><Text style={styles.meta}>Completed pack retention (days)</Text><TextInput keyboardType="number-pad" value={String(offlineSettings.completedRetentionDays)} onChangeText={value=>setOfflineSettings({...offlineSettings,completedRetentionDays:Number(value)||1})} onEndEditing={()=>void saveQualityOfflineSettings(projectId,{completedRetentionDays:offlineSettings.completedRetentionDays})} style={styles.input}/><Text style={styles.meta}>Preview JPEG quality · {offlineSettings.previewQuality}</Text><TextInput keyboardType="number-pad" value={String(offlineSettings.previewQuality)} onChangeText={value=>setOfflineSettings({...offlineSettings,previewQuality:Number(value)||60})} onEndEditing={()=>void saveQualityOfflineSettings(projectId,{previewQuality:offlineSettings.previewQuality})} style={styles.input}/><View style={styles.head}><Text style={styles.meta}>Cache supplied Before previews</Text><Switch value={offlineSettings.cacheBeforePreviews} onValueChange={value=>{setOfflineSettings({...offlineSettings,cacheBeforePreviews:value});void saveQualityOfflineSettings(projectId,{cacheBeforePreviews:value});}}/></View></>:null}<ScrollView>{offlineStorage.packs.map(pack=><View key={pack.revisionId} style={[styles.head,{paddingVertical:8}]}><View style={styles.grow}><Text style={styles.meta}>{pack.revisionId}</Text><Text style={styles.meta}>{pack.cachedFindings}/{pack.findings} findings · {pack.cachedPreviews}/{pack.previews} previews · {pack.status}</Text></View><Pressable disabled={pack.status!=="ready"} onPress={()=>void removeOfflinePack(pack.revisionId)} style={{padding:8,opacity:pack.status==="ready"?1:0.4}}><Text style={styles.notes}>Remove</Text></Pressable></View>)}</ScrollView><Pressable style={styles.addFinding} onPress={()=>setOfflineStorageOpen(false)}><Text style={styles.addFindingText}>Close</Text></Pressable></View></SafeAreaView></Modal>
       {localGallery?<QualitySwipeViewer photos={localGallery.photos} initialIndex={localGallery.index} onDelete={id=>{const photo=[...(workspace?.findings.flatMap(row=>[...row.beforePhotos,...row.afterPhotos]) || []),...(workspace?.pendingUpdates.flatMap(row=>row.afterPhotos) || [])].find(row=>row.id===id);if(photo)void deleteLocalQualityPhoto(photo).then(async()=>{setLocalGallery(null);await reloadDetail();await refreshSync();}).catch(error=>Alert.alert("Photo deletion failed",String(error)));}} onClose={()=>setLocalGallery(null)}/>:null}
+      {findingEvidence?<QualityFindingEvidenceViewer before={findingEvidence.before} after={findingEvidence.after} onClose={()=>setFindingEvidence(null)}/>:null}
     </QualityShell>
   );
 }

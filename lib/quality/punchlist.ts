@@ -2,6 +2,23 @@ import type { DetailSchema, DetailValues } from "./operational-details";
 export const punchlistFields = ["tower", "externalReference", "member", "segment", "leg", "drawing", "defectType", "description", "inspector", "inspectorComment", "sourceDate", "assignedFlag", "photos"] as const;
 export type PunchlistRow = Record<typeof punchlistFields[number], string> & { rowKey: string; towerId?: string; issueTypeId?:string; operationalDetails?:DetailValues };
 export type ImportIssueType={id:string;name:string;detail_schema?:DetailSchema|null};
+const normalizeSegment=(value:string)=>value.trim().toLowerCase().replace(/^[+-]?\d+(?:\.\d+)?\s*m\s*/i,"").replace(/[^a-z0-9]/g,"");
+/** Only infer an imported source section when it maps to one configured tower segment. */
+export function matchPunchlistTowerSegment(sourceSection:string,configuredSegments:string[]):string|null {
+  const source=sourceSection.trim();if(!source)return null;
+  const exact=configuredSegments.filter(value=>value.trim().toLowerCase()===source.toLowerCase());
+  if(exact.length===1)return exact[0].trim();
+  if(exact.length>1)return null;
+  const key=normalizeSegment(source);const matches=[...new Set(configuredSegments.map(value=>value.trim()).filter(Boolean).filter(value=>normalizeSegment(value)===key))];
+  return matches.length===1?matches[0]:null;
+}
+export function punchlistFilterSection(item:{source_type?:string|null;tower_segment?:string|null;source_payload?:Record<string,unknown>|null}) {
+  if(item.source_type!=="punchlist")return item.tower_segment?.trim()||"";
+  const payload=item.source_payload;
+  const sourceSection=payload&&typeof payload==="object"?payload.sourceSection??payload.source_section??payload.segment:null;
+  // Historical imports only carried the spreadsheet section in `segment`.
+  return typeof sourceSection==="string"?sourceSection.trim():item.tower_segment?.trim()||"";
+}
 const normalize=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]/g,"");
 export function punchlistSourceKey(projectId:string,sourceName:string){const slug=sourceName.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g,"-").replace(/^-|-$/g,"").toLowerCase()||"punchlist";return `${projectId}:punchlist:${slug}`.slice(0,200);}
 const aliases:Record<string,string[]>={

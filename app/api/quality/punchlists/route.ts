@@ -3,7 +3,7 @@ import { qualityWorkflowAccess } from "@/lib/quality/workflow-access";
 import { qualityApiError } from "@/lib/quality/server";
 import { atomicQualityError } from "@/lib/quality/atomic-error";
 import { qualityTowerDisplay } from "@/lib/quality/tower-label";
-import { punchlistFields, type PunchlistRow } from "@/lib/quality/punchlist";
+import { matchPunchlistTowerSegment, punchlistFields, type PunchlistRow } from "@/lib/quality/punchlist";
 import { resolveProjectTower, sourceDateToDb } from "@/lib/quality/punchlist-import-values";
 import { validateDetailValues, type DetailSchema } from "@/lib/quality/operational-details";
 
@@ -51,7 +51,17 @@ export async function POST(request: Request) {
     const absent = existing.data?.filter(item => !seen.has(`${item.tower_id}:${item.external_reference?.trim().toUpperCase()}`)) || [];
     if (!body.confirm) return NextResponse.json({ rows, errors, candidates, absent, revisions: revisions.data, towers: towers.data?.map(tower => ({ id: tower.id, name: qualityTowerDisplay(tower.name) })),issueTypes:issueTypes.data?.map(issue=>({id:issue.id,name:issue.name,detail_schema:issue.detail_schema})) });
     if (errors.length) return NextResponse.json({ error: errors.join("\n") }, { status: 400 });
-    const result = await service.rpc("import_v1_quality_punchlist", { p_project: projectId, p_actor: user.id, p_batch: body.batchId, p_request: { importedByLabel:label, sourceKey: sourceKey.trim(), filename: String(body.filename || "Punchlist"), sourceRevision: String(body.sourceRevision || ""), rows, targets: body.targets || {} } });
+    // Keep the spreadsheet's section as source metadata. Only put a configured
+    // TTTracker segment in the canonical field when the tower has one confident match.
+    const towerIds=[...new Set(rows.map(row=>row.towerId).filter(Boolean))];
+    const catalogs=await Promise.all(towerIds.map(async towerId=>{
+      const result=await service.from("tower_material_members").select("tower_segment").eq("tower_id",towerId).limit(5000);
+      if(result.error)throw new Error(result.error.message);
+      return [towerId,[...new Set((result.data||[]).map(row=>String(row.tower_segment||"").trim()).filter(Boolean))] as string[]] as const;
+    }));
+    const segmentsByTower=new Map(catalogs);
+    const importRows=rows.map(row=>({ ...row, sourceSection:row.segment, segment:matchPunchlistTowerSegment(row.segment,segmentsByTower.get(row.towerId)||[])||"" }));
+    const result = await service.rpc("import_v1_quality_punchlist", { p_project: projectId, p_actor: user.id, p_batch: body.batchId, p_request: { importedByLabel:label, sourceKey: sourceKey.trim(), filename: String(body.filename || "Punchlist"), sourceRevision: String(body.sourceRevision || ""), rows:importRows, targets: body.targets || {} } });
     if (result.error) { const error = atomicQualityError(result.error); return NextResponse.json({ error: error.message }, { status: error.status }); }
     return NextResponse.json({ results: result.data, batchId: body.batchId });
   } catch (error) { const result = qualityApiError(error); return NextResponse.json({ error: result.message }, { status: result.status }); }

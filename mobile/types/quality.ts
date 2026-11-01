@@ -118,6 +118,7 @@ export type QualityRevision = {
 };
 
 export type QualityRevisionItem = {
+  source_payload?: Record<string, unknown> | null;
   source_date?: string | null;
   operational_details?: DetailValues | null;
   record_version?: number;

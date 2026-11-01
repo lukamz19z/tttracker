@@ -1,5 +1,6 @@
 import { findingReadiness } from "./finding-readiness";
 import type { DetailValues } from "./operational-details";
+import { punchlistFilterSection } from "./punchlist";
 
 export const FIELD_STATUSES = ["All", "Open", "In Progress", "Ready", "Rectified"] as const;
 export const FIELD_GROUPS = ["Section", "Defect Type", "Status", "FLI"] as const;
@@ -12,6 +13,7 @@ export type FieldItem = {
   assigned_flag?: string | null; source_type?: string | null; external_reference?: string | null;
   member_number?: string | null; leg?: string | null; finding?: string | null;
   drawing_number?: string | null;
+  source_payload?: Record<string, unknown> | null;
   rectification_comment?: string | null; operational_details?: DetailValues | null;
 };
 export type FieldRow<T extends FieldItem = FieldItem> = { item: T; section: string; defectType: string; issueName: string; workflow: string; source: string; assignment: string; search: string };
@@ -40,7 +42,8 @@ export function fieldListRows<T extends FieldItem>(items: T[], types: { id: stri
     const candidates = byName.get(sourceIssueName.trim().toLowerCase()) || [];
     const defectType = item.issue_type_id || (candidates.length === 1 ? candidates[0] : `text:${sourceIssueName}`);
     const issueName = issues.get(defectType) || sourceIssueName;
-    return { item, section: item.tower_segment?.trim() || "", defectType, issueName, workflow, source: item.source_type === "punchlist" ? "Punchlist" : "Manual", assignment: item.assigned_flag?.trim() || "", search: [item.fli_number, item.external_reference, item.member_number, item.leg, item.tower_segment, item.finding, issueName].join(" ").toLowerCase() };
+    const sourceSection=punchlistFilterSection(item);
+    return { item, section: sourceSection, defectType, issueName, workflow, source: item.source_type === "punchlist" ? "Punchlist" : "Manual", assignment: item.assigned_flag?.trim() || "", search: [item.fli_number, item.external_reference, item.member_number, item.leg, sourceSection, item.tower_segment, item.finding, issueName].join(" ").toLowerCase() };
   });
 }
 export function filterFieldRows<T extends FieldItem>(rows: FieldRow<T>[], state: FieldListState) {

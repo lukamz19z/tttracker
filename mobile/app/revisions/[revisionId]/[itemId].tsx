@@ -6,6 +6,7 @@ import { sourceDateDisplay } from "../../../../lib/quality/punchlist-import-valu
 import { qualityDisplayName } from "../../../../lib/quality/display-name";
 import { useFocusEffect } from "@react-navigation/native";
 import { QualityEvidenceGallery } from "@/components/quality/QualityEvidenceGallery";
+import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
 import { router, type Href, useLocalSearchParams } from "expo-router";
 import {
   useEffect,
@@ -35,7 +36,10 @@ import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityRevisionDetail,
+  cachedQualityMemberCatalog,
+  refreshQualityMemberCatalog,
   refreshQualityRevisionDetail,
+  type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
 import { enqueueRevisionItemUpdate } from "@/lib/offline/quality-sync";
 import type { OfflineRevisionItemUpdate } from "@/lib/offline/quality-sync";
@@ -148,6 +152,10 @@ export default function RevisionItemScreen() {
   );
 
   const [comment, setComment] = useState("");
+  const [towerSegment,setTowerSegment]=useState("");
+  const [memberNumber,setMemberNumber]=useState("");
+  const [drawingNumber,setDrawingNumber]=useState("");
+  const [memberCatalog,setMemberCatalog]=useState<QualityMemberCatalogRow[]>([]);
   const [operationalDetails, setOperationalDetails] = useState<DetailValues>({});
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [issuePickerOpen, setIssuePickerOpen] = useState(false);
@@ -158,6 +166,7 @@ export default function RevisionItemScreen() {
   const locked = hasPendingEdit || !editLoaded || Boolean(revision?.finalised_at) || !["Draft", "Open", "In Progress"].includes(revision?.status || "") || item?.status === "Verified";
   const [editVersion,setEditVersion]=useState<number|undefined>();
   const dirty=useRef(false);
+  useEffect(()=>{if(!revision?.project_id||!revision.tower_id)return;let active=true;void (async()=>{const cached=await cachedQualityMemberCatalog(revision.project_id,revision.tower_id);if(active&&cached?.value)setMemberCatalog(cached.value);if(online)try{const rows=await refreshQualityMemberCatalog(revision.project_id,revision.tower_id);if(active)setMemberCatalog(rows);}catch{/* Preserve the cached tower segment list offline. */}})();return()=>{active=false;};},[online,revision?.project_id,revision?.tower_id]);
   useFocusEffect(useCallback(()=>{if(online)void refreshQualityRevisionDetail(projectId,revisionId).then(setDetail).catch(()=>undefined);},[online,projectId,revisionId]));
   const [afterPhotos, setAfterPhotos] =
     useState<LocalQualityPhoto[]>([]);
@@ -174,6 +183,7 @@ export default function RevisionItemScreen() {
       setOperationalDetails(pending?.operationalDetails ?? item.operational_details ?? {});
       setSelectedIssueId(pending?.issueTypeId === undefined ? item.issue_type_id : pending.issueTypeId);
       setComment(pending?.rectificationComment ?? item.rectification_comment ?? "");
+      setTowerSegment(item.tower_segment||"");setMemberNumber(item.member_number||"");setDrawingNumber(item.drawing_number||"");
       setBeforePhotos(pending?.beforePhotos || []);
       setAfterPhotos(pending?.afterPhotos || []);
       setEditLoaded(true);
@@ -229,6 +239,9 @@ export default function RevisionItemScreen() {
         expectedVersion: editVersion,
         projectId: revision!.project_id,
         towerId: revision!.tower_id,
+        towerSegment:towerSegment.trim()||null,
+        memberNumber:memberNumber.trim()||null,
+        drawingNumber:drawingNumber.trim()||null,
         rectificationComment: comment.trim(),
         status: markRectified ? "Rectified" : item!.status,
         afterPhotos,
@@ -318,18 +331,19 @@ export default function RevisionItemScreen() {
 
         <Text style={q.muted}>
           {[
-            item.tower_segment,
-            item.member_number
-              ? `Member ${item.member_number}`
+            towerSegment || item.tower_segment,
+            (memberNumber || item.member_number)
+              ? `Member ${memberNumber || item.member_number}`
               : "",
-            item.drawing_number
-              ? `Drawing ${item.drawing_number}`
+            (drawingNumber || item.drawing_number)
+              ? `Drawing ${drawingNumber || item.drawing_number}`
               : "",
           ]
             .filter(Boolean)
             .join(" · ") ||
             "No steel reference"}
         </Text>
+        {!locked?<RevisionMemberFields members={memberCatalog} segment={towerSegment} memberNumber={memberNumber} drawingNumber={drawingNumber} onSegmentChange={(segment,keep)=>{dirty.current=true;setTowerSegment(segment);if(!keep){setMemberNumber("");setDrawingNumber("");}}} onSelectMember={member=>{dirty.current=true;setTowerSegment(member.towerSegment||towerSegment);setMemberNumber(member.memberNumber);setDrawingNumber(member.drawingNumber||"");}}/>:null}
         {operationalDetailSummary(selectedIssue?.detail_schema||issue?.detail_schema,operationalDetails)?<Text style={[q.cardTitle,{fontSize:13,color:"#1e3a8a"}]}>{operationalDetailSummary(selectedIssue?.detail_schema||issue?.detail_schema,operationalDetails)}</Text>:null}
         <Text style={q.fieldLabel}>Defect type</Text>
         <Pressable disabled={locked} style={[q.select,{minHeight:40,padding:9}]} onPress={()=>setIssuePickerOpen(true)}><Text style={q.selectText}>{selectedIssue?.name||item.other_issue_text||"Select defect type"}</Text></Pressable>
@@ -356,13 +370,13 @@ export default function RevisionItemScreen() {
           style={[q.input, styles.textarea]}
         />
 
-        {!locked ? <QualityPhotoPicker label="Add extra Before photos" photos={beforePhotos} onChange={value=>{dirty.current=true;setBeforePhotos(value);}} prefix="revision-before" context={{ Revision: revision.revision_number || revision.fli_number, Tower: tower?.name, "FLI #": item.fli_number, Issue: selectedIssue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }} /> : null}
+        {!locked ? <QualityPhotoPicker label="Add extra Before photos" photos={beforePhotos} onChange={value=>{dirty.current=true;setBeforePhotos(value);}} prefix="revision-before" context={{ Revision: revision.revision_number || revision.fli_number, Tower: tower?.name, "FLI #": item.fli_number, Issue: selectedIssue?.name || item.other_issue_text, Segment: towerSegment||item.tower_segment, Member: memberNumber||item.member_number, Drawing: drawingNumber||item.drawing_number }} /> : null}
         {!locked ? <QualityPhotoPicker
           label="Add after photos"
           photos={afterPhotos}
           onChange={value=>{dirty.current=true;setAfterPhotos(value);}}
           prefix="revision-after"
-          context={{ Revision: revision.revision_number || revision.fli_number || "Pending RECT", Tower: tower?.name, "FLI #": item.fli_number || "Pending FLI", Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: item.tower_segment, Member: item.member_number, Drawing: item.drawing_number }}
+          context={{ Revision: revision.revision_number || revision.fli_number || "Pending RECT", Tower: tower?.name, "FLI #": item.fli_number || "Pending FLI", Flag: item.assigned_flag, Leg: item.leg, Issue: issue?.name || item.other_issue_text, Segment: towerSegment||item.tower_segment, Member: memberNumber||item.member_number, Drawing: drawingNumber||item.drawing_number }}
         /> : null}
 
         <Pressable disabled={saving || locked} style={[q.primary, (saving || locked) && {opacity:0.5}]} onPress={()=>void rectify(false)}><Text style={q.primaryText}>Save Only</Text></Pressable>
