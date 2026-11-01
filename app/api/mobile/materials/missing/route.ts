@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       const assignmentIds = new Set(eligible.assignmentUsers.map(user => user.id));
       const notifyIds = new Set(eligible.notifyUsers.map(user => user.id));
       if (assignedToUserId && !assignmentIds.has(assignedToUserId)) return NextResponse.json({ error: "Select an authorised Materials manager for assignment." }, { status: 400 });
-      if (notifyUserIds.some(id => !notifyIds.has(id))) return NextResponse.json({ error: "Additional recipients must be eligible Materials managers in this project." }, { status: 400 });
+      if (notifyUserIds.some(id => !notifyIds.has(id))) return NextResponse.json({ error: "Additional recipients must be configured Materials notification users for this project." }, { status: 400 });
     }
     if (requestedUsers.length) {
       const { data: userAccess, error: userAccessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).in("user_id", requestedUsers);

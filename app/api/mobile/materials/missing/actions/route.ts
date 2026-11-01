@@ -41,7 +41,10 @@ export async function POST(request:Request){
     const eligible=await eligibleMaterialUsers(service,projectId);
     if(assignedToUserId&&!eligible.assignmentUsers.some(row=>row.id===assignedToUserId))return NextResponse.json({error:"Select an authorised Materials manager for assignment."},{status:400});
     const notifyUserIds=Array.isArray(body.notifyUserIds)?[...new Set(body.notifyUserIds.map(clean).filter(Boolean))]:null;
-    if(notifyUserIds?.some(id=>!eligible.notifyUsers.some(row=>row.id===id)))return NextResponse.json({error:"Additional recipients must be configured Materials notification recipients."},{status:400});
+    const {data:existingItem,error:existingItemError}=await service.from("tower_material_event_items").select("event_id").eq("issue_key",issueKey).maybeSingle();if(existingItemError)throw new Error(existingItemError.message);
+    let previouslySelected=new Set<string>();
+    if(existingItem?.event_id){const {data:existingEvent,error:existingEventError}=await service.from("tower_material_events").select("notify_user_ids").eq("id",existingItem.event_id).eq("project_id",projectId).maybeSingle();if(existingEventError)throw new Error(existingEventError.message);previouslySelected=new Set(Array.isArray(existingEvent?.notify_user_ids)?existingEvent.notify_user_ids.map(clean):[]);}
+    if(notifyUserIds?.some(id=>!eligible.notifyUsers.some(row=>row.id===id)&&!previouslySelected.has(id)))return NextResponse.json({error:"New additional recipients must be selected from this project's configured Materials notification users."},{status:400});
     const {data:result,error}=await service.rpc("tttracker_v1_missing_material_action",{p_project_id:projectId,p_tower_id:towerId,p_issue_key:issueKey,p_client_mutation_id:clientMutationId,p_action_type:actionType,p_body:text,p_user_id:user.id,p_assigned_to_user_id:assignedToUserId,p_notify_user_ids:notifyUserIds});if(error)throw new Error(error.message);
     const action=result as {action_id:string;event_id:string;duplicate:boolean};
     const {data:row,error:rowError}=await service.from("tower_material_event_actions").select("id,material_event_id,action_type,body,previous_assignee_id,assigned_to_user_id").eq("id",action.action_id).maybeSingle();if(rowError||!row)throw new Error(rowError?.message||"Material action was committed without an action ID.");

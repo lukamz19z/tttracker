@@ -216,8 +216,21 @@ export async function uploadMaterialReceiptEvidence(input:MaterialReceiptEvidenc
 
 export type MaterialProjectUser = { id: string; name: string; role: string };
 export type MaterialUserChoices = { assignmentUsers: MaterialProjectUser[]; notifyUsers: MaterialProjectUser[] };
+const materialUsersCacheKey = (projectId: string) => `materials:notification-users:${projectId}`;
+export async function cachedMaterialProjectUsers(projectId: string) {
+  return (await getCache<MaterialUserChoices>(materialUsersCacheKey(projectId)))?.value ?? null;
+}
 export async function loadMaterialProjectUsers(projectId: string) {
-  return apiJson<MaterialUserChoices>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
+  const key = materialUsersCacheKey(projectId);
+  try {
+    const choices = await apiJson<MaterialUserChoices>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
+    await setCache(key, choices);
+    return choices;
+  } catch (error) {
+    const cached = await getCache<MaterialUserChoices>(key).catch(() => null);
+    if (cached) return cached.value;
+    throw error;
+  }
 }
 
 export async function loadMissingMaterialDetails(projectId:string,issueKey?:string,eventId?:string){

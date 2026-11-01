@@ -49,11 +49,12 @@ test("existing material source/category IDs and legacy Missing schema are preser
   assert.doesNotMatch(migration, /drop constraint.*material_type/i);
 });
 
-test("Assign and Notify pools use dynamic permission/configuration data rather than all project users", () => {
+test("Assign pool uses dynamic permissions and Notify pool uses the project configuration list", () => {
   assert.match(eligibleUsers, /materials\.manage_issues/);
   assert.match(eligibleUsers, /materials\.configure/);
-  assert.doesNotMatch(eligibleUsers, /project_material_notification_rules/);
-  assert.match(eligibleUsers, /return \{ assignmentUsers: eligible, notifyUsers: eligible \}/);
+  assert.match(eligibleUsers, /project_material_notification_rules/);
+  assert.match(eligibleUsers, /eq\("available_for_selection", true\)/);
+  assert.match(eligibleUsers, /assignmentUsers: sort\(assignmentIds\), notifyUsers: sort\(notifyIds\)/);
   assert.match(reportScreen, /assignmentUsers/);
   assert.match(reportScreen, /notifyUsers/);
   assert.match(mobileApi, /authorised Materials manager/);
