@@ -215,10 +215,18 @@ export async function uploadMaterialReceiptEvidence(input:MaterialReceiptEvidenc
 }
 
 export type MaterialProjectUser = { id: string; name: string; role: string };
-export type MaterialUserChoices = { assignmentUsers: MaterialProjectUser[]; notifyUsers: MaterialProjectUser[] };
-const materialUsersCacheKey = (projectId: string) => `materials:notification-users:${projectId}`;
+export type MaterialUserChoices = { materialUsers: MaterialProjectUser[] };
+const materialUsersCacheKey = (projectId: string) => `materials:configured-users:v2:${projectId}`;
 export async function cachedMaterialProjectUsers(projectId: string) {
-  return (await getCache<MaterialUserChoices>(materialUsersCacheKey(projectId)))?.value ?? null;
+  const current = await getCache<MaterialUserChoices>(materialUsersCacheKey(projectId));
+  if (current) return current.value;
+  // The prior cache kept notification users separately; that array was already
+  // the project-configured picker source, so migrate only that safe subset.
+  const legacy = await getCache<{ notifyUsers?: MaterialProjectUser[] }>(`materials:notification-users:${projectId}`);
+  if (!legacy?.value.notifyUsers) return null;
+  const migrated = { materialUsers: legacy.value.notifyUsers };
+  await setCache(materialUsersCacheKey(projectId), migrated);
+  return migrated;
 }
 export async function loadMaterialProjectUsers(projectId: string) {
   const key = materialUsersCacheKey(projectId);

@@ -8,7 +8,7 @@ const mobileApi = await readFile(new URL("../../app/api/mobile/materials/missing
 const websiteApi = await readFile(new URL("../../app/api/materials/missing/route.ts", import.meta.url), "utf8");
 const collectApi = await readFile(new URL("../../app/api/mobile/materials/missing/collect-excess/route.ts", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/20261101153000_v1_material_excess_lifecycle.sql", import.meta.url), "utf8");
-const eligibleUsers = await readFile(new URL("../../lib/materials/eligible-users.ts", import.meta.url), "utf8");
+const eligibleUsers = await readFile(new URL("../../lib/materials/configured-users.ts", import.meta.url), "utf8");
 const existingMigration = await readFile(new URL("../migrations/20261031190000_v1_material_missing_workflow.sql", import.meta.url), "utf8");
 const mobileDocketMaterials = await readFile(new URL("../../lib/dockets/mobile-docket-materials.ts", import.meta.url), "utf8");
 const docketEditor = await readFile(new URL("../../app/api/mobile/daily-dockets/editor/route.ts", import.meta.url), "utf8");
@@ -49,15 +49,15 @@ test("existing material source/category IDs and legacy Missing schema are preser
   assert.doesNotMatch(migration, /drop constraint.*material_type/i);
 });
 
-test("Assign pool uses dynamic permissions and Notify pool uses the project configuration list", () => {
-  assert.match(eligibleUsers, /materials\.manage_issues/);
-  assert.match(eligibleUsers, /materials\.configure/);
+test("Assign and Notify consume the same project-configured Materials user list", () => {
   assert.match(eligibleUsers, /project_material_notification_rules/);
   assert.match(eligibleUsers, /eq\("available_for_selection", true\)/);
-  assert.match(eligibleUsers, /assignmentUsers: sort\(assignmentIds\), notifyUsers: sort\(notifyIds\)/);
-  assert.match(reportScreen, /assignmentUsers/);
-  assert.match(reportScreen, /notifyUsers/);
-  assert.match(mobileApi, /authorised Materials manager/);
+  assert.match(eligibleUsers, /projectMemberIds\.has\(id\)/);
+  assert.doesNotMatch(eligibleUsers, /materials\.manage_issues|materials\.configure|fullAccessUserIds/);
+  assert.match(reportScreen, /const \[materialUsers,setMaterialUsers\]/);
+  assert.match(reportScreen, /materialUsers\.map\(user=>\(\{id:user\.id,label:user\.name/);
+  assert.match(mobileApi, /configuredMaterialUsers/);
+  assert.match(websiteApi, /configuredMaterialUsers/);
 });
 
 test("personnel controls remain available for Missing and Excess independently of configured rules", async () => {
@@ -67,12 +67,15 @@ test("personnel controls remain available for Missing and Excess independently o
   assert.match(mobileScreen, /<Text style=\{styles\.label\}>Assign To · Optional<\/Text>/);
   assert.match(mobileScreen, /<Text style=\{styles\.label\}>Also Notify · Optional/);
   assert.match(mobileScreen, /assignedToUserId:assignedToUserId\|\|null,notifyUserIds/);
-  assert.match(mobileScreen, /No eligible Materials managers available/);
+  assert.match(mobileScreen, /No notification users configured/);
+  assert.match(mobileScreen, /cachedMaterialProjectUsers/);
+  assert.match(mobileScreen, /assignmentUsers|materialUsers/);
+  assert.match(mobileScreen, /notifyUsers|materialUsers/);
   assert.match(websiteForm, /Assign To · Optional/);
   assert.match(websiteForm, /Also Notify · Optional/);
   assert.match(websiteForm, /assignedToUserId:assignee\|\|null,notifyUserIds:notify/);
-  assert.match(websiteApi, /eligible\.notifyUsers/);
-  assert.match(mobileCreateApi, /eligible\.notifyUsers/);
+  assert.match(websiteApi, /eligibleIds/);
+  assert.match(mobileCreateApi, /eligibleIds/);
   assert.match(websiteApi, /notifyMissingMaterialEvent\(\{service,projectId,sourceEventId:issue\.event_id,kind:issueType==="excess"\?"excess_raised":"raised"/);
   assert.match(mobileCreateApi, /kind: issueType === "excess" \? "excess_raised" : "raised"/);
 });

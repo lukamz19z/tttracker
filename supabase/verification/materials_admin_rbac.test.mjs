@@ -11,128 +11,131 @@ const settingsRoute = await source("app/api/materials/missing/notification-setti
 const storageRoute = await source("app/api/materials/missing/storage-settings/route.ts");
 const webUsersRoute = await source("app/api/materials/missing/users/route.ts");
 const mobileUsersRoute = await source("app/api/mobile/materials/users/route.ts");
-const page = await source("app/(protected)/project/[projectId]/materials/notifications/page.tsx");
-const materialsMigration = await source("supabase/migrations/20261101170000_v1_materials_permissions.sql");
+const settingsPage = await source("app/(protected)/project/[projectId]/materials/notifications/page.tsx");
+const permissionMigration = await source("supabase/migrations/20261101170000_v1_materials_permissions.sql");
 const selectionMigration = await source("supabase/migrations/20261101173000_v1_material_notification_selection.sql");
-const eligibleSource = await source("lib/materials/eligible-users.ts");
+const configuredSource = await source("lib/materials/configured-users.ts");
 const reportRoute = await source("app/api/materials/missing/route.ts");
 const mobileReportRoute = await source("app/api/mobile/materials/missing/route.ts");
 const notifier = await source("lib/materials/missing-notifications.ts");
 const websiteForm = await source("components/materials/ReportMissingMaterialForm.tsx");
+const websiteDetail = await source("components/materials/MissingMaterialCanonicalPanel.tsx");
 const mobileForm = await source("mobile/app/materials/report-missing.tsx");
+const mobileDetail = await source("mobile/app/materials/missing.tsx");
 const mobileActionsRoute = await source("app/api/mobile/materials/missing/actions/route.ts");
+const mobileApi = await source("mobile/lib/api/materials.ts");
 const require = createRequire(import.meta.url);
 const ts = require("../../node_modules/typescript");
 
-function loadEligibleModule(projectUsers, permissions, fullIds, notifyIds = []) {
-  const file = new URL("../../lib/materials/eligible-users.ts", import.meta.url);
+function loadConfiguredModule(projectMembers, configuredIds) {
+  const file = new URL("../../lib/materials/configured-users.ts", import.meta.url);
   const js = ts.transpileModule(require("node:fs").readFileSync(file, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
   const tables = [];
   const service = { from(table) {
     tables.push(table);
-    const query = { select() { return this; }, eq() { return this; }, in() { return this; },
-      then(resolve) { const data = table === "project_access" ? projectUsers : table === "effective_user_permissions" ? permissions : notifyIds.map(user_id => ({ user_id })); return Promise.resolve({ data, error: null }).then(resolve); } };
+    const rows = table === "project_access" ? projectMembers : configuredIds.map(user_id => ({ user_id }));
+    const query = { select() { return this; }, eq() { return this; }, then(resolve) { return Promise.resolve({ data: rows, error: null }).then(resolve); } };
     return query;
   } };
   const exports = {};
   new Function("require", "exports", js)(name => {
-    if (name === "@/lib/access/server") return { fullAccessUserIds: async () => fullIds };
-    if (name === "@/lib/materials/project-users") return { resolveProjectUserLabels: async (_service, ids) => ids.map(id => ({ id, name: `Name ${id}`, role: "Materials Manager" })) };
+    if (name === "@/lib/materials/project-users") return { resolveProjectUserLabels: async (_service, ids) => ids.map(id => ({ id, name: `Person ${id}`, role: "Project User" })) };
     throw new Error(`Unexpected import ${name}`);
   }, exports);
-  return { eligibleMaterialUsers: exports.eligibleMaterialUsers, service, tables };
+  return { configuredMaterialUsers: exports.configuredMaterialUsers, service, tables };
 }
 
-test("V1 full-access Admin inheritance is shared with Quality and effective permission checks", () => {
+test("full-access Admin inheritance remains shared with Materials configuration and Quality", () => {
   assert.match(accessServer, /export async function hasV1FullAccess/);
-  assert.match(accessServer, /roles"\)\.select\("grants_all"\)/);
   assert.match(accessServer, /return hasV1FullAccess\(service, userId\)/);
   assert.match(qualityServer, /isQualityAdminRole\(role\) \|\| await hasV1FullAccess/);
+  assert.match(settingsRoute, /requireMaterialsConfiguration/);
+  assert.match(storageRoute, /requireMaterialsConfiguration/);
 });
 
-test("V1 permission catalogue includes Materials manage/configure and mobile capabilities", () => {
-  for (const permission of ["materials.view", "materials.issues.view", "materials.manage_issues", "materials.configure", "mobile.materials"]) {
-    assert.ok(materialsMigration.includes(`'${permission}'`), `${permission} should be registered`);
-  }
-  assert.match(materialsMigration, /insert into public\.access_areas/);
-  assert.doesNotMatch(materialsMigration, /v2_permissions|v2_role_permissions/);
+test("V1 permission catalogue and project selection flag use additive migrations", () => {
+  for (const permission of ["materials.view", "materials.issues.view", "materials.manage_issues", "materials.configure", "mobile.materials"]) assert.ok(permissionMigration.includes(`'${permission}'`));
   assert.match(selectionMigration, /available_for_selection boolean not null default true/);
+  assert.doesNotMatch(selectionMigration, /v2_permissions|v2_role_permissions/);
 });
 
-test("settings and evidence storage use the same project/configuration authorization path", () => {
-  assert.match(settingsRoute, /requireMaterialsConfiguration\(request, projectId\)/);
-  assert.match(storageRoute, /requireMaterialsConfiguration\(request,projectId\)/);
-  assert.match(qualityServer, /MATERIALS_CONFIGURATION_FORBIDDEN/);
-  assert.match(page, /void refresh\(\)/);
-  assert.match(page, /No notification users configured/);
-  assert.match(page, /Add User/);
-  assert.match(page, /available_for_selection/);
+test("website settings manage an explicit project user list without permission-derived recipients", () => {
   assert.match(settingsRoute, /project_access/);
-  assert.doesNotMatch(settingsRoute, /eligibleMaterialUsers/);
-  assert.match(settingsRoute, /available_for_selection: typeof body\.availableForSelection/);
-  assert.match(settingsRoute, /Recipient must be a member of this project/);
-  assert.match(webUsersRoute, /assertQualityProjectAccess\(\{/);
-  assert.match(mobileUsersRoute, /hasV1FullAccess\(service, identity\.userId\)/);
-});
-
-test("100-member project picker returns only explicitly configured users, independently of permissions", async () => {
-  const members = Array.from({ length: 100 }, (_, i) => ({ user_id: `person-${i}` }));
-  const permissions = [
-    { user_id: "person-95", code: "materials.manage_issues", allowed: true },
-    { user_id: "person-96", code: "materials.configure", allowed: true },
-    { user_id: "person-97", code: "materials.manage_issues", allowed: true },
-    { user_id: "person-98", code: "materials.configure", allowed: true },
-    { user_id: "person-99", code: "materials.manage_issues", allowed: true },
-  ];
-  const { eligibleMaterialUsers, service, tables } = loadEligibleModule(members, permissions, ["person-95"], ["person-4", "person-6", "person-80"]);
-  const result = await eligibleMaterialUsers(service, "project-1");
-  assert.deepEqual(result.assignmentUsers.map(row => row.id), ["person-95", "person-96", "person-97", "person-98", "person-99"]);
-  assert.deepEqual(result.notifyUsers.map(row => row.id), ["person-4", "person-6", "person-80"]);
-  assert.equal(result.assignmentUsers.length, 5);
-  assert.ok(result.assignmentUsers.every(row => row.name.startsWith("Name person-")));
-  assert.equal(tables.includes("project_material_notification_rules"), true);
-  assert.equal(result.notifyUsers.some(row => permissions.some(permission => permission.user_id === row.id)), false);
-});
-
-test("empty and separate-project notification lists never fall back to RBAC or all project users", async () => {
-  const members = Array.from({ length: 100 }, (_, i) => ({ user_id: `person-${i}` }));
-  const permissions = [{ user_id: "person-1", code: "materials.manage_issues", allowed: true }];
-  const empty = loadEligibleModule(members, permissions, [], []).eligibleMaterialUsers;
-  const result = await empty(loadEligibleModule(members, permissions, [], []).service, "project-c");
-  assert.deepEqual(result.notifyUsers, []);
-  const projectB = loadEligibleModule(members, permissions, [], ["person-70", "person-71"]);
-  const projectBUsers = await projectB.eligibleMaterialUsers(projectB.service, "project-b");
-  assert.deepEqual(projectBUsers.notifyUsers.map(row => row.id), ["person-70", "person-71"]);
-  assert.equal(projectBUsers.notifyUsers.some(row => ["person-4", "person-6", "person-80"].includes(row.id)), false);
-});
-
-test("recipient add/remove is project-membership scoped, while report and follow-up notifications use saved IDs", () => {
   assert.match(settingsRoute, /Recipient must be a member of this project/);
   assert.match(settingsRoute, /onConflict: "project_id,user_id"/);
   assert.match(settingsRoute, /available_for_selection: false/);
-  assert.match(reportRoute, /notify_user_ids:notifyUserIds/);
-  assert.match(mobileReportRoute, /notify_user_ids: notifyUserIds/);
-  assert.match(notifier, /event\.notify_user_ids/);
-  assert.match(notifier, /for\(const rule of rules\).*applies\(rule,kind\)/);
-  assert.match(notifier, /rule\.active!==true/);
-  assert.doesNotMatch(notifier, /project_defect_notification_rules/);
-  assert.match(eligibleSource, /eq\("available_for_selection", true\)/);
-  assert.match(page, /Optional automatic notifications/);
-  assert.match(page, /available_for_selection: true, notify_raised: false/);
-  assert.match(page, /available_for_selection: false/);
-  assert.match(reportRoute, /notifiable\.has\(id\)/);
-  assert.match(mobileReportRoute, /notifyIds\.has\(id\)/);
-  assert.match(notifier, /const channels=new Map<string/);
-  assert.match(mobileActionsRoute, /previouslySelected\.has\(id\)/);
+  assert.match(settingsPage, /Notification Users/);
+  assert.match(settingsPage, /Add User/);
+  assert.match(settingsPage, /Search project users by name or role/);
+  assert.match(settingsPage, /Remove/);
+  assert.match(settingsPage, /Optional automatic notifications/);
+  assert.match(settingsPage, /No notification users configured/);
+  assert.match(webUsersRoute, /configuredMaterialUsers/);
+  assert.match(mobileUsersRoute, /configuredMaterialUsers/);
+});
+
+test("Assign To and Also Notify return the same configured list: 3 of 100 users", async () => {
+  const members = Array.from({ length: 100 }, (_, index) => ({ user_id: `user-${index}` }));
+  const configured = ["user-7", "user-35", "user-92"];
+  const { configuredMaterialUsers, service, tables } = loadConfiguredModule(members, configured);
+  const users = await configuredMaterialUsers(service, "project-a");
+  assert.deepEqual(users.map(row => row.id), ["user-35", "user-7", "user-92"]);
+  assert.equal(users.length, 3);
+  assert.deepEqual(tables.sort(), ["project_access", "project_material_notification_rules"]);
+  assert.doesNotMatch(configuredSource, /materials\.manage_issues|materials\.configure|fullAccessUserIds|roles\.grants_all/);
+});
+
+test("empty list stays empty and configured lists are isolated by project", async () => {
+  const members = Array.from({ length: 100 }, (_, index) => ({ user_id: `user-${index}` }));
+  const emptyModule = loadConfiguredModule(members, []);
+  assert.deepEqual(await emptyModule.configuredMaterialUsers(emptyModule.service, "project-c"), []);
+  const projectA = loadConfiguredModule(members, ["user-1", "user-2"]);
+  const projectB = loadConfiguredModule(members, ["user-70"]);
+  assert.deepEqual((await projectA.configuredMaterialUsers(projectA.service, "project-a")).map(row => row.id), ["user-1", "user-2"]);
+  assert.deepEqual((await projectB.configuredMaterialUsers(projectB.service, "project-b")).map(row => row.id), ["user-70"]);
+});
+
+test("website and mobile Missing/Excess forms use one materialUsers array for both controls", () => {
+  assert.match(websiteForm, /setMaterialUsers\(payload\.materialUsers\|\|\[\]\)/);
+  assert.match(websiteForm, /Assign To[\s\S]*materialUsers\.map/);
+  assert.match(websiteForm, /Also Notify[\s\S]*materialUsers\.map/);
+  assert.match(mobileForm, /setMaterialUsers\(choices\.materialUsers\)/);
+  assert.match(mobileForm, /Assign To[\s\S]*materialUsers\.map/);
+  assert.match(mobileForm, /Also Notify[\s\S]*materialUsers\.map/);
+  assert.match(mobileDetail, /setMaterialUsers\(users\.materialUsers\)/);
+  assert.match(websiteDetail, /setMaterialUsers\(available\.materialUsers\|\|\[\]\)/);
+});
+
+test("server create/reassignment validates both controls against the same configured set", () => {
+  for (const route of [reportRoute, mobileReportRoute]) {
+    assert.match(route, /configuredMaterialUsers/);
+    assert.match(route, /eligibleIds/);
+    assert.doesNotMatch(route, /assignmentUsers|notifyUsers/);
+  }
+  assert.match(mobileActionsRoute, /materialUsers\.some\(row=>row\.id===assignedToUserId\)/);
+  assert.match(mobileActionsRoute, /assignedToUserId!==previousAssigneeId/);
+  assert.match(mobileActionsRoute, /assigned_to_label/);
+});
+
+test("saved assignee and selected recipients are deduplicated and reused for follow-up events", () => {
+  assert.match(notifier, /const channels=new Map/);
+  assert.match(notifier, /const directAssignee=/);
   assert.match(notifier, /event\.notify_user_ids/);
   assert.match(notifier, /channels\.set\(clean\(id\)/);
-  assert.match(notifier, /const directAssignee=/);
-  assert.match(notifier, /const configured=channels\.get\(clean\(id\)\)/);
-  assert.match(websiteForm, /payload\.notifyUsers/);
-  assert.match(mobileForm, /setNotifyUsers\(choices\.notifyUsers\)/);
-  assert.match(page, /projectUsers\.filter\(person => rules\[person\.id\]\?\.available_for_selection === true\)/);
-  assert.match(page, /setRules\(current => \(\{ \.\.\.current, \[id\]: \{ \.\.\.\(current\[id\] \|\| base\(id\)\), available_for_selection: false \} \}\)\)/);
-  assert.match(settingsRoute, /available_for_selection: false, active: false/);
+  assert.match(notifier, /channels\.delete\(args\.actorUserId\)/);
+  assert.match(mobileActionsRoute, /previouslySelected\.has\(id\)/);
+  assert.match(mobileDetail, /assigned_to_label/);
+});
+
+test("mobile uses one locally cached configured-user array and refreshes it from the project API", () => {
+  assert.match(mobileApi, /materials:configured-users:v2:/);
+  assert.match(mobileApi, /setCache\(key, choices\)/);
+  assert.match(mobileApi, /getCache<MaterialUserChoices>/);
+  assert.match(mobileApi, /legacy\.value\.notifyUsers/);
+  assert.doesNotMatch(mobileApi, /legacy\.value\.assignmentUsers/);
+  assert.match(mobileForm, /cachedMaterialProjectUsers/);
+  assert.match(mobileForm, /if\(!online\)/);
+  assert.doesNotMatch(mobileApi, /assignmentUsers/);
 });

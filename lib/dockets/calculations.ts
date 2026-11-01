@@ -47,6 +47,13 @@ export type DelayCalculationRow = {
   plant_names?: string[] | null;
 };
 
+export type PlantShiftCalculationRow = {
+  plant_name: string;
+  time_in: string;
+  time_out: string;
+  total_hours: string | number | null | undefined;
+};
+
 export type SectionV2CalculationRow = {
   section_code: string;
   section_label: string;
@@ -184,7 +191,6 @@ export function calculateHours(
 
 export function calculateProductionHours(
   row: LabourCalculationRow,
-  appliedDelayHours?: number,
 ): string {
   const raw = toNumber(row.total_hours);
   const prestart = toNumber(row.prestart_minutes) / 60;
@@ -192,11 +198,10 @@ export function calculateProductionHours(
   const travelIn = toNumber(row.travel_in_minutes) / 60;
   const travelOut = toNumber(row.travel_out_minutes) / 60;
   const mobilisation = minutesToHours(row.mobilisation_hours);
-  const delay = appliedDelayHours ?? toNumber(row.delay_hours);
 
   return Math.max(
     0,
-    raw - prestart - lunch - travelIn - travelOut - mobilisation - delay,
+    raw - prestart - lunch - travelIn - travelOut - mobilisation,
   ).toFixed(2);
 }
 
@@ -249,6 +254,53 @@ export function delayHoursForWorker(
     if (!delayAppliesToWorker(delay, workerName)) return sum;
     return sum + toNumber(delay.delay_hours);
   }, 0);
+}
+
+function rawShiftHours(row: { time_in?: string; time_out?: string; total_hours: string | number | null | undefined }) {
+  const stored = toNumber(row.total_hours);
+  return stored > 0 ? stored : toNumber(calculateHours(row.time_in, row.time_out));
+}
+
+/** Validate commercial delay claims against attendance/shift time, never production time. */
+export function validateDelayHoursAgainstRawShifts(
+  labourRows: LabourCalculationRow[],
+  delays: DelayCalculationRow[],
+  plantRows: PlantShiftCalculationRow[] = [],
+): string {
+  for (const delay of delays) {
+    const value = delay.delay_hours;
+    if (value !== null && value !== undefined && String(value).trim() !== "") {
+      const hours = Number(value);
+      if (!Number.isFinite(hours)) return "Delay duration must be a valid number.";
+      if (hours < 0) return "Delay duration cannot be negative.";
+    }
+  }
+
+  for (const worker of labourRows) {
+    if (!worker.worker_name.trim()) continue;
+    const shiftHours = rawShiftHours(worker);
+    const claimedHours = delayHoursForWorker(worker.worker_name, delays);
+    if (shiftHours > 0 && claimedHours > shiftHours + 0.01) {
+      return `Delay hours for ${worker.worker_name} (${claimedHours.toFixed(2)}) exceed the raw shift duration (${shiftHours.toFixed(2)}).`;
+    }
+  }
+
+  for (const plant of plantRows) {
+    const name = plant.plant_name.trim();
+    if (!name) continue;
+    const shiftHours = rawShiftHours(plant);
+    const claimedHours = delays.reduce((sum, delay) => {
+      if (delay.delay_applies_mode !== "labour_and_plant") return sum;
+      const selected = delay.plant_names || [];
+      const applies = selected.length === 0 || selected.some(item => normalizeWorkerName(item) === normalizeWorkerName(name));
+      return applies ? sum + toNumber(delay.delay_hours) : sum;
+    }, 0);
+    if (shiftHours > 0 && claimedHours > shiftHours + 0.01) {
+      return `Plant delay hours for ${name} (${claimedHours.toFixed(2)}) exceed the raw shift duration (${shiftHours.toFixed(2)}).`;
+    }
+  }
+
+  return "";
 }
 
 export function delayReasonsForWorker(
@@ -321,10 +373,7 @@ export function calculateLabourRows(
 
     return {
       ...next,
-      production_hours: calculateProductionHours(
-        next,
-        appliedDelayHours,
-      ),
+      production_hours: calculateProductionHours(next),
     };
   });
 }

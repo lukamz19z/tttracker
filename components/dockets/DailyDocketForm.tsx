@@ -18,7 +18,6 @@ import {
   SECTION_V2_DEFS,
   calculateHours,
   calculateProductionHours,
-  delayHoursForWorker,
   calculateLabourTotals,
   calculateMobilisationManhours,
   calculateMobilisationWorkerCount,
@@ -30,6 +29,7 @@ import {
   minutesToHours,
   normalizeWorkerName,
   toNumber,
+  validateDelayHoursAgainstRawShifts,
 } from "@/lib/dockets/calculations";
 
 type LabourRow = {
@@ -4488,10 +4488,7 @@ export default function DailyDocketForm({
 
         return {
           ...next,
-          production_hours: calculateProductionHours(
-            next,
-            delayHoursForWorker(next.worker_name, delayRows)
-          ),
+          production_hours: calculateProductionHours(next),
         };
       })
     );
@@ -6425,6 +6422,10 @@ const deleteRes = await supabase
     return "";
   }
 
+  function validateDelayClaims() {
+    return validateDelayHoursAgainstRawShifts(labourRows, delayRows, plantRowsWithTotals);
+  }
+
   async function handleSaveDraft() {
     if (!projectId || !towerId) {
       alert("Invalid route");
@@ -6458,6 +6459,12 @@ const deleteRes = await supabase
 
     if (incidentOccurred && !incidentNotes.trim()) {
       alert("Please enter incident notes/action required.");
+      return;
+    }
+
+    const delayError = validateDelayClaims();
+    if (delayError) {
+      alert(delayError);
       return;
     }
 
@@ -6518,6 +6525,12 @@ const deleteRes = await supabase
 
     if (incidentOccurred && !incidentNotes.trim()) {
       alert("Please enter incident notes/action required.");
+      return;
+    }
+
+    const delayError = validateDelayClaims();
+    if (delayError) {
+      alert(delayError);
       return;
     }
 
@@ -6845,10 +6858,7 @@ const deleteRes = await supabase
 
         return {
           ...next,
-          production_hours: calculateProductionHours(
-            next,
-            delayHoursForWorker(next.worker_name, delayRows)
-          ),
+          production_hours: calculateProductionHours(next),
         };
       })
     );

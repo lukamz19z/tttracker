@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { userHasAccess } from "@/lib/access/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
-import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
+import { configuredMaterialUsers } from "@/lib/materials/configured-users";
+import { resolveProjectUserLabels } from "@/lib/materials/project-users";
 import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
 
 export const runtime="nodejs";
@@ -25,7 +26,12 @@ export async function GET(request:Request){
       service.from("tower_material_events").select("id,event_type,occurred_at,delivery_reference,notes,created_by_user_id,tower_material_event_items!inner(source_issue_key,quantity,unit)").eq("project_id",projectId).eq("tower_id",event.tower_id).in("event_type",["found_received","excess_collected"]).eq("tower_material_event_items.source_issue_key",issueKey).order("occurred_at"),
     ]);if(actionsError||filesError||receiptsError)throw new Error(actionsError?.message||filesError?.message||receiptsError?.message);
     const signed=await Promise.all((files||[]).map(async file=>{if(file.sharepoint_web_url)return {...file,preview_url:file.sharepoint_web_url};const {data,error}=await service.storage.from(file.storage_bucket).createSignedUrl(file.storage_path,300);if(error)throw new Error(error.message);return {...file,preview_url:data.signedUrl};}));
-    return NextResponse.json({event,issueKey,actions:actions||[],files:signed,receipts:receipts||[]});
+    const identityIds=[event.assigned_to_user_id,...(Array.isArray(event.notify_user_ids)?event.notify_user_ids:[]),...(actions||[]).flatMap(row=>[row.created_by_user_id,row.previous_assignee_id,row.assigned_to_user_id])].map(clean).filter(Boolean);
+    const identityLabels=await resolveProjectUserLabels(service,identityIds),labelsById=new Map(identityLabels.map(row=>[row.id,row.name]));
+    const assigned_to_label=clean(event.assigned_to_user_id)?labelsById.get(clean(event.assigned_to_user_id))||"Project user":"";
+    const notify_user_labels=identityLabels.filter(row=>Array.isArray(event.notify_user_ids)&&event.notify_user_ids.includes(row.id));
+    const labeledActions=(actions||[]).map(row=>({...row,author_label:labelsById.get(clean(row.created_by_user_id))||"Project user",assigned_to_label:labelsById.get(clean(row.assigned_to_user_id))||"",previous_assignee_label:labelsById.get(clean(row.previous_assignee_id))||""}));
+    return NextResponse.json({event:{...event,assigned_to_label,notify_user_labels},issueKey,actions:labeledActions,files:signed,receipts:receipts||[]});
   }catch(error){const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status});}
 }
 
@@ -38,13 +44,13 @@ export async function POST(request:Request){
     if(["update","cancel"].includes(actionType)&&!text)return NextResponse.json({error:actionType==="cancel"?"Enter a cancellation reason.":"Enter an update."},{status:400});
     const permission=await Promise.all([userHasAccess(service,user.id,"materials.manage_issues"),userHasAccess(service,user.id,"mobile.materials"),service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",user.id).maybeSingle()]);
     if(!permission[2].data||(!permission[0]&&!permission[1]))return NextResponse.json({error:"You do not have permission to change Missing Materials."},{status:403});
-    const eligible=await eligibleMaterialUsers(service,projectId);
-    if(assignedToUserId&&!eligible.assignmentUsers.some(row=>row.id===assignedToUserId))return NextResponse.json({error:"Select an authorised Materials manager for assignment."},{status:400});
+    const materialUsers=await configuredMaterialUsers(service,projectId);
     const notifyUserIds=Array.isArray(body.notifyUserIds)?[...new Set(body.notifyUserIds.map(clean).filter(Boolean))]:null;
     const {data:existingItem,error:existingItemError}=await service.from("tower_material_event_items").select("event_id").eq("issue_key",issueKey).maybeSingle();if(existingItemError)throw new Error(existingItemError.message);
-    let previouslySelected=new Set<string>();
-    if(existingItem?.event_id){const {data:existingEvent,error:existingEventError}=await service.from("tower_material_events").select("notify_user_ids").eq("id",existingItem.event_id).eq("project_id",projectId).maybeSingle();if(existingEventError)throw new Error(existingEventError.message);previouslySelected=new Set(Array.isArray(existingEvent?.notify_user_ids)?existingEvent.notify_user_ids.map(clean):[]);}
-    if(notifyUserIds?.some(id=>!eligible.notifyUsers.some(row=>row.id===id)&&!previouslySelected.has(id)))return NextResponse.json({error:"New additional recipients must be selected from this project's configured Materials notification users."},{status:400});
+    let previouslySelected=new Set<string>(),previousAssigneeId="";
+    if(existingItem?.event_id){const {data:existingEvent,error:existingEventError}=await service.from("tower_material_events").select("assigned_to_user_id,notify_user_ids").eq("id",existingItem.event_id).eq("project_id",projectId).maybeSingle();if(existingEventError)throw new Error(existingEventError.message);previousAssigneeId=clean(existingEvent?.assigned_to_user_id);previouslySelected=new Set(Array.isArray(existingEvent?.notify_user_ids)?existingEvent.notify_user_ids.map(clean):[]);}
+    if(assignedToUserId&&!materialUsers.some(row=>row.id===assignedToUserId)&&assignedToUserId!==previousAssigneeId)return NextResponse.json({error:"Choose a new assignee from this project's configured Materials users."},{status:400});
+    if(notifyUserIds?.some(id=>!materialUsers.some(row=>row.id===id)&&!previouslySelected.has(id)))return NextResponse.json({error:"New additional recipients must be selected from this project's configured Materials users."},{status:400});
     const {data:result,error}=await service.rpc("tttracker_v1_missing_material_action",{p_project_id:projectId,p_tower_id:towerId,p_issue_key:issueKey,p_client_mutation_id:clientMutationId,p_action_type:actionType,p_body:text,p_user_id:user.id,p_assigned_to_user_id:assignedToUserId,p_notify_user_ids:notifyUserIds});if(error)throw new Error(error.message);
     const action=result as {action_id:string;event_id:string;duplicate:boolean};
     const {data:row,error:rowError}=await service.from("tower_material_event_actions").select("id,material_event_id,action_type,body,previous_assignee_id,assigned_to_user_id").eq("id",action.action_id).maybeSingle();if(rowError||!row)throw new Error(rowError?.message||"Material action was committed without an action ID.");

@@ -32,6 +32,7 @@ import {
   type DelayCalculationRow,
   type LabourCalculationRow,
   type LegacyProgressCalculationRow,
+  validateDelayHoursAgainstRawShifts,
   type SectionV2CalculationRow,
 } from "@/lib/dockets/calculations";
 import {
@@ -879,6 +880,17 @@ export async function POST(request: Request) {
       calculationDelays(draft);
     const labour =
       calculationLabourRows(draft);
+    const delayValidation = validateDelayHoursAgainstRawShifts(
+      labour,
+      delays,
+      (draft.plantRows ?? []).map((row: any) => ({
+        plant_name: clean(row.plant_name || row.asset_id || row.plant_type),
+        time_in: clean(row.time_in),
+        time_out: clean(row.time_out),
+        total_hours: row.total_hours,
+      })),
+    );
+    if (delayValidation) return NextResponse.json({ error: delayValidation }, { status: 400 });
     const mobilisation =
       mobilisationCalculation(draft);
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { userHasAccess } from "@/lib/access/server";
 import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
-import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
+import { configuredMaterialUsers } from "@/lib/materials/configured-users";
 import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
 
 export const runtime="nodejs";
@@ -26,7 +26,7 @@ export async function POST(request:Request){
     if(!tower.data)return NextResponse.json({error:"Tower was not found in this project."},{status:404});
     if(!access.data)return NextResponse.json({error:"You do not have access to this project."},{status:403});
     const selected=[...new Set([...(assignedToUserId?[assignedToUserId]:[]),...notifyUserIds])];
-    if(selected.length){const eligible=await eligibleMaterialUsers(service,projectId);const assignable=new Set(eligible.assignmentUsers.map(row=>row.id)),notifiable=new Set(eligible.notifyUsers.map(row=>row.id));if(assignedToUserId&&!assignable.has(assignedToUserId))return NextResponse.json({error:"Select an authorised Materials manager for assignment."},{status:400});if(notifyUserIds.some(id=>!notifiable.has(id)))return NextResponse.json({error:"Additional recipients must be configured Materials notification users for this project."},{status:400});}
+    if(selected.length){const materialUsers=await configuredMaterialUsers(service,projectId),eligibleIds=new Set(materialUsers.map(row=>row.id));if(assignedToUserId&&!eligibleIds.has(assignedToUserId))return NextResponse.json({error:"Assign To must be selected from this project's configured Materials users."},{status:400});if(notifyUserIds.some(id=>!eligibleIds.has(id)))return NextResponse.json({error:"Additional recipients must be selected from this project's configured Materials users."},{status:400});}
     if(selected.length){const {data:members,error}=await service.from("project_access").select("user_id").eq("project_id",projectId).in("user_id",selected);if(error)throw new Error(error.message);if((members||[]).length!==selected.length)return NextResponse.json({error:"Assignment and notification recipients must belong to this project."},{status:400});}
     const sourceTable=clean(body.sourceTable)||null,sourceRecordId=clean(body.sourceRecordId)||null;
     const result=await service.rpc(issueType==="excess"?"tttracker_v1_create_excess_material":"tttracker_v1_create_missing_material",{

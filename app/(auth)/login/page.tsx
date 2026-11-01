@@ -30,7 +30,11 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/");
+    const requested = new URLSearchParams(window.location.search).get("next") || "/";
+    const safeReturnPath = requested.startsWith("/") && !requested.startsWith("//") && !requested.includes("\\")
+      ? requested
+      : "/";
+    router.push(safeReturnPath);
     router.refresh();
   }
 

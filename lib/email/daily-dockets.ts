@@ -11,6 +11,7 @@ type SendDailyDocketEmailOptions = {
   cc?: string[];
   subject: string;
   html: string;
+  text?: string;
   attachments?: EmailAttachment[];
 };
 
@@ -49,6 +50,7 @@ export async function sendDailyDocketEmail({
   cc = [],
   subject,
   html,
+  text,
   attachments = [],
 }: SendDailyDocketEmailOptions) {
   const resend = getResendClient();
@@ -69,6 +71,7 @@ export async function sendDailyDocketEmail({
     cc: uniqueCc.length > 0 ? uniqueCc : undefined,
     subject,
     html,
+    text,
     attachments:
       attachments.length > 0
         ? attachments.map((attachment) => ({
@@ -93,13 +96,19 @@ export async function sendDailyDocketEmail({
 }
 
 export function docketEmailShell(title: string, body: string) {
+  const safeTitle = String(title ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
   return `
   <div style="font-family:Arial,sans-serif;color:#0f172a;max-width:680px;margin:auto">
     <div style="background:#0f172a;color:#fff;padding:18px 22px;border-radius:14px 14px 0 0">
       <strong style="font-size:20px">TTTracker</strong>
     </div>
     <div style="border:1px solid #e2e8f0;border-top:0;padding:24px;border-radius:0 0 14px 14px">
-      <h2 style="margin-top:0">${title}</h2>
+      <h2 style="margin-top:0">${safeTitle}</h2>
       ${body}
       <p style="color:#64748b;font-size:12px;margin-top:28px">
         This is an automated notification from TTTracker. Replies are not monitored.

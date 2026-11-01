@@ -3947,17 +3947,28 @@ function IssuesWorkspace({
   data,
   projectId,
   towerId,
+  targetIssue,
 }: {
   data: MaterialsData;
   projectId: string;
   towerId: string;
+  targetIssue?: { issueKey: string; eventId?: string; kind: "missing" | "excess" } | null;
 }) {
-  const [filter, setFilter] = useState<IssueFilter>("all");
+  const [filter, setFilter] = useState<IssueFilter>(targetIssue?.kind === "excess" ? "excess" : "all");
   const [query, setQuery] = useState("");
-  const [expandedIssue, setExpandedIssue] = useState<string | null>(null);
+  const [expandedIssue, setExpandedIssue] = useState<string | null>(targetIssue?.kind === "missing" ? targetIssue.issueKey : null);
   const [reportOpen, setReportOpen] = useState(false);
 
+  useEffect(() => {
+    if (!targetIssue) return;
+    const frame = requestAnimationFrame(() => document.getElementById(`material-issue-${targetIssue.issueKey}`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [targetIssue]);
+
   const missingIssues = buildMissingIssues(data);
+  const targetFound = !targetIssue || (targetIssue.kind === "missing"
+    ? missingIssues.some(row => row.issueKey === targetIssue.issueKey || Boolean(targetIssue.eventId && row.event.id === targetIssue.eventId))
+    : data.excessEvents.some(event => event.items.some(item => item.issue_key === targetIssue.issueKey) || Boolean(targetIssue.eventId && event.id === targetIssue.eventId)));
   const open = missingIssues.filter((row) => row.status === "open");
   const partial = missingIssues.filter((row) => row.status === "partial");
   const resolved = missingIssues.filter((row) => row.status === "resolved");
@@ -4008,6 +4019,7 @@ function IssuesWorkspace({
 
   return (
     <div className="space-y-4">
+      {targetIssue && !targetFound ? <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">This material issue could not be found or is no longer available.</div> : null}
       <div className="flex justify-end"><button type="button" onClick={()=>setReportOpen(true)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-xs font-black text-white">+ Report Material Issue</button></div>
       {reportOpen?<ReportMissingMaterialForm projectId={projectId} towerId={towerId} bundles={data.bundles} members={data.members} bolts={data.bolts} onDone={()=>{setReportOpen(false);void data.refresh();}}/>:null}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
@@ -4086,7 +4098,7 @@ function IssuesWorkspace({
                 const bundleDelivered = linkedBundle ? data.deliveredQty(linkedBundle) : null;
 
                 return (
-                  <div key={row.issueKey} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div id={`material-issue-${row.issueKey}`} key={row.issueKey} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                     <button
                       type="button"
                       onClick={() => setExpandedIssue(openRow ? null : row.issueKey)}
@@ -4184,7 +4196,7 @@ function IssuesWorkspace({
                     .filter((row) => row.event_type === "excess_collected")
                     .filter((row) => row.items.some((item) => item.source_issue_key === issueKey))
                     .map((row) => ({ id: row.id, occurred_at: row.occurred_at, notes: row.notes, event_type: row.event_type }));
-                  return <div key={event.id}>
+                  return <div id={`material-issue-${issueKey}`} key={event.id}>
                     <MaterialEventCard event={event} data={data} tone="blue" />
                     <ExcessCollectionControl event={event} data={data} />
                     {issueKey ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={issueKey} status={event.issue_status || "available"} receipts={collections} /> : null}
@@ -7502,7 +7514,13 @@ export default function MaterialsControlPage() {
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
   const data = useMaterialsData(projectId, towerId);
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [targetIssue] = useState<{ issueKey: string; eventId?: string; kind: "missing" | "excess" } | null>(() => {
+    if (typeof window === "undefined") return null;
+    const query = new URLSearchParams(window.location.search);
+    const issueKey = query.get("issue")?.trim();
+    return issueKey ? { issueKey, eventId: query.get("eventId") || undefined, kind: query.get("kind") === "excess" ? "excess" : "missing" } : null;
+  });
+  const [activeTab, setActiveTab] = useState<Tab>(() => targetIssue ? "issues" : "overview");
   const [transferBundle, setTransferBundle] = useState<Bundle | null>(null);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
 
@@ -7627,7 +7645,7 @@ export default function MaterialsControlPage() {
                 }}
               />
             )}
-            {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} />}
+              {activeTab === "issues" && <IssuesWorkspace data={data} projectId={projectId} towerId={towerId} targetIssue={targetIssue} />}
             {activeTab === "bolts" && <BoltRegister data={data} />}
             {activeTab === "amendments" && <AmendmentsWorkspace data={data} projectId={projectId} towerId={towerId} />}
             {activeTab === "data" && <DataImportsWorkspace data={data} towerId={towerId} />}

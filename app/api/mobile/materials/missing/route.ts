@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
 import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
-import { eligibleMaterialUsers } from "@/lib/materials/eligible-users";
+import { configuredMaterialUsers } from "@/lib/materials/configured-users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,11 +33,9 @@ export async function POST(request: NextRequest) {
     if (!access) return NextResponse.json({ error: "You do not have access to this project." }, { status: 403 });
     const requestedUsers = [...new Set([...(assignedToUserId ? [assignedToUserId] : []), ...notifyUserIds])];
     if (requestedUsers.length) {
-      const eligible = await eligibleMaterialUsers(service, projectId);
-      const assignmentIds = new Set(eligible.assignmentUsers.map(user => user.id));
-      const notifyIds = new Set(eligible.notifyUsers.map(user => user.id));
-      if (assignedToUserId && !assignmentIds.has(assignedToUserId)) return NextResponse.json({ error: "Select an authorised Materials manager for assignment." }, { status: 400 });
-      if (notifyUserIds.some(id => !notifyIds.has(id))) return NextResponse.json({ error: "Additional recipients must be configured Materials notification users for this project." }, { status: 400 });
+      const eligibleIds = new Set((await configuredMaterialUsers(service, projectId)).map(user => user.id));
+      if (assignedToUserId && !eligibleIds.has(assignedToUserId)) return NextResponse.json({ error: "Assign To must be selected from this project's configured Materials users." }, { status: 400 });
+      if (notifyUserIds.some(id => !eligibleIds.has(id))) return NextResponse.json({ error: "Additional recipients must be selected from this project's configured Materials users." }, { status: 400 });
     }
     if (requestedUsers.length) {
       const { data: userAccess, error: userAccessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).in("user_id", requestedUsers);
