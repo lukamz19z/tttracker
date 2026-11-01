@@ -36,6 +36,7 @@ export default function EditDocketPage() {
         .from("tower_daily_dockets")
         .select("*")
         .eq("id", docketId)
+        .is("deleted_at", null)
         .single(),
 
       supabase

@@ -16,6 +16,7 @@ export type TowerProgressDocket = {
   erection_percent?: number | null;
   docket_date?: string | null;
   approval_status?: string | null;
+  deleted_at?: string | null;
   progress_model?: string | null;
 };
 export type TowerProgressHistoryRow = {
@@ -299,14 +300,14 @@ export async function loadTowerProgressForTowers(
   const parentIds = [...new Set([...primaryDockets.map((docket) => docket.id), ...history.map((row) => row.docket_id)])];
   for (let start = 0; start < parentIds.length; start += 200) {
     const result = await supabase.from("tower_daily_dockets")
-      .select("id,tower_id,docket_date,approval_status,progress_model,assembly_percent,erection_percent")
+      .select("id,tower_id,docket_date,approval_status,deleted_at,progress_model,assembly_percent,erection_percent")
       .in("id", parentIds.slice(start, start + 200));
     if (result.error) throw new Error(`Tower progress docket dates could not be loaded: ${result.error.message}`);
     for (const docket of (result.data || []) as TowerProgressDocket[]) docketsById.set(docket.id, docket);
   }
   if (parentIds.some((id) => !docketsById.has(id))) throw new Error("A parent docket for tower progress is unavailable.");
   const eligibleDockets = [...docketsById.values()].filter((docket) =>
-    docket.id !== options.excludeDocketId && (!options.throughDate || !docket.docket_date || docket.docket_date <= options.throughDate));
+    !docket.deleted_at && docket.approval_status !== "deleted" && docket.id !== options.excludeDocketId && (!options.throughDate || !docket.docket_date || docket.docket_date <= options.throughDate));
   const eligibleIds = new Set(eligibleDockets.map((docket) => docket.id));
   return resolveTowerProgressBatch(towers, history.filter((row) => eligibleIds.has(row.docket_id)), eligibleDockets);
 }

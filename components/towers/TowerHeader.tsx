@@ -233,6 +233,7 @@ export default function TowerHeader({ projectId, tower, resolvedProgress }: Prop
           .from("tower_daily_dockets")
           .select("id,tower_id,docket_date,assembly_percent,erection_percent,raw_manhours,production_manhours")
           .eq("tower_id", towerId)
+          .is("deleted_at", null)
           .order("docket_date", { ascending: false }),
 
         supabase.from("tower_defects").select("status").eq("tower_id", towerId),

@@ -616,6 +616,7 @@ export default function DailyDocketBcReviewPage() {
             .eq("id", docketId)
             .eq("project_id", projectId)
             .eq("tower_id", towerId)
+            .is("deleted_at", null)
             .single(),
           supabase
             .from("tower_docket_labour")

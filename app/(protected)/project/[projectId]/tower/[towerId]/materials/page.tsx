@@ -1597,7 +1597,7 @@ function useMaterialsData(projectId: string, towerId: string) {
         fetchAllMembers(),
         supabase.from("tower_material_bolts").select("*").eq("tower_id", towerId).order("item_type").order("tower_segment").order("bolt_diameter").order("length"),
         supabase.from("tower_bundle_deliveries").select("tower_bundle_delivery_items(*)").eq("tower_id", towerId),
-        supabase.from("tower_daily_dockets").select("id,docket_date,crew,leading_hand").eq("tower_id", towerId).order("docket_date", { ascending: false }),
+        supabase.from("tower_daily_dockets").select("id,docket_date,crew,leading_hand").eq("tower_id", towerId).is("deleted_at", null).order("docket_date", { ascending: false }),
         supabase.from("tower_material_bundle_checks").select("*").eq("tower_id", towerId),
         fetchAllMemberChecks(),
         supabase

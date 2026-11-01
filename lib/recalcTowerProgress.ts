@@ -7,6 +7,7 @@ export async function recalcTowerProgress(towerId: string) {
     .from("tower_daily_dockets")
     .select("assembly_percent, erection_percent, docket_date")
     .eq("tower_id", towerId)
+    .is("deleted_at", null)
     .order("docket_date", { ascending: false })
     .limit(1);
 

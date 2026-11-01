@@ -33,6 +33,7 @@ async function validateRecords({
       .eq("id", docketId)
       .eq("project_id", projectId)
       .eq("tower_id", towerId)
+      .is("deleted_at", null)
       .maybeSingle(),
     service
       .from("tower_defects")

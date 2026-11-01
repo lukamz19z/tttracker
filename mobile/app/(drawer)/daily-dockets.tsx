@@ -29,6 +29,7 @@ import {
   getDailyDocketEditor,
   saveDailyDocket,
   submitDailyDocketForBc,
+  runDailyDocketLifecycleAction,
 } from "@/lib/api/daily-dockets";
 import {
   DAILY_DOCKET_STEPS,
@@ -360,6 +361,7 @@ export default function DailyDocketScreen() {
               "id,project_id,tower_id,docket_date,crew,leading_hand,approval_status,approval_revision,assembly_percent,erection_percent,raw_manhours,production_manhours,incident_occurred,incident_type,created_at",
             )
             .eq("project_id", projectId)
+            .is("deleted_at", null)
             .order("docket_date", { ascending: false }),
         ]);
 
@@ -719,6 +721,22 @@ export default function DailyDocketScreen() {
     setStep("setup");
   };
 
+  const runLifecycleAction = (docket: DocketListRow, action: "retract" | "delete") => {
+    const title = action === "retract" ? "Retract Daily Docket?" : "Delete Daily Docket?";
+    const message = action === "retract"
+      ? "Retract this submitted docket for editing?"
+      : "Delete this Daily Docket? It will be removed from active project records.";
+    Alert.alert(title, message, [
+      { text: "Cancel", style: "cancel" },
+      { text: action === "retract" ? "Retract" : "Delete", style: action === "delete" ? "destructive" : "default", onPress: () => { void (async () => {
+        try {
+          await runDailyDocketLifecycleAction(docket.id, action);
+          await loadList(true);
+        } catch (error) { Alert.alert("Daily Docket action failed", errorMessage(error)); }
+      })(); } },
+    ]);
+  };
+
   const editorLocked = Boolean(
     draft &&
       (draft.mode === "view" || isLockedStatus(draft.approvalStatus)),
@@ -911,6 +929,18 @@ export default function DailyDocketScreen() {
                           <Text style={styles.primaryActionText}>
                             Edit
                           </Text>
+                        </Pressable>
+                      ) : null}
+                      {["submitted_bc", "client_pending"].includes(clean(item.approval_status)) ? (
+                        <Pressable onPress={() => runLifecycleAction(item, "retract")} style={styles.secondaryAction}>
+                          <Ionicons name="return-up-back-outline" size={17} color="#92400e" />
+                          <Text style={styles.secondaryActionText}>Retract</Text>
+                        </Pressable>
+                      ) : null}
+                      {!locked && ["", "legacy", "draft", "bc_changes_requested", "client_changes_requested"].includes(clean(item.approval_status)) ? (
+                        <Pressable onPress={() => runLifecycleAction(item, "delete")} style={styles.secondaryAction}>
+                          <Ionicons name="trash-outline" size={17} color="#be123c" />
+                          <Text style={styles.secondaryActionText}>Delete</Text>
                         </Pressable>
                       ) : null}
                     </View>

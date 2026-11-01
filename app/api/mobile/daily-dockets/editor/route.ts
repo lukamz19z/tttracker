@@ -805,6 +805,7 @@ export async function GET(request: Request) {
         .eq("id", docketId)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
+        .is("deleted_at", null)
         .maybeSingle();
 
       if (error) throw new Error(error.message);
@@ -826,6 +827,7 @@ export async function GET(request: Request) {
         .select("*")
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
+        .is("deleted_at", null)
         .lte("docket_date", today)
         .or("approval_status.is.null,approval_status.in.(legacy,submitted_bc,client_pending,final,legacy_final)")
         .order("docket_date", {

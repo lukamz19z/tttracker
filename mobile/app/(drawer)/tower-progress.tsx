@@ -41,6 +41,8 @@ type DocketRow = {
   project_id?: string | null;
   tower_id?: string | null;
   docket_date?: string | null;
+  approval_status?: string | null;
+  deleted_at?: string | null;
   crew?: string | null;
   leading_hand?: string | null;
   assembly_percent?: number | null;
@@ -381,7 +383,8 @@ export default function TowerProgressScreen() {
             .select(
               "id, project_id, tower_id, docket_date, crew, leading_hand, assembly_percent, erection_percent",
             )
-            .eq("project_id", selectedProjectId),
+            .eq("project_id", selectedProjectId)
+            .is("deleted_at", null),
         ]);
 
       if (towerResponse.error) {
@@ -592,7 +595,7 @@ export default function TowerProgressScreen() {
     ] = await Promise.all([
       safeSelect<DocketRow>(
         "tower_daily_dockets",
-        "id, project_id, tower_id, docket_date, crew, leading_hand, assembly_percent, erection_percent",
+        "id, project_id, tower_id, docket_date, crew, leading_hand, assembly_percent, erection_percent, approval_status, deleted_at",
         [
           {
             column: "tower_id",
@@ -638,7 +641,7 @@ export default function TowerProgressScreen() {
       ),
     ]);
 
-    const sortedDockets = [...docketRows].sort(
+    const sortedDockets = docketRows.filter(row => row.approval_status !== "deleted" && !row.deleted_at).sort(
       (a, b) => {
         const first = a.docket_date
           ? new Date(a.docket_date).getTime()

@@ -75,7 +75,8 @@ export default function ProjectCommercialDashboard() {
         .select(
           "id, crew, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours, other_delay_reason"
         )
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .is("deleted_at", null);
 
       const docketsLoaded = (docketData || []) as Docket[];
       const docketIds = docketsLoaded.map((d) => d.id);

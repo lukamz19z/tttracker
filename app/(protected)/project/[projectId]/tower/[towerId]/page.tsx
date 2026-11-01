@@ -22,6 +22,8 @@ type Tower = {
 
 type DocketRow = {
   id: string;
+  approval_status?: string | null;
+  deleted_at?: string | null;
   docket_date: string | null;
   crew?: string | null;
   leading_hand?: string | null;
@@ -509,9 +511,11 @@ export default function TowerOverviewPage() {
     const docketData = await safeSelect<DocketRow>(
       supabase,
       "tower_daily_dockets",
-      "id, tower_id, docket_date, progress_model, crew, leading_hand, assembly_percent, erection_percent, raw_manhours, production_manhours, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours, client_rep_name, signed_date",
+      "id, tower_id, docket_date, approval_status, deleted_at, progress_model, crew, leading_hand, assembly_percent, erection_percent, raw_manhours, production_manhours, weather_delay_hours, lightning_delay_hours, toolbox_delay_hours, other_delay_hours, client_rep_name, signed_date",
       [{ column: "tower_id", value: towerId }],
     );
+    const activeDocketData = docketData.filter(row => row.approval_status !== "deleted" && !row.deleted_at);
+    docketData.splice(0, docketData.length, ...activeDocketData);
     docketData.sort((a, b) => {
       const aDate = a.docket_date ? new Date(a.docket_date).getTime() : 0;
       const bDate = b.docket_date ? new Date(b.docket_date).getTime() : 0;

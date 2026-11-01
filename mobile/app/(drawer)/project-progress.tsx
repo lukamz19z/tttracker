@@ -54,6 +54,7 @@ type DocketRow = {
   tower_id?: string | null;
   project_id?: string | null;
   docket_date?: string | null;
+  deleted_at?: string | null;
   assembly_percent?: number | null;
   erection_percent?: number | null;
   crew?: string | null;
@@ -523,7 +524,8 @@ export default function ProjectProgressScreen() {
               .eq(
                 "project_id",
                 projectId,
-              ),
+              )
+              .is("deleted_at", null),
 
             supabase
               .from(

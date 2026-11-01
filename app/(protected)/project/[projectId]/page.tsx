@@ -895,7 +895,8 @@ export default function ProjectDashboard() {
     const { data: docketsData, error: docketsError } = await supabase
       .from("tower_daily_dockets")
       .select("id, tower_id, project_id, docket_date, progress_model, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
-      .eq("project_id", projectId);
+      .eq("project_id", projectId)
+      .is("deleted_at", null);
 
     if (docketsError) console.error("dockets load error", docketsError);
 

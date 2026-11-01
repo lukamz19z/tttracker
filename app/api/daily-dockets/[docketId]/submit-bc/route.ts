@@ -591,6 +591,7 @@ export async function POST(
         material_issue_snapshot
       `)
       .eq("id", docketId)
+      .is("deleted_at", null)
       .single();
 
     if (docketError || !docketData) {

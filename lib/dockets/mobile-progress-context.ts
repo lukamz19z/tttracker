@@ -6,8 +6,8 @@ export async function mobileProgressContext(service: SupabaseClient, projectId: 
   const dockets: TowerProgressDocket[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await service.from("tower_daily_dockets")
-      .select("id,tower_id,docket_date,approval_status,progress_model,assembly_percent,erection_percent")
-      .eq("project_id", projectId).order("id").range(offset, offset + 999);
+      .select("id,tower_id,docket_date,approval_status,deleted_at,progress_model,assembly_percent,erection_percent")
+      .eq("project_id", projectId).is("deleted_at", null).order("id").range(offset, offset + 999);
     if (error) throw new Error(`Tower progress dockets could not be loaded: ${error.message}`);
     dockets.push(...(data || []));
     if ((data || []).length < 1000) break;

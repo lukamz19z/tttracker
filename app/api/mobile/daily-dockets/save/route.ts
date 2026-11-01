@@ -846,11 +846,12 @@ export async function POST(request: Request) {
         await service
           .from("tower_daily_dockets")
           .select(
-            "id,project_id,tower_id,approval_status,client_rep_name,signed_date",
+            "id,project_id,tower_id,approval_status,client_rep_name,signed_date,deleted_at",
           )
           .eq("id", docketId)
           .eq("project_id", projectId)
           .eq("tower_id", towerId)
+          .is("deleted_at", null)
           .maybeSingle();
 
       if (error) throw new Error(error.message);
@@ -943,6 +944,7 @@ export async function POST(request: Request) {
         .insert({
           ...headerWithMaterialSnapshot,
           approval_status: "draft",
+          created_by_user_id: identity.userId,
         })
         .select("id")
         .single();
@@ -959,7 +961,8 @@ export async function POST(request: Request) {
       const { error } = await service
         .from("tower_daily_dockets")
           .update(headerWithMaterialSnapshot)
-        .eq("id", savedDocketId);
+        .eq("id", savedDocketId)
+        .is("deleted_at", null);
 
       if (error) throw new Error(error.message);
     }

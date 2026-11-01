@@ -64,6 +64,7 @@ export async function POST(_request: Request, context: RouteContext) {
       .from("tower_daily_dockets")
       .select("*")
       .eq("id", docketId)
+      .is("deleted_at", null)
       .single();
 
     if (docketError || !docket) {

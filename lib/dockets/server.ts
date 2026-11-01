@@ -121,6 +121,7 @@ export async function loadDocketPdfBundle(admin: SupabaseClient, docketId: strin
     .from("tower_daily_dockets")
     .select("*")
     .eq("id", docketId)
+    .is("deleted_at", null)
     .single();
   if (docketError || !docket) throw new Error("Daily Docket could not be found.");
 

@@ -132,7 +132,8 @@ export default function TowersPage() {
         supabase
           .from("tower_daily_dockets")
           .select("id, tower_id, docket_date, progress_model, assembly_percent, erection_percent")
-          .eq("project_id", projectId),
+          .eq("project_id", projectId)
+          .is("deleted_at", null),
       ]);
 
       if (cancelled) return;

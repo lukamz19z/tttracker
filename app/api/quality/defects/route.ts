@@ -144,6 +144,7 @@ export async function POST(request: Request) {
         .eq("id", sourceDocketId)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
+        .is("deleted_at", null)
         .single();
 
       if (docketError || !docket) {

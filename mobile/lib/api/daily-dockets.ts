@@ -159,3 +159,12 @@ export async function submitDailyDocketForBc(
     "Daily Docket could not be submitted for BC approval.",
   );
 }
+
+export async function runDailyDocketLifecycleAction(docketId: string, action: "retract" | "delete") {
+  const response = await apiFetch(`/api/daily-dockets/${encodeURIComponent(clean(docketId))}/lifecycle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  return readJson<{ success: boolean; result?: { status: string } }>(response, "Daily Docket action failed.");
+}

@@ -664,7 +664,8 @@ export default function HomeScreen() {
           .select(
             "id,tower_id,project_id,docket_date,assembly_percent,erection_percent",
           )
-          .eq("project_id", projectId);
+          .eq("project_id", projectId)
+          .is("deleted_at", null);
 
         if (!docketResult.error) {
           dockets = (docketResult.data ?? []) as DocketRow[];

@@ -1821,6 +1821,7 @@ export default function DailyDocketForm({
           .from("tower_daily_dockets")
           .select("approval_status,material_issue_snapshot")
           .eq("id", docketId)
+          .is("deleted_at", null)
           .maybeSingle();
         if (!snapshotResult.error && snapshotResult.data && Array.isArray(snapshotResult.data.material_issue_snapshot)) {
           const historicalSnapshot = selectDocketMaterialSnapshot<MissingMaterialIssue>(snapshotResult.data.approval_status, snapshotResult.data.material_issue_snapshot, []);
@@ -2472,6 +2473,7 @@ export default function DailyDocketForm({
         .from("tower_daily_dockets")
         .select("*")
         .eq("id", docketId)
+        .is("deleted_at", null)
         .single();
 
       if (!data) return;
@@ -4192,7 +4194,7 @@ export default function DailyDocketForm({
         const docketIds = [...new Set(savedRows.map((row) => row.docket_id))];
         if (docketIds.length) {
           const dockets = await supabase.from("tower_daily_dockets")
-            .select("id, docket_date").in("id", docketIds);
+            .select("id, docket_date").in("id", docketIds).is("deleted_at", null);
           if (dockets.error) throw dockets.error;
           const dates = new Map((dockets.data || []).map((row) => [row.id, row.docket_date || ""]));
           savedRows.sort((a, b) => toStringValue(dates.get(b.docket_id))
@@ -6180,6 +6182,7 @@ const deleteRes = await supabase
       .insert({
         project_id: projectId,
         tower_id: towerId,
+        created_by_user_id: currentUserIdentity?.userId || null,
         ...docketHeader,
       })
       .select()
@@ -6246,8 +6249,9 @@ const deleteRes = await supabase
 
     const { data: existing, error: existingError } = await supabase
       .from("tower_daily_dockets")
-      .select("id, client_rep_name, signed_date, approval_status, progress_model")
+      .select("id, client_rep_name, signed_date, approval_status, progress_model, deleted_at")
       .eq("id", docketId)
+      .is("deleted_at", null)
       .single();
 
     if (existingError || !existing) {
@@ -6267,7 +6271,8 @@ const deleteRes = await supabase
     const updateRes = await supabase
       .from("tower_daily_dockets")
       .update(docketHeader)
-      .eq("id", docketId);
+      .eq("id", docketId)
+      .is("deleted_at", null);
 
     if (updateRes.error) {
       throw new Error(
@@ -6633,6 +6638,7 @@ const deleteRes = await supabase
         .from("tower_daily_dockets")
         .select("*")
         .eq("tower_id", towerId)
+        .is("deleted_at", null)
         .order("docket_date", { ascending: false })
         .limit(1)
         .single();

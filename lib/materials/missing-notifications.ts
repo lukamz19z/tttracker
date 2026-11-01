@@ -5,6 +5,7 @@ import { renderMaterialNotificationEmail } from "@/lib/email/material-notificati
 import { buildMaterialIssueRoute, buildMaterialIssueUrl } from "@/lib/materials/notification-links";
 import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
 import { resolveUserDisplayName } from "@/lib/materials/project-users";
+import { mergeExplicitMaterialRecipientChannels } from "@/lib/materials/recipient-channels";
 
 export type MissingMaterialNotificationKind = "raised" | "partial_receipt" | "full_receipt" | "resolved" | "assignment" | "update" | "cancelled" | "excess_raised" | "excess_partial_collection" | "excess_resolved" | "transfer";
 type Rule = { user_id:string;notify_raised:boolean;notify_urgent:boolean;notify_partial_receipt:boolean;notify_full_receipt:boolean;notify_resolved:boolean;notify_assignment:boolean;notify_update?:boolean;notify_cancel?:boolean;receives_in_app:boolean;receives_push:boolean;receives_email:boolean;active?:boolean };
@@ -29,8 +30,10 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   const preferences=new Map(rules.map(rule=>[rule.user_id,{inApp:rule.receives_in_app,push:rule.receives_push,email:rule.receives_email}]));
   for(const rule of rules){if(rule.active!==true||(!applies(rule,kind)&&!((kind==="raised"||kind==="excess_raised")&&["urgent","critical"].includes(clean(event.urgency).toLowerCase())&&rule.notify_urgent)))continue;configuredRecipients.add(rule.user_id);channels.set(rule.user_id,preferences.get(rule.user_id)!);}
   const directAssignee=kind==="assignment"?args.assignedToUserId:event.assigned_to_user_id;
-  if(directAssignee){const configured=channels.get(directAssignee)||preferences.get(directAssignee);channels.set(directAssignee,{inApp:configured?.inApp??true,push:configured?.push??true,email:configured?.email??false});}
-  for(const id of Array.isArray(event.notify_user_ids)?event.notify_user_ids:[])if(clean(id)){const configured=channels.get(clean(id))||preferences.get(clean(id));channels.set(clean(id),{inApp:configured?.inApp??true,push:configured?.push??true,email:configured?.email??false});}
+  // Direct assignment and issue-specific selections are explicit deliveries,
+  // independent of automatic project subscriptions. The Map deduplicates them
+  // against each other and any configured automatic event subscription.
+  mergeExplicitMaterialRecipientChannels(channels, [directAssignee, ...(Array.isArray(event.notify_user_ids) ? event.notify_user_ids : [])]);
   if(args.actorUserId&&!configuredRecipients.has(args.actorUserId))channels.delete(args.actorUserId);if(!channels.size){console.info("TTTracker Missing Materials notification dispatch",{kind,sourceEventId,recipients:0,reason:"no eligible recipients"});return {recipients:0,inApp:0,push:0,email:0};}
   const notificationType=eventType(kind,args.actionId);
   const actorLabel=await resolveUserDisplayName(service,args.actorUserId);

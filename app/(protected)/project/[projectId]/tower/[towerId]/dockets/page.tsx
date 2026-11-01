@@ -441,7 +441,8 @@ export default function TowerDocketsPage() {
         supabase
           .from("tower_daily_dockets")
           .select("id")
-          .eq("tower_id", towerId),
+          .eq("tower_id", towerId)
+          .is("deleted_at", null),
         supabase
           .from("tower_docket_progress")
           .select("docket_id")
@@ -500,12 +501,14 @@ export default function TowerDocketsPage() {
         .from("tower_daily_dockets")
         .select("*")
         .in("id", docketIds)
+        .is("deleted_at", null)
         .order("docket_date", { ascending: false });
 
       if (docketError) throw docketError;
 
       const loadedDockets = (docketData || []) as DocketRecord[];
       setDockets(loadedDockets);
+      const activeDocketIds = loadedDockets.map((row) => row.id);
 
       const [
         { data: labourData },
@@ -520,15 +523,15 @@ export default function TowerDocketsPage() {
           .select(
             "docket_id,worker_name,total_hours,production_hours,prestart_minutes,lunch_minutes,travel_in_minutes,travel_out_minutes,mobilisation_hours,delay_hours",
           )
-          .in("docket_id", docketIds),
+        .in("docket_id", activeDocketIds),
         supabase
           .from("tower_docket_delays")
           .select("docket_id,delay_type,delay_hours,applies_to,worker_names")
-          .in("docket_id", docketIds),
+          .in("docket_id", activeDocketIds),
         supabase
           .from("tower_docket_plant")
           .select("docket_id,total_hours,plant_name,plant_type,asset_number")
-          .in("docket_id", docketIds),
+          .in("docket_id", activeDocketIds),
         supabase
           .from("tower_material_events")
           .select(
@@ -556,20 +559,20 @@ export default function TowerDocketsPage() {
               )
             `,
           )
-          .in("docket_id", docketIds)
+          .in("docket_id", activeDocketIds)
           .order("created_at", { ascending: true }),
         supabase
           .from("tower_docket_progress")
           .select(
             "docket_id,tower_id,progress_model,section_code,section_label,assembled_qty,erected_qty,assembly_today,assembly_overall,erection_today,erection_overall,assembly_weight,erection_weight",
           )
-          .in("docket_id", docketIds),
+          .in("docket_id", activeDocketIds),
         supabase
           .from("tower_docket_hour_allocations")
           .select(
             "docket_id,target_tower_id,allocation_type,activity,hours,worker_names",
           )
-          .in("docket_id", docketIds),
+          .in("docket_id", activeDocketIds),
       ]);
 
       setLabourRows((labourData || []) as LabourRow[]);
@@ -633,15 +636,23 @@ export default function TowerDocketsPage() {
   }, [fetchData]);
 
   async function recalcTowerProgressAndStatus() {
+    const { data: activeDockets, error: activeError } = await supabase
+      .from("tower_daily_dockets")
+      .select("id")
+      .eq("project_id", projectId)
+      .is("deleted_at", null);
+    if (activeError) throw new Error("Docket lifecycle changed, but active Daily Dockets could not be loaded.");
+    const activeIds = (activeDockets || []).map((row) => row.id);
     const { data: rows, error } = await supabase
       .from("tower_docket_progress")
       .select(
         "docket_id,tower_id,progress_model,section_code,section_label,assembled_qty,erected_qty,assembly_today,assembly_overall,erection_today,erection_overall,assembly_weight,erection_weight",
       )
-      .eq("tower_id", towerId);
+      .eq("tower_id", towerId)
+      .in("docket_id", activeIds.length ? activeIds : ["00000000-0000-0000-0000-000000000000"]);
 
     if (error) {
-      throw new Error("Docket deleted, but tower progress failed to recalculate.");
+      throw new Error("Daily Docket was removed from active records, but tower progress failed to recalculate.");
     }
 
     const grouped = new Map<string, ProgressRecord[]>();
@@ -667,7 +678,7 @@ export default function TowerDocketsPage() {
       .eq("id", towerId);
 
     if (updateError) {
-      throw new Error("Docket deleted, but tower status failed to update.");
+      throw new Error("Daily Docket was removed from active records, but tower status failed to update.");
     }
   }
 
@@ -932,31 +943,15 @@ export default function TowerDocketsPage() {
       alert("Submitted, client-pending and final Daily Dockets cannot be deleted from the normal register.");
       return;
     }
-    const confirmed = window.confirm(
-      "Delete this Daily Docket? This will permanently remove the docket and its linked records.",
-    );
+    const confirmed = window.confirm("Delete this Daily Docket? This will remove it from active project records.");
     if (!confirmed) return;
 
     setDeletingDocketId(id);
 
     try {
-      const [labourRes, delayRes, plantRes, progressRes] = await Promise.all([
-        supabase.from("tower_docket_labour").delete().eq("docket_id", id),
-        supabase.from("tower_docket_delays").delete().eq("docket_id", id),
-        supabase.from("tower_docket_plant").delete().eq("docket_id", id),
-        supabase.from("tower_docket_progress").delete().eq("docket_id", id),
-      ]);
-
-      const childError =
-        labourRes.error || delayRes.error || plantRes.error || progressRes.error;
-
-      if (childError) {
-        throw new Error(childError.message || "Failed to delete one or more docket detail rows.");
-      }
-
-      const { error } = await supabase.from("tower_daily_dockets").delete().eq("id", id);
-
-      if (error) throw new Error(error.message || "Failed to delete docket.");
+      const response = await fetch(`/api/daily-dockets/${id}/lifecycle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete" }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Failed to delete docket.");
 
       await recalcTowerProgressAndStatus();
       await fetchData();
@@ -966,6 +961,21 @@ export default function TowerDocketsPage() {
       alert(error instanceof Error ? error.message : "Failed to delete docket.");
     } finally {
       setDeletingDocketId(null);
+    }
+  }
+
+  async function retractDocket(id: string) {
+    if (!window.confirm("Retract this submitted Daily Docket for editing?")) return;
+    setWorkflowBusyId(id);
+    try {
+      const response = await fetch(`/api/daily-dockets/${id}/lifecycle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "retract" }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not retract docket.");
+      await fetchData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Could not retract docket.");
+    } finally {
+      setWorkflowBusyId(null);
     }
   }
 
@@ -1410,6 +1420,10 @@ export default function TowerDocketsPage() {
                             <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void submitForBcApproval(docket.id)} className="bg-indigo-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">
                               {workflowBusyId===docket.id?"Submitting…":"Submit for Approval"}
                             </button>
+                          )}
+
+                          {["submitted_bc", "client_pending"].includes(status) && (
+                            <button type="button" disabled={workflowBusyId===docket.id} onClick={()=>void retractDocket(docket.id)} className="bg-amber-600 text-white px-4 py-3 rounded-xl text-sm font-semibold disabled:opacity-60">{workflowBusyId===docket.id?"Retracting…":"Retract"}</button>
                           )}
 
                           {status === "submitted_bc" && canReviewBc && (

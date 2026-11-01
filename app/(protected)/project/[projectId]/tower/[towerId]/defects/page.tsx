@@ -246,6 +246,7 @@ export default function TowerDefectsPage() {
         .from("tower_daily_dockets")
         .select("docket_date")
         .eq("tower_id", towerId)
+        .is("deleted_at", null)
         .order("docket_date", { ascending: false })
         .limit(1),
       supabase
