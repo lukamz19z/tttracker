@@ -36,6 +36,7 @@ import {
 import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 import { MissingMaterialCanonicalPanel } from "@/components/materials/MissingMaterialCanonicalPanel";
+import { ReportMissingMaterialForm } from "@/components/materials/ReportMissingMaterialForm";
 
 
 type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue" | "transferred";
@@ -3949,6 +3950,7 @@ function IssuesWorkspace({
   const [filter, setFilter] = useState<IssueFilter>("all");
   const [query, setQuery] = useState("");
   const [expandedIssue, setExpandedIssue] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const missingIssues = buildMissingIssues(data);
   const open = missingIssues.filter((row) => row.status === "open");
@@ -4001,6 +4003,8 @@ function IssuesWorkspace({
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end"><button type="button" onClick={()=>setReportOpen(true)} className="min-h-10 rounded-xl bg-slate-950 px-4 text-xs font-black text-white">+ Report Missing Material</button></div>
+      {reportOpen?<ReportMissingMaterialForm projectId={projectId} towerId={towerId} bundles={data.bundles} members={data.members} bolts={data.bolts} onDone={()=>{setReportOpen(false);void data.refresh();}}/>:null}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
         <IssueMetric label="Open" value={open.length} tone="red" />
         <IssueMetric label="Part Delivered" value={partial.length} tone="amber" />

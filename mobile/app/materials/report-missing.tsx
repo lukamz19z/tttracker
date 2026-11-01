@@ -5,22 +5,28 @@ import { loadMaterialProjectUsers, type MaterialProjectUser } from "@/lib/api/ma
 import { normalizeMissingMaterialType } from "@/lib/materials/canonical-material-type";
 import { useLocalSearchParams, router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { ChevronDown, Save } from "lucide-react-native";
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ChevronDown, ChevronLeft, ChevronRight, Save } from "lucide-react-native";
 
 const clean=(value:unknown)=>String(value??"").trim();
-function dateDb(value:string){const match=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());if(!match)return null;const [,day,month,year]=match;const date=new Date(Date.UTC(Number(year),Number(month)-1,Number(day)));return date.getUTCDate()===Number(day)&&date.getUTCMonth()+1===Number(month)?`${year}-${month}-${day}`:null;}
+type Kind="bundle"|"member"|"bolt"|"j_bolt"|"nut"|"washer"|"packer"|"mesh"|"grid_mesh"|"plate"|"other";
+const TYPES:{id:Kind;label:string}[]=[{id:"bundle",label:"Bundle"},{id:"member",label:"Member"},{id:"bolt",label:"Bolt"},{id:"j_bolt",label:"J-Bolt"},{id:"nut",label:"Nut"},{id:"washer",label:"Washer"},{id:"packer",label:"Packer"},{id:"mesh",label:"Mesh"},{id:"grid_mesh",label:"Grid Mesh"},{id:"plate",label:"Plate"},{id:"other",label:"Other"}];
+const dateDisplay=(date:Date)=>`${String(date.getDate()).padStart(2,"0")}/${String(date.getMonth()+1).padStart(2,"0")}/${date.getFullYear()}`;
+const dateDb=(date:Date)=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
 function mutationId(){return `material-missing-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;}
+function dateFromDb(value:string){const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(value);return match?new Date(Number(match[1]),Number(match[2])-1,Number(match[3])):new Date();}
 
 export default function ReportMissingMaterialScreen(){
   const {data,towerName,reportMissingMaterial,online}=useMaterials();
   const params=useLocalSearchParams<{towerId?:string}>();
   const [towerId,setTowerId]=useState(clean(params.towerId));
+  const [kind,setKind]=useState<Kind>("bundle");
+  const [sourceMode,setSourceMode]=useState<"existing"|"manual">("existing");
   const [itemId,setItemId]=useState("");
   const [itemLabel,setItemLabel]=useState("");
   const [description,setDescription]=useState("");
-  const [category,setCategory]=useState("Other");
   const [specification,setSpecification]=useState("");
+  const [category,setCategory]=useState("Bundle");
   const [quantity,setQuantity]=useState("1");
   const [unit,setUnit]=useState("ea");
   const [segment,setSegment]=useState("");
@@ -30,64 +36,120 @@ export default function ReportMissingMaterialScreen(){
   const [requiredBy,setRequiredBy]=useState("");
   const [notes,setNotes]=useState("");
   const [towerOpen,setTowerOpen]=useState(false);
+  const [typeOpen,setTypeOpen]=useState(false);
   const [itemOpen,setItemOpen]=useState(false);
   const [urgencyOpen,setUrgencyOpen]=useState(false);
   const [assigneeOpen,setAssigneeOpen]=useState(false);
   const [notifyOpen,setNotifyOpen]=useState(false);
+  const [dateOpen,setDateOpen]=useState(false);
+  const [calendarMonth,setCalendarMonth]=useState(()=>new Date());
   const [projectUsers,setProjectUsers]=useState<MaterialProjectUser[]>([]);
   const [assignedToUserId,setAssignedToUserId]=useState("");
   const [notifyUserIds,setNotifyUserIds]=useState<string[]>([]);
   const [saving,setSaving]=useState(false);
   useEffect(()=>{if(data?.projectId&&online)void loadMaterialProjectUsers(data.projectId).then(setProjectUsers).catch(()=>setProjectUsers([]));},[data?.projectId,online]);
+
   const towers=data?.towers||[];
   const towerOptions=towers.map(row=>({id:clean(row.id),label:clean(row.name)||clean(row.line)||"Tower"}));
+  const segments=useMemo(()=>[...new Set([
+    ...(data?.bundles||[]).filter(row=>!towerId||row.tower_id===towerId).map(row=>clean(row.section)),
+    ...(data?.members||[]).filter(row=>!towerId||row.tower_id===towerId).flatMap(row=>[clean(row.tower_segment),clean(row.section)]),
+    ...(data?.bolts||[]).filter(row=>!towerId||row.tower_id===towerId).map(row=>clean(row.tower_segment)),
+  ].filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[data?.bolts,data?.bundles,data?.members,towerId]);
+  const [segmentOpen,setSegmentOpen]=useState(false);
   const itemOptions=useMemo<QualitySelectorOption[]>(()=>{
     const rows:QualitySelectorOption[]=[];
-    for(const row of (data?.bundles||[]).filter(item=>!towerId||item.tower_id===towerId)) rows.push({id:`bundle:${clean(row.id)}`,label:`Bundle ${clean(row.bundle_no)}`,subtitle:clean(row.section)});
-    for(const row of (data?.members||[]).filter(item=>!towerId||item.tower_id===towerId)) rows.push({id:`member:${clean(row.id)}`,label:clean(row.mark_no)||"Member",subtitle:[clean(row.tower_segment||row.section),clean(row.drawing_number)].filter(Boolean).join(" · ")});
-    for(const row of (data?.bolts||[]).filter(item=>!towerId||item.tower_id===towerId)) {
-      const packer=clean(row.item_type)==="packer";
-      const label=packer?`${[clean(row.bolt_diameter),clean(row.packer_no)].filter(Boolean).join(" mm ")} Packer${row.packer_mark?` · ${clean(row.packer_mark)}`:""}`:[clean(row.bolt_diameter),clean(row.length)].filter(Boolean).join(" × ")||"Bolt";
-      rows.push({id:`${packer?"packer":"bolt"}:${clean(row.id)}`,label,subtitle:[clean(row.tower_segment),clean(row.drawing_number),clean(row.dn_sn)].filter(Boolean).join(" · ")});
+    if(sourceMode!=="existing")return rows;
+    if(kind==="bundle")for(const row of (data?.bundles||[]).filter(item=>!towerId||item.tower_id===towerId))rows.push({id:`bundle:${clean(row.id)}`,label:`Bundle ${clean(row.bundle_no)}`,subtitle:clean(row.section)});
+    if(kind==="member")for(const row of (data?.members||[]).filter(item=>!towerId||item.tower_id===towerId))rows.push({id:`member:${clean(row.id)}`,label:clean(row.mark_no)||"Member",subtitle:[clean(row.tower_segment||row.section),clean(row.drawing_number),clean(row.bundle_reference)].filter(Boolean).join(" · ")});
+    if(["bolt","j_bolt","nut","washer","packer","plate"].includes(kind))for(const row of (data?.bolts||[]).filter(item=>!towerId||item.tower_id===towerId)){
+      const type=clean(row.item_type).toLowerCase(),boltType=clean(row.bolt_type).toLowerCase();
+      if(kind==="packer"&&type!=="packer")continue;
+      if(kind!=="packer"&&type==="packer")continue;
+      if(kind==="j_bolt"&&!/j.?bolt|anchor/.test(`${type} ${boltType}`))continue;
+      if(kind==="bolt"&&type!=="bolt")continue;
+      if(kind==="nut"&&type!=="nut")continue;
+      if(kind==="washer"&&type!=="washer")continue;
+      if(kind==="plate"&&!/plate/.test(type))continue;
+      const bolt=[clean(row.bolt_diameter),clean(row.length)].filter(Boolean).join(" × ");
+      const packer=[clean(row.bolt_diameter),clean(row.packer_no)].filter(Boolean).join(" mm ");
+      const label=kind==="packer"?`${packer||clean(row.packer_mark)||"Packer"} Packer${row.packer_mark?` · ${clean(row.packer_mark)}`:""}`:[clean(row.item_type),kind==="j_bolt"?clean(row.bolt_type):"",bolt,clean(row.dn_sn)].filter(Boolean).join(" · ")||"Material";
+      rows.push({id:`${kind==="packer"?"packer":"bolt"}:${clean(row.id)}`,label,subtitle:[clean(row.tower_segment),clean(row.drawing_number),clean(row.dn_sn)].filter(Boolean).join(" · ")});
     }
     return rows;
-  },[data?.bolts,data?.bundles,data?.members,towerId]);
+  },[data?.bolts,data?.bundles,data?.members,kind,sourceMode,towerId]);
+  const selectedSummary=useMemo(()=>{
+    if(!itemId)return null;
+    const [table,id]=itemId.split(":",2);
+    const bundle=data?.bundles.find(row=>clean(row.id)===id);
+    const selectedMember=data?.members.find(row=>clean(row.id)===id);
+    const bolt=data?.bolts.find(row=>clean(row.id)===id);
+    const segmentsForItem=[clean(bundle?.section),clean(selectedMember?.tower_segment||selectedMember?.section),clean(bolt?.tower_segment)].filter(Boolean);
+    return {segments:[...new Set(segmentsForItem)],drawing:clean(selectedMember?.drawing_number||bolt?.drawing_number),member:clean(selectedMember?.mark_no),bundle:clean(selectedMember?.bundle_reference),table};
+  },[data?.bolts,data?.bundles,data?.members,itemId]);
+
+  function selectKind(next:Kind){setKind(next);setCategory(TYPES.find(type=>type.id===next)?.label||"Other");setItemId("");setItemLabel("");setDescription("");setSpecification("");setSegment("");setMember("");setDrawing("");setUnit("ea");setQuantity("1");}
+  function selectExisting(row:QualitySelectorOption){
+    const [table,id]=row.id.split(":",2);const bundle=data?.bundles.find(item=>clean(item.id)===id);const selectedMember=data?.members.find(item=>clean(item.id)===id);const bolt=data?.bolts.find(item=>clean(item.id)===id);
+    setItemId(row.id);setItemLabel(row.label);setDescription(row.label);setCategory(TYPES.find(type=>type.id===kind)?.label||"Other");
+    const spec=kind==="packer"?[clean(bolt?.bolt_diameter),clean(bolt?.packer_no)].filter(Boolean).join(" mm "):kind==="member"?[clean(selectedMember?.mark_no),clean(selectedMember?.pn_final)].filter(Boolean).join(" · "):kind==="bundle"?"":[clean(bolt?.bolt_diameter),clean(bolt?.length)].filter(Boolean).join(" × ");
+    const knownSegments=[...new Set([clean(bundle?.section),clean(selectedMember?.tower_segment||selectedMember?.section),clean(bolt?.tower_segment)].filter(Boolean))];
+    setSpecification(spec);setSegment(knownSegments.length===1?knownSegments[0]:"");setDrawing(clean(selectedMember?.drawing_number||bolt?.drawing_number));setMember(clean(selectedMember?.mark_no));setSourceMode("existing");
+    if(table==="bundle")setQuantity("1");
+  }
   async function submit(){
-    if(!towerId||!description.trim()||Number(quantity)<=0){Alert.alert("Item details required","Choose a tower, describe the material and enter a positive quantity.");return;}
-    const due=requiredBy.trim()?dateDb(requiredBy):null;
-    if(requiredBy.trim()&&!due){Alert.alert("Check Required By","Enter a valid date as DD/MM/YYYY.");return;}
+    const finalDescription=sourceMode==="existing"?itemLabel:description.trim()||category;
+    if(!towerId||!finalDescription||Number(quantity)<=0){Alert.alert("Item details required","Choose a tower, material and positive quantity.");return;}
+    if(sourceMode==="existing"&&!itemId){Alert.alert("Choose a material","Select an existing register item or switch to Manual.");return;}
     setSaving(true);
     try{
-      const [sourceTable,sourceRecordId]=itemId?itemId.split(":",2):["",""];
+      const [sourceTable,sourceRecordId]=sourceMode==="existing"&&itemId?itemId.split(":",2):["",""];
       const selectedBolt=data?.bolts.find(item=>clean(item.id)===sourceRecordId);
-      const selectedMember=data?.members.find(item=>clean(item.id)===sourceRecordId);
-      const sourceTableName=sourceTable?`tower_${sourceTable==='member'?'material_members':sourceTable==='bolt'||sourceTable==='packer'?'material_bolts':'required_bundles'}`:"";
-      const materialType=normalizeMissingMaterialType({sourceTable:sourceTableName,sourceRecordId,linkedType:sourceTable==="member"?"steel_member":selectedBolt?.item_type||"bolt",category});
-      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:itemLabel||description.trim(),description:description.trim(),quantity:Number(quantity),unit:unit.trim()||"ea",category:category.trim()||"Other",specification:specification.trim()||undefined,sourceTable:sourceTableName||undefined,sourceRecordId:sourceRecordId||undefined,materialType,boltSize:sourceTable==="bolt"?itemLabel:undefined,segment:segment.trim()||undefined,memberNumber:member?.trim()||selectedMember?.mark_no||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:due,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds});
-      Alert.alert(online?"Missing material reported":"Saved for sync",online?"It is now linked to the tower and will appear in Materials and the next Daily Docket.":"The report is safely queued and will sync when connected.");
-      router.back();
-    }catch(error){Alert.alert("Could not report material",error instanceof Error?error.message:"Please retry.");}
-    finally{setSaving(false);}
+      const sourceTableName=sourceTable?`tower_${sourceTable==="member"?"material_members":sourceTable==="bolt"||sourceTable==="packer"?"material_bolts":"required_bundles"}`:undefined;
+      const materialType=normalizeMissingMaterialType({sourceTable:sourceTableName,sourceRecordId,linkedType:kind==="member"?"steel_member":kind==="packer"?"packer_spacer":kind==="j_bolt"?"bolt":kind==="plate"?"flat_plate":selectedBolt?.item_type||kind,category});
+      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:sourceMode==="existing"?itemLabel:finalDescription,description:finalDescription,quantity:Number(quantity),unit:unit.trim()||"ea",category:category.trim()||"Other",specification:specification.trim()||undefined,sourceTable:sourceTableName,sourceRecordId:sourceRecordId||undefined,materialType,boltSize:kind==="bolt"||kind==="j_bolt"?specification:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:requiredBy||null,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds});
+      Alert.alert(online?"Missing material reported":"Saved for sync",online?"It is now linked to the tower and will appear in Materials and the next Daily Docket.":"The report is safely queued and will sync when connected.");router.back();
+    }catch(error){Alert.alert("Could not report material",error instanceof Error?error.message:"Please retry.");}finally{setSaving(false);}
   }
-  return <MaterialsShell title="Report Missing Material" subtitle="Report against the tower’s existing material history.">
-    <Text style={styles.label}>Tower *</Text><Pressable style={styles.selector} onPress={()=>setTowerOpen(true)}><Text style={styles.value}>{towerName(towerId)||"Choose tower"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
-    <Text style={styles.label}>Find existing material</Text><Pressable style={styles.selector} onPress={()=>setItemOpen(true)}><Text style={styles.value}>{itemLabel||"Search bundle, member or bolt"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
-    <Text style={styles.label}>Or add other material</Text><TextInput value={description} onChangeText={setDescription} placeholder="e.g. Grid mesh – Bottom Crossarm" style={styles.input}/>
-    <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Material Category</Text><TextInput value={category} onChangeText={setCategory} placeholder="e.g. Grid Mesh, Special Bracket" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Quantity</Text><TextInput value={quantity} onChangeText={setQuantity} keyboardType="decimal-pad" style={styles.input}/></View></View>
-    <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Specification</Text><TextInput value={specification} onChangeText={setSpecification} placeholder="Size / spec" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Unit</Text><TextInput value={unit} onChangeText={setUnit} style={styles.input}/></View></View>
-    <Text style={styles.label}>Segment / location</Text><TextInput value={segment} onChangeText={setSegment} placeholder="Optional" style={styles.input}/>
-    <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Member</Text><TextInput value={member} onChangeText={setMember} placeholder="Optional" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Drawing</Text><TextInput value={drawing} onChangeText={setDrawing} placeholder="Optional" style={styles.input}/></View></View>
-    <Text style={styles.label}>Urgency</Text><Pressable style={styles.selector} onPress={()=>setUrgencyOpen(true)}><Text style={styles.value}>{urgency}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
-    <Text style={styles.label}>Required By · DD/MM/YYYY</Text><TextInput value={requiredBy} onChangeText={setRequiredBy} placeholder="Optional" style={styles.input}/>
-    {projectUsers.length>0?<><Text style={styles.label}>Assigned To · Optional</Text><Pressable style={styles.selector} onPress={()=>setAssigneeOpen(true)}><Text style={styles.value}>{projectUsers.find(user=>user.id===assignedToUserId)?.name||"Not assigned"}</Text><ChevronDown size={18} color="#64748b"/></Pressable><Text style={styles.label}>Also Notify · Optional</Text><Pressable style={styles.selector} onPress={()=>setNotifyOpen(true)}><Text style={styles.value}>{notifyUserIds.map(id=>projectUsers.find(user=>user.id===id)?.name).filter(Boolean).join(", ")||"No additional recipients"}</Text><ChevronDown size={18} color="#64748b"/></Pressable></>:null}
-    <Text style={styles.label}>Notes</Text><TextInput value={notes} onChangeText={setNotes} multiline style={[styles.input,styles.notes]}/>
-    <Pressable disabled={saving} onPress={()=>void submit()} style={styles.save}><Save size={17} color="#fff"/><Text style={styles.saveText}>{saving?"Saving…":online?"Report Missing":"Save Pending Sync"}</Text></Pressable>
-    <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);}}/>
-    <QualitySelector visible={itemOpen} title="Search tower materials" options={itemOptions} onClose={()=>setItemOpen(false)} onSelect={row=>{setItemId(row.id);setItemLabel(row.label);setDescription(row.label);const selectedPacker=row.id.startsWith("packer:");const selectedBolt=data?.bolts.find(item=>clean(item.id)===row.id.split(":")[1]);const selectedMember=data?.members.find(item=>clean(item.id)===row.id.split(":")[1]);setSpecification(selectedPacker?[clean(selectedBolt?.bolt_diameter),clean(selectedBolt?.packer_no)].filter(Boolean).join(" mm "):row.subtitle||"");setSegment(clean(selectedPacker?selectedBolt?.tower_segment:selectedMember?.tower_segment||selectedMember?.section)||segment);setDrawing(clean(selectedPacker?selectedBolt?.drawing_number:selectedMember?.drawing_number)||drawing);setMember(clean(selectedMember?.mark_no)||member);setCategory(row.id.startsWith("member:")?"Steel":selectedPacker?"Packer":row.id.startsWith("bolt:")?"Bolt":"Bundle");}}/>
+  const monthFirst=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1),calendarStart=new Date(monthFirst);calendarStart.setDate(1-monthFirst.getDay());
+  const calendarDays=Array.from({length:42},(_,index)=>{const day=new Date(calendarStart);day.setDate(calendarStart.getDate()+index);return day;});
+  const today=new Date();today.setHours(0,0,0,0);
+  const selectedTypeLabel=TYPES.find(type=>type.id===kind)?.label||"Other";
+  return <MaterialsShell title="Report Missing Material" subtitle="Report the missing item against its tower.">
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+      <Text style={styles.label}>Tower</Text><Pressable style={styles.selector} onPress={()=>setTowerOpen(true)}><Text style={styles.value}>{towerName(towerId)||"Choose tower"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      <Text style={styles.label}>Material Type</Text><Pressable style={styles.selector} onPress={()=>setTypeOpen(true)}><Text style={styles.value}>{selectedTypeLabel}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      <Text style={styles.label}>Source</Text><View style={styles.segmented}><Pressable style={[styles.segmentButton,sourceMode==="existing"&&styles.segmentActive]} onPress={()=>{setSourceMode("existing");setItemId("");setItemLabel("");}}><Text style={[styles.segmentText,sourceMode==="existing"&&styles.segmentTextActive]}>Existing</Text></Pressable><Pressable style={[styles.segmentButton,sourceMode==="manual"&&styles.segmentActive]} onPress={()=>{setSourceMode("manual");setItemId("");setItemLabel("");}}><Text style={[styles.segmentText,sourceMode==="manual"&&styles.segmentTextActive]}>Manual</Text></Pressable></View>
+      {sourceMode==="existing"?<>
+        <Text style={styles.label}>Material</Text><Pressable style={styles.selector} onPress={()=>setItemOpen(true)}><Text style={styles.value}>{itemLabel||`Search ${selectedTypeLabel.toLowerCase()} register`}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+        {itemId?<View style={styles.summary}><Text style={styles.summaryTitle}>{itemLabel}</Text><Text style={styles.summaryText}>{segment||selectedSummary?.segments.join(" · ")||"Location not recorded"}{drawing?` · Drawing ${drawing}`:""}</Text><Text style={styles.summaryText}>{specification?`${specification} · `:""}Unit: {unit}{member?` · Member ${member}`:""}</Text></View>:null}
+        {itemId&&selectedSummary&&selectedSummary.segments.length>1?<><Text style={styles.label}>Select location</Text><Pressable style={styles.selector} onPress={()=>setSegmentOpen(true)}><Text style={styles.value}>{segment||"Choose matching segment"}</Text><ChevronDown size={18} color="#64748b"/></Pressable></>:null}
+      </>:<>
+        {kind!=="other"?<Text style={styles.helper}>Type: {selectedTypeLabel}. Add only the identifying details that are missing from the register.</Text>:<><Text style={styles.label}>Material Description</Text><TextInput value={description} onChangeText={setDescription} placeholder="e.g. Special fabricated item" style={styles.input}/></>}
+        <Text style={styles.label}>Specification</Text><TextInput value={specification} onChangeText={setSpecification} placeholder={kind==="packer"?"e.g. 6 mm":"Size / specification"} style={styles.input}/>
+        <Text style={styles.label}>Tower Segment · Optional</Text>{segments.length?<Pressable style={styles.selector} onPress={()=>setSegmentOpen(true)}><Text style={styles.value}>{segment||"Select segment"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>:<TextInput value={segment} onChangeText={setSegment} placeholder="Other / manual location" style={styles.input}/>}
+        <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Member · Optional</Text><TextInput value={member} onChangeText={setMember} placeholder="Member mark" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Drawing · Optional</Text><TextInput value={drawing} onChangeText={setDrawing} placeholder="Drawing number" style={styles.input}/></View></View>
+        <Text style={styles.label}>Unit</Text><TextInput value={unit} onChangeText={setUnit} placeholder="ea" style={styles.input}/>
+        <Text style={styles.unitSummary}>Unit · Optional: {unit}</Text>
+      </>}
+      <Text style={styles.label}>Quantity Missing</Text><TextInput value={quantity} onChangeText={setQuantity} keyboardType="decimal-pad" style={styles.input}/>
+      {sourceMode==="existing"?<Text style={styles.unitSummary}>Unit: {unit}</Text>:null}
+      <Text style={styles.label}>Urgency</Text><Pressable style={styles.selector} onPress={()=>setUrgencyOpen(true)}><Text style={styles.value}>{urgency}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      <View style={styles.dateLabelRow}><Text style={styles.label}>Required By · Optional</Text>{requiredBy?<Pressable onPress={()=>setRequiredBy("")}><Text style={styles.clear}>Clear</Text></Pressable>:null}</View>
+      <View style={styles.dateShortcuts}><Pressable style={styles.shortcut} onPress={()=>setRequiredBy(dateDb(today))}><Text style={styles.shortcutText}>Today</Text></Pressable><Pressable style={styles.shortcut} onPress={()=>{const tomorrow=new Date(today);tomorrow.setDate(tomorrow.getDate()+1);setRequiredBy(dateDb(tomorrow));}}><Text style={styles.shortcutText}>Tomorrow</Text></Pressable><Pressable style={styles.shortcut} onPress={()=>{setCalendarMonth(requiredBy?dateFromDb(requiredBy):new Date());setDateOpen(true);}}><Text style={styles.shortcutText}>{requiredBy?dateDisplay(dateFromDb(requiredBy)):"Select date"}</Text><ChevronDown size={15} color="#334155"/></Pressable></View>
+      {projectUsers.length>0?<><Text style={styles.label}>Assign To · Optional</Text><Pressable style={styles.selector} onPress={()=>setAssigneeOpen(true)}><Text style={styles.value}>{projectUsers.find(user=>user.id===assignedToUserId)?.name||"Select user"}</Text><ChevronDown size={18} color="#64748b"/></Pressable><Text style={styles.label}>Also Notify · Optional</Text><Pressable style={styles.selector} onPress={()=>setNotifyOpen(true)}><Text style={styles.value}>{notifyUserIds.length?`${notifyUserIds.length} selected · ${notifyUserIds.map(id=>projectUsers.find(user=>user.id===id)?.name).filter(Boolean).join(", ")}`:"Select users"}</Text><ChevronDown size={18} color="#64748b"/></Pressable></>:null}
+      <Text style={styles.label}>Notes · Optional</Text><TextInput value={notes} onChangeText={setNotes} placeholder="Optional" multiline style={[styles.input,styles.notes]}/>
+      <Pressable disabled={saving} onPress={()=>void submit()} style={styles.save}><Save size={17} color="#fff"/><Text style={styles.saveText}>{saving?"Saving…":online?"Report Missing":"Save Pending Sync"}</Text></Pressable>
+    </ScrollView>
+    <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);setItemId("");setItemLabel("");setSegment("");}}/>
+    <QualitySelector visible={typeOpen} title="Material type" options={TYPES.map(type=>({id:type.id,label:type.label}))} onClose={()=>setTypeOpen(false)} onSelect={row=>{selectKind(row.id as Kind);setTypeOpen(false);}}/>
+    <QualitySelector visible={itemOpen} title={`Search ${selectedTypeLabel}`} options={itemOptions} onClose={()=>setItemOpen(false)} onSelect={selectExisting}/>
+    <QualitySelector visible={segmentOpen} title="Select location" options={segments.map(value=>({id:value,label:value}))} onClose={()=>setSegmentOpen(false)} onSelect={row=>setSegment(row.id)}/>
     <QualitySelector visible={urgencyOpen} title="Urgency" options={["Normal","Urgent","Critical"].map(value=>({id:value,label:value}))} onClose={()=>setUrgencyOpen(false)} onSelect={row=>setUrgency(row.id)}/>
     <QualitySelector visible={assigneeOpen} title="Assign to" options={[{id:"",label:"Not assigned"},...projectUsers.map(user=>({id:user.id,label:user.name,subtitle:user.role}))]} onClose={()=>setAssigneeOpen(false)} onSelect={row=>setAssignedToUserId(row.id)}/>
-    <QualitySelector visible={notifyOpen} title="Notify an additional person" options={projectUsers.filter(user=>user.id!==assignedToUserId).map(user=>({id:user.id,label:`${notifyUserIds.includes(user.id)?"✓ ":""}${user.name}`,subtitle:user.role}))} onClose={()=>setNotifyOpen(false)} onSelect={row=>setNotifyUserIds(ids=>ids.includes(row.id)?ids.filter(id=>id!==row.id):[...ids,row.id])}/>
+    <QualitySelector visible={notifyOpen} title="Also notify" options={projectUsers.filter(user=>user.id!==assignedToUserId).map(user=>({id:user.id,label:`${notifyUserIds.includes(user.id)?"✓ ":""}${user.name}`,subtitle:user.role}))} onClose={()=>setNotifyOpen(false)} onSelect={row=>setNotifyUserIds(ids=>ids.includes(row.id)?ids.filter(id=>id!==row.id):[...ids,row.id])}/>
+    <Modal visible={dateOpen} transparent animationType="slide" onRequestClose={()=>setDateOpen(false)}><View style={styles.modalBackdrop}><View style={styles.calendar}><View style={styles.calendarHeader}><Pressable style={styles.calendarNav} onPress={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1))}><ChevronLeft size={22} color="#0f172a"/></Pressable><Text style={styles.calendarTitle}>{calendarMonth.toLocaleDateString("en-AU",{month:"long",year:"numeric"})}</Text><Pressable style={styles.calendarNav} onPress={()=>setCalendarMonth(new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1))}><ChevronRight size={22} color="#0f172a"/></Pressable></View><View style={styles.weekdays}>{["S","M","T","W","T","F","S"].map((label,index)=><Text key={`${label}${index}`} style={styles.weekday}>{label}</Text>)}</View><View style={styles.days}>{calendarDays.map((day,index)=>{const chosen=requiredBy===dateDb(day),outside=day.getMonth()!==calendarMonth.getMonth();return <Pressable key={`${dateDb(day)}-${index}`} style={[styles.day,chosen&&styles.daySelected]} onPress={()=>{setRequiredBy(dateDb(day));setDateOpen(false);}}><Text style={[styles.dayText,outside&&styles.dayOutside,chosen&&styles.dayTextSelected]}>{day.getDate()}</Text></Pressable>;})}</View><Pressable style={styles.calendarCancel} onPress={()=>setDateOpen(false)}><Text style={styles.calendarCancelText}>Cancel</Text></Pressable></View></View></Modal>
   </MaterialsShell>;
 }
 
-const styles=StyleSheet.create({label:{marginTop:3,marginBottom:4,fontSize:10,fontWeight:"900",color:"#64748b",textTransform:"uppercase"},selector:{minHeight:46,borderRadius:12,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",paddingHorizontal:12,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},value:{flex:1,color:"#0f172a",fontSize:13,fontWeight:"800"},input:{minHeight:44,borderRadius:12,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",paddingHorizontal:12,color:"#0f172a"},two:{flexDirection:"row",gap:8},grow:{flex:1,minWidth:0},notes:{minHeight:76,textAlignVertical:"top",paddingTop:10},save:{minHeight:48,borderRadius:13,backgroundColor:"#b45309",alignItems:"center",justifyContent:"center",flexDirection:"row",gap:8},saveText:{color:"#fff",fontWeight:"900"}});
+const styles=StyleSheet.create({content:{gap:5,paddingBottom:22},label:{marginTop:6,marginBottom:2,fontSize:10,fontWeight:"900",color:"#64748b",textTransform:"uppercase"},selector:{minHeight:44,borderRadius:11,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",paddingHorizontal:12,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},value:{flex:1,color:"#0f172a",fontSize:13,fontWeight:"800"},input:{minHeight:43,borderRadius:11,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",paddingHorizontal:12,color:"#0f172a"},two:{flexDirection:"row",gap:8},grow:{flex:1,minWidth:0},segmented:{flexDirection:"row",padding:3,borderRadius:11,backgroundColor:"#e2e8f0",gap:3},segmentButton:{flex:1,minHeight:37,alignItems:"center",justifyContent:"center",borderRadius:9},segmentActive:{backgroundColor:"#fff",elevation:1},segmentText:{color:"#475569",fontSize:13,fontWeight:"800"},segmentTextActive:{color:"#0f172a"},summary:{padding:10,borderRadius:10,backgroundColor:"#f1f5f9",marginTop:3},summaryTitle:{color:"#0f172a",fontSize:13,fontWeight:"900"},summaryText:{color:"#475569",fontSize:11,marginTop:3},helper:{color:"#64748b",fontSize:11,paddingVertical:3},unitSummary:{marginTop:-2,color:"#64748b",fontSize:11},dateLabelRow:{flexDirection:"row",alignItems:"center",justifyContent:"space-between"},clear:{color:"#0369a1",fontWeight:"800",fontSize:12},dateShortcuts:{flexDirection:"row",gap:7},shortcut:{minHeight:38,paddingHorizontal:11,borderRadius:10,borderWidth:1,borderColor:"#cbd5e1",backgroundColor:"#fff",flexDirection:"row",alignItems:"center",justifyContent:"center",gap:3},shortcutText:{color:"#334155",fontWeight:"800",fontSize:12},notes:{minHeight:64,textAlignVertical:"top",paddingTop:9},save:{minHeight:48,borderRadius:13,backgroundColor:"#b45309",alignItems:"center",justifyContent:"center",flexDirection:"row",gap:8,marginTop:8},saveText:{color:"#fff",fontWeight:"900"},modalBackdrop:{flex:1,backgroundColor:"#0007",justifyContent:"flex-end"},calendar:{backgroundColor:"#fff",borderTopLeftRadius:20,borderTopRightRadius:20,padding:18,paddingBottom:28},calendarHeader:{flexDirection:"row",alignItems:"center",justifyContent:"space-between"},calendarNav:{width:42,height:42,alignItems:"center",justifyContent:"center",borderRadius:12,backgroundColor:"#f1f5f9"},calendarTitle:{fontSize:16,fontWeight:"900",color:"#0f172a"},weekdays:{flexDirection:"row",marginTop:12},weekday:{width:"14.285%",textAlign:"center",fontSize:12,fontWeight:"800",color:"#64748b",paddingVertical:7},days:{flexDirection:"row",flexWrap:"wrap"},day:{width:"14.285%",aspectRatio:1,alignItems:"center",justifyContent:"center",borderRadius:20},daySelected:{backgroundColor:"#0369a1"},dayText:{color:"#0f172a",fontWeight:"700"},dayOutside:{color:"#cbd5e1"},dayTextSelected:{color:"#fff"},calendarCancel:{alignItems:"center",padding:12,marginTop:8},calendarCancelText:{color:"#475569",fontWeight:"800"}});
