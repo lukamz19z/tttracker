@@ -10,20 +10,21 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 
 export async function GET(request:Request){
   try{
-    const url=new URL(request.url),projectId=clean(url.searchParams.get("projectId")),issueKey=clean(url.searchParams.get("issueKey"));
-    if(!projectId||!issueKey)return NextResponse.json({error:"Project and issue are required."},{status:400});
+    const url=new URL(request.url),projectId=clean(url.searchParams.get("projectId")),requestedIssueKey=clean(url.searchParams.get("issueKey")),eventId=clean(url.searchParams.get("eventId"));
+    if(!projectId||(!requestedIssueKey&&!eventId))return NextResponse.json({error:"Project and material record are required."},{status:400});
     const {service,user}=await requireQualityUser(request);const [canView,member]=await Promise.all([userHasAccess(service,user.id,"materials.issues.view"),service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",user.id).maybeSingle()]);
     if(!canView&&!member.data)return NextResponse.json({error:"You do not have access to this project."},{status:403});
+    let issueKey=requestedIssueKey;
+    if(!issueKey&&eventId){const {data:source,error:sourceError}=await service.from("tower_material_events").select("id,project_id,event_type,tower_material_event_items(issue_key,source_issue_key)").eq("id",eventId).eq("project_id",projectId).maybeSingle();if(sourceError)throw new Error(sourceError.message);const sourceItem=source?.tower_material_event_items?.[0];issueKey=clean(sourceItem?.issue_key||sourceItem?.source_issue_key);}
     const {data:item,error:itemError}=await service.from("tower_material_event_items").select("event_id,issue_key").eq("issue_key",issueKey).maybeSingle();if(itemError)throw new Error(itemError.message);if(!item)return NextResponse.json({error:"Missing material was not found."},{status:404});
     const {data:event,error:eventError}=await service.from("tower_material_events").select("id,project_id,tower_id,issue_status,assigned_to_user_id,notify_user_ids,urgency,required_by,cancelled_at,cancelled_by_user_id,cancellation_reason,tower_material_event_items(*)").eq("id",item.event_id).eq("project_id",projectId).maybeSingle();if(eventError)throw new Error(eventError.message);if(!event)return NextResponse.json({error:"Missing material was not found."},{status:404});
-    const [{data:actions,error:actionsError},{data:files,error:filesError},{data:allReceipts,error:receiptsError}]=await Promise.all([
+    const [{data:actions,error:actionsError},{data:files,error:filesError},{data:receipts,error:receiptsError}]=await Promise.all([
       service.from("tower_material_event_actions").select("id,action_type,body,previous_assignee_id,assigned_to_user_id,created_by_user_id,created_at").eq("material_event_id",item.event_id).order("created_at"),
       service.from("tower_material_receipt_files").select("id,receipt_event_id,file_name,mime_type,file_size_bytes,uploaded_by_user_id,uploaded_at,sharepoint_web_url,storage_bucket,storage_path").eq("missing_event_id",item.event_id).eq("project_id",projectId).order("uploaded_at"),
-      service.from("tower_material_events").select("id,occurred_at,delivery_reference,notes,created_by_user_id,tower_material_event_items(source_issue_key,quantity,unit)").eq("project_id",projectId).eq("tower_id",event.tower_id).eq("event_type","found_received").order("occurred_at"),
+      service.from("tower_material_events").select("id,occurred_at,delivery_reference,notes,created_by_user_id,tower_material_event_items!inner(source_issue_key,quantity,unit)").eq("project_id",projectId).eq("tower_id",event.tower_id).eq("event_type","found_received").eq("tower_material_event_items.source_issue_key",issueKey).order("occurred_at"),
     ]);if(actionsError||filesError||receiptsError)throw new Error(actionsError?.message||filesError?.message||receiptsError?.message);
-    const receipts=(allReceipts||[]).filter(receipt=>(receipt.tower_material_event_items||[]).some(receiptItem=>receiptItem.source_issue_key===issueKey));
     const signed=await Promise.all((files||[]).map(async file=>{if(file.sharepoint_web_url)return {...file,preview_url:file.sharepoint_web_url};const {data,error}=await service.storage.from(file.storage_bucket).createSignedUrl(file.storage_path,300);if(error)throw new Error(error.message);return {...file,preview_url:data.signedUrl};}));
-    return NextResponse.json({event,actions:actions||[],files:signed,receipts});
+    return NextResponse.json({event,issueKey,actions:actions||[],files:signed,receipts:receipts||[]});
   }catch(error){const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status});}
 }
 

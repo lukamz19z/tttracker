@@ -32,6 +32,37 @@ function withQuery(route: string, values: Record<string, unknown>): Href {
 
 export function mobileRouteForNotification(data: Record<string, unknown>): Href | null {
   const actionParams = params(data.action_params ?? data.actionParams);
+  const notificationType = clean(data.type ?? data.event_type ?? data.eventType).toLowerCase();
+  const actionRouteValue = clean(data.action_route ?? data.actionRoute).toLowerCase();
+  const issueKey = clean(
+    data.issueKey ??
+      data.material_issue_key ??
+      actionParams.issueKey ??
+      actionParams.material_issue_key ??
+      actionParams.issue_key,
+  );
+  const materialEventId = clean(
+    data.eventId ??
+      data.material_event_id ??
+      actionParams.eventId ??
+      actionParams.material_event_id,
+  );
+  if (
+    notificationType === "missing_material" ||
+    notificationType.startsWith("material_missing_") ||
+    actionRouteValue === "/materials/missing" ||
+    issueKey ||
+    materialEventId
+  ) {
+    const values: Record<string, unknown> = {
+      material_issue_key: issueKey || undefined,
+      material_event_id: materialEventId || undefined,
+      project_id: data.projectId ?? data.project_id ?? actionParams.projectId ?? actionParams.project_id,
+      tower_id: data.towerId ?? data.tower_id ?? actionParams.towerId ?? actionParams.tower_id,
+      action: data.action ?? actionParams.action,
+    };
+    return withQuery("/materials/missing", values);
+  }
 
   const trainingRecordId = clean(
     actionParams.training_record_id ?? data.training_record_id ?? data.trainingRecordId,

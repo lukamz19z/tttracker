@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
@@ -85,10 +85,10 @@ function itemTitle(item: MaterialItemRow) {
 }
 
 export default function MissingMaterials() {
-  const params = useLocalSearchParams<{ issue_key?: string }>();
+  const params = useLocalSearchParams<{ issue_key?: string; material_issue_key?: string; material_event_id?: string; project_id?: string; tower_id?: string; action?: string; search?: string }>();
   const { data, towerName,recordMissingReceipt,resolveMissingMaterial,refresh,online } = useMaterials();
 
-  const [query, setQuery] = useState(clean(params.issue_key));
+  const [query, setQuery] = useState(clean(params.search));
   const deferredQuery = useDeferredValue(query);
   const [towerId, setTowerId] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -114,9 +114,61 @@ export default function MissingMaterials() {
   const [actionSaving,setActionSaving]=useState(false);
   const [cancelReason,setCancelReason]=useState("");
   const [userPicker,setUserPicker]=useState<"assignment"|"notify"|null>(null);
+  const [deepLinkLoading,setDeepLinkLoading]=useState(false);
+  const deepLinkHandledRef=useRef("");
+  const deepIssueKey=clean(params.material_issue_key||params.issue_key);
+  const deepEventId=clean(params.material_event_id);
+  const deepProjectId=clean(params.project_id||data?.projectId);
+  const deepTowerId=clean(params.tower_id);
+  const deepAction=clean(params.action).toLowerCase();
+  useEffect(()=>{if(deepIssueKey&&query===deepIssueKey)setQuery("");},[deepIssueKey,query]);
 
   function makeClientMutationId(){return `material-action-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;}
-  async function openDetails(row:IndexedIssue){setDetailIssue(row);setDetailLoading(true);setDetailError("");try{if(!data?.projectId)throw new Error("Select a project first.");const [payload,users]=await Promise.all([loadMissingMaterialDetails(data.projectId,row.id),loadMaterialProjectUsers(data.projectId)]);setDetailData(payload);setProjectUsers(users);setSelectedAssignee(clean(payload.event.assigned_to_user_id));setSelectedNotify(Array.isArray(payload.event.notify_user_ids)?payload.event.notify_user_ids.map(clean):[]);}catch(error){setDetailError(error instanceof Error?error.message:"Material details could not be loaded.");}finally{setDetailLoading(false);}}
+  async function openDetails(row:IndexedIssue){setDetailIssue(row);setDetailLoading(true);setDetailError("");try{if(!data?.projectId)throw new Error("Select a project first.");const payload=await loadMissingMaterialDetails(data.projectId,row.id);setDetailData(payload);setSelectedAssignee(clean(payload.event.assigned_to_user_id));setSelectedNotify(Array.isArray(payload.event.notify_user_ids)?payload.event.notify_user_ids.map(clean):[]);}catch(error){setDetailError(error instanceof Error?error.message:"Material details could not be loaded.");}finally{setDetailLoading(false);}}
+  useEffect(()=>{
+    if(!userPicker||!deepProjectId)return;
+    let active=true;
+    void loadMaterialProjectUsers(deepProjectId).then(users=>{if(active)setProjectUsers(users);}).catch(error=>{if(active)setDetailError(error instanceof Error?error.message:"Project users could not be loaded.");});
+    return()=>{active=false;};
+  },[deepProjectId,userPicker]);
+  useEffect(()=>{
+    const targetKey=deepIssueKey||deepEventId;
+    if(!targetKey||!deepProjectId||deepLinkHandledRef.current===targetKey)return;
+    deepLinkHandledRef.current=targetKey;
+    let active=true;
+    setQuery("");
+    setTowerId(deepTowerId);
+    setView(deepAction==="resolved"||deepAction==="cancelled"?"History":deepAction==="partial_receipt"||deepAction==="full_receipt"?"Arrived":"Outstanding");
+    setDeepLinkLoading(true);
+    const started=Date.now();
+    void loadMissingMaterialDetails(deepProjectId,deepIssueKey||undefined,deepEventId||undefined).then(payload=>{
+      if(!active)return;
+      const event=payload.event;
+      const itemRows=Array.isArray(event.tower_material_event_items)?event.tower_material_event_items as MaterialItemRow[]:[];
+      const item=itemRows.find(row=>clean(row.issue_key)===payload.issueKey)||itemRows.find(row=>Boolean(clean(row.issue_key)))||itemRows[0];
+      if(!item)throw new Error("This Missing Material record no longer exists.");
+      const total=Math.max(numberValue(item.quantity),0);
+      const received=(payload.receipts||[]).reduce((sum,receipt)=>{
+        const receiptItem=(receipt.tower_material_event_items as MaterialItemRow[]|undefined)?.[0];
+        return sum+Math.max(numberValue(receiptItem?.quantity),0);
+      },0);
+      const remaining=Math.max(total-received,0);
+      const recordStatus:IndexedIssue["status"]=clean(event.issue_status)==="cancelled"?"cancelled":remaining>0?(received>0?"partially_received":"outstanding"):clean(event.issue_status)==="resolved"?"resolved":"received";
+      setView(recordStatus==="outstanding"||recordStatus==="partially_received"?"Outstanding":recordStatus==="received"?"Arrived":"History");
+      setDetailIssue({event,id:payload.issueKey,towerId:clean(event.tower_id)||deepTowerId,type:"missing",section:clean(item.segment||item.bundle_section)||"General",occurredAt:clean(event.occurred_at),items:[item],originalQty:total,receivedQty:received,remainingQty:remaining,status:recordStatus,search:""});
+      setDetailData(payload);
+      setSelectedAssignee(clean(event.assigned_to_user_id));
+      setSelectedNotify(Array.isArray(event.notify_user_ids)?event.notify_user_ids.map(clean):[]);
+      if(__DEV__)console.debug("Missing Material notification open-to-detail",{durationMs:Date.now()-started,projectId:deepProjectId});
+    }).catch(error=>{
+      if(!active)return;
+      setTowerId(deepTowerId);
+      setTypeFilter("");
+      setQuery("");
+      setDetailError(error instanceof Error?error.message:"Missing Material could not be loaded. Showing the tower register.");
+    }).finally(()=>{if(active)setDeepLinkLoading(false);});
+    return()=>{active=false;};
+  },[deepAction,deepEventId,deepIssueKey,deepProjectId,deepTowerId]);
   async function submitAction(actionType:"update"|"assignment"|"cancel",text=""){if(!detailIssue||!data?.projectId)return;setActionSaving(true);setDetailError("");try{await saveMissingMaterialAction({projectId:data.projectId,towerId:detailIssue.towerId,issueKey:detailIssue.id,clientMutationId:makeClientMutationId(),actionType,text,assignedToUserId:actionType==="assignment"?selectedAssignee||null:undefined,notifyUserIds:selectedNotify});setUpdateText("");setCancelReason("");await refresh();const payload=await loadMissingMaterialDetails(data.projectId,detailIssue.id);setDetailData(payload);if(actionType==="cancel")setDetailIssue({...detailIssue,status:"cancelled"});setSelectedAssignee(clean(payload.event.assigned_to_user_id));}catch(error){setDetailError(error instanceof Error?error.message:"Material update could not be saved.");}finally{setActionSaving(false);}}
 
   async function chooseReceiptPhotos(camera:boolean){
@@ -266,13 +318,24 @@ export default function MissingMaterials() {
     return { events: rows.length, items, quantity };
   }, [rows]);
 
+  const issueCards = rows.slice(0, visibleCount).map((row) => {
+    const itemSummary = row.items.slice(0, 4).map((item) => `${itemTitle(item)} × ${numberValue(item.quantity) || 1}`).join(", ");
+    const extraItems = Math.max(row.items.length - 4, 0);
+    const meta = [itemSummary ? `${itemSummary}${extraItems ? ` +${extraItems} more` : ""}` : clean(row.event.notes) || "No item detail", row.occurredAt ? formatDate(row.occurredAt) : ""].filter(Boolean).join(" · ");
+    return <View key={row.id}><MaterialCard title={`${itemSummary || eventLabel(row.type)} · ${row.status === "cancelled" ? "Cancelled" : `${row.remainingQty} Outstanding`}`} subtitle={`${towerName(row.towerId) || "Tower"} · ${row.section}`} meta={`${row.originalQty} missing · ${row.receivedQty} received · ${meta}`} />{row.remainingQty > 0 && row.status !== "cancelled" ? <Pressable style={styles.receiveButton} onPress={() => { const existing = receiptMutationIds[row.id]; const mutationId = existing || makeClientMutationId(); if (!existing) setReceiptMutationIds(current => ({ ...current, [row.id]: mutationId })); setReceiptMutationId(mutationId); setReceiptSubmitAttempted(false); setReceiveIssue(row); setReceiveQty(String(row.remainingQty)); if (!existing) setReceiptPhotos([]); }}><Text style={styles.receiveButtonText}>Receive</Text></Pressable> : row.status === "resolved" ? <Text style={styles.receivedLabel}>Resolved</Text> : row.status !== "cancelled" && row.remainingQty === 0 ? <Pressable style={styles.resolveButton} onPress={() => Alert.alert("Confirm resolved?", "Confirm this material requirement is satisfied.", [{ text: "Cancel", style: "cancel" }, { text: "Confirm Resolved", onPress: () => void resolveMissingMaterial({ towerId: row.towerId, issueKey: clean(row.items[0]?.issue_key) }).catch(error => Alert.alert("Could not resolve", error instanceof Error ? error.message : "Try again.")) }])}><Text style={styles.resolveText}>Confirm Resolved</Text></Pressable> : null}<Pressable style={styles.detailButton} onPress={() => void openDetails(row)}><Text style={styles.detailButtonText}>Details · History</Text></Pressable></View>;
+  });
+  if (rows.length > visibleCount) issueCards.push(<Pressable key="load-more" style={styles.loadMore} onPress={() => setVisibleCount(count => count + 16)}><Text style={styles.loadMoreText}>Load 16 more · {rows.length - visibleCount} remaining</Text></Pressable>);
+
   return (
     <>
     <MaterialsShell
       title="Missing & Excess"
       subtitle="Find material issues quickly without loading the whole register onto the screen."
+      items={issueCards}
     >
       <Pressable style={styles.reportButton} onPress={()=>router.push({pathname:"/materials/report-missing",params:towerId?{towerId}:undefined})}><Plus size={17} color="#fff"/><Text style={styles.reportButtonText}>Report Missing Material</Text></Pressable>
+      {deepLinkLoading?<Text style={styles.fieldHelp}>Opening Missing Material…</Text>:null}
+      {!deepLinkLoading&&!detailIssue&&detailError?<Text style={styles.detailError}>{detailError} The tower register is filtered to the notification context.</Text>:null}
       <MaterialRegisterFilters
         towers={data?.towers ?? []}
         towerId={towerId}
@@ -305,41 +368,6 @@ export default function MissingMaterials() {
         </View>
       ) : null}
 
-      {rows.slice(0, visibleCount).map((row) => {
-        const itemSummary = row.items
-          .slice(0, 4)
-          .map((item) => {
-            const qty = numberValue(item.quantity) || 1;
-            return `${itemTitle(item)} × ${qty}`;
-          })
-          .filter(Boolean)
-          .join(", ");
-
-        const extraItems = Math.max(row.items.length - 4, 0);
-        const meta = [
-          itemSummary
-            ? `${itemSummary}${extraItems ? ` +${extraItems} more` : ""}`
-            : clean(row.event.notes) || "No item detail",
-          row.occurredAt ? formatDate(row.occurredAt) : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
-
-        return (
-          <View key={row.id}><MaterialCard title={`${itemSummary||eventLabel(row.type)} · ${row.status==="cancelled"?"Cancelled":`${row.remainingQty} Outstanding`}`} subtitle={`${towerName(row.towerId) || "Tower"} · ${row.section}`} meta={`${row.originalQty} missing · ${row.receivedQty} received · ${meta}`} />{row.remainingQty>0&&row.status!=="cancelled"?<Pressable style={styles.receiveButton} onPress={()=>{const existing=receiptMutationIds[row.id];const mutationId=existing||makeClientMutationId();if(!existing)setReceiptMutationIds(current=>({...current,[row.id]:mutationId}));setReceiptMutationId(mutationId);setReceiptSubmitAttempted(false);setReceiveIssue(row);setReceiveQty(String(row.remainingQty));if(!existing)setReceiptPhotos([]);}}><Text style={styles.receiveButtonText}>Receive</Text></Pressable>:row.status==="resolved"?<Text style={styles.receivedLabel}>Resolved</Text>:row.status!=="cancelled"&&row.remainingQty===0?<Pressable style={styles.resolveButton} onPress={()=>Alert.alert("Confirm resolved?","Confirm this material requirement is satisfied.",[{text:"Cancel",style:"cancel"},{text:"Confirm Resolved",onPress:()=>void resolveMissingMaterial({towerId:row.towerId,issueKey:clean(row.items[0]?.issue_key)}).catch(error=>Alert.alert("Could not resolve",error instanceof Error?error.message:"Try again."))}])}><Text style={styles.resolveText}>Confirm Resolved</Text></Pressable>:null}<Pressable style={styles.detailButton} onPress={()=>void openDetails(row)}><Text style={styles.detailButtonText}>Details · History</Text></Pressable></View>
-        );
-      })}
-
-      {rows.length > visibleCount ? (
-        <Pressable
-          style={styles.loadMore}
-          onPress={() => setVisibleCount((count) => count + 16)}
-        >
-          <Text style={styles.loadMoreText}>
-            Load 16 more · {rows.length - visibleCount} remaining
-          </Text>
-        </Pressable>
-      ) : null}
     </MaterialsShell>
     <Modal visible={Boolean(receiveIssue)} animationType="slide" presentationStyle="pageSheet" onRequestClose={cancelReceipt}>
       <SafeAreaView style={styles.receiveSafe} edges={["top","bottom"]}>

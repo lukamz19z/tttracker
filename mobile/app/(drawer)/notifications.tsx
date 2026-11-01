@@ -174,7 +174,7 @@ function getNotificationIcon(
     eventType.includes("defect") ||
     eventType.includes("maintenance")
   ) {
-    return Wrench;
+    return "wrench";
   }
 
   if (
@@ -182,16 +182,16 @@ function getNotificationIcon(
     eventType.includes("certificate") ||
     eventType.includes("compliance")
   ) {
-    return ShieldAlert;
+    return "shield";
   }
 
   const severity = normaliseSeverity(notification.severity);
 
-  if (severity === "critical") return CircleAlert;
-  if (severity === "warning") return AlertTriangle;
-  if (severity === "success") return CircleCheck;
+  if (severity === "critical") return "critical";
+  if (severity === "warning") return "warning";
+  if (severity === "success") return "success";
 
-  return Info;
+  return "info";
 }
 
 function resolveNotificationHref(
@@ -739,7 +739,8 @@ export default function NotificationsScreen() {
     }
 
     setDetailVisible(false);
-    router.push(href);
+    if (String(href).startsWith("/materials/missing")) router.replace(href);
+    else router.push(href);
   }
 
   if (!loading && !session) {
@@ -1107,20 +1108,12 @@ export default function NotificationsScreen() {
                         styles.detailSeverityIconSuccess,
                     ]}
                   >
-                    {(() => {
-                      const Icon =
-                        getNotificationIcon(
-                          selectedNotification,
-                        );
-
-                      return (
-                        <Icon
-                          size={23}
-                          color="#ffffff"
-                          strokeWidth={2.3}
-                        />
-                      );
-                    })()}
+                    {getNotificationIcon(selectedNotification) === "wrench" ? <Wrench size={23} color="#ffffff" strokeWidth={2.3} /> :
+                      getNotificationIcon(selectedNotification) === "shield" ? <ShieldAlert size={23} color="#ffffff" strokeWidth={2.3} /> :
+                      getNotificationIcon(selectedNotification) === "critical" ? <CircleAlert size={23} color="#ffffff" strokeWidth={2.3} /> :
+                      getNotificationIcon(selectedNotification) === "warning" ? <AlertTriangle size={23} color="#ffffff" strokeWidth={2.3} /> :
+                      getNotificationIcon(selectedNotification) === "success" ? <CircleCheck size={23} color="#ffffff" strokeWidth={2.3} /> :
+                      <Info size={23} color="#ffffff" strokeWidth={2.3} />}
                   </View>
 
                   <View style={styles.detailTitleBlock}>
@@ -1496,7 +1489,7 @@ function NotificationCard({
   const severity = normaliseSeverity(
     notification.severity,
   );
-  const Icon = getNotificationIcon(notification);
+  const icon = getNotificationIcon(notification);
   const unread = !notification.read_at;
   const archived = Boolean(notification.archived_at);
 
@@ -1524,11 +1517,12 @@ function NotificationCard({
             styles.notificationCardIconSuccess,
         ]}
       >
-        <Icon
-          size={21}
-          color="#ffffff"
-          strokeWidth={2.3}
-        />
+        {icon === "wrench" ? <Wrench size={21} color="#ffffff" strokeWidth={2.3} /> :
+          icon === "shield" ? <ShieldAlert size={21} color="#ffffff" strokeWidth={2.3} /> :
+          icon === "critical" ? <CircleAlert size={21} color="#ffffff" strokeWidth={2.3} /> :
+          icon === "warning" ? <AlertTriangle size={21} color="#ffffff" strokeWidth={2.3} /> :
+          icon === "success" ? <CircleCheck size={21} color="#ffffff" strokeWidth={2.3} /> :
+          <Info size={21} color="#ffffff" strokeWidth={2.3} />}
       </View>
 
       <View style={styles.notificationCardContent}>

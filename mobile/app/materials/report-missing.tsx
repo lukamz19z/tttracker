@@ -1,10 +1,10 @@
 import { QualitySelector, type QualitySelectorOption } from "@/components/quality/QualitySelector";
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { useMaterials } from "@/contexts/MaterialsContext";
-import { loadMaterialProjectUsers, type MaterialProjectUser } from "@/lib/api/materials";
+import { loadMaterialProjectUsers, searchMaterialRegister, type MaterialProjectUser, type MaterialSearchResult } from "@/lib/api/materials";
 import { normalizeMissingMaterialType } from "@/lib/materials/canonical-material-type";
 import { useLocalSearchParams, router } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { ChevronDown, ChevronLeft, ChevronRight, Save } from "lucide-react-native";
 
@@ -38,6 +38,7 @@ export default function ReportMissingMaterialScreen(){
   const [towerOpen,setTowerOpen]=useState(false);
   const [typeOpen,setTypeOpen]=useState(false);
   const [itemOpen,setItemOpen]=useState(false);
+  const [itemPickerKey,setItemPickerKey]=useState(0);
   const [urgencyOpen,setUrgencyOpen]=useState(false);
   const [assigneeOpen,setAssigneeOpen]=useState(false);
   const [notifyOpen,setNotifyOpen]=useState(false);
@@ -47,7 +48,29 @@ export default function ReportMissingMaterialScreen(){
   const [assignedToUserId,setAssignedToUserId]=useState("");
   const [notifyUserIds,setNotifyUserIds]=useState<string[]>([]);
   const [saving,setSaving]=useState(false);
+  const [catalogueQuery,setCatalogueQuery]=useState("");
+  const [catalogueResults,setCatalogueResults]=useState<MaterialSearchResult[]>([]);
+  const [catalogueLoading,setCatalogueLoading]=useState(false);
+  const catalogueRequest=useRef(0);
   useEffect(()=>{if(data?.projectId&&online)void loadMaterialProjectUsers(data.projectId).then(setProjectUsers).catch(()=>setProjectUsers([]));},[data?.projectId,online]);
+  useEffect(()=>{
+    const requestId=++catalogueRequest.current;
+    let cancelled=false;
+    if(sourceMode!=="existing"||!itemOpen||!data?.projectId||!towerId||catalogueQuery.trim().length<2||!online){setCatalogueResults([]);setCatalogueLoading(false);return;}
+    const timer=setTimeout(()=>{
+      const searchKind=kind==="bundle"?"bundle":kind==="member"?"member":["bolt","j_bolt","nut","washer","packer","plate"].includes(kind)?"bolt":null;
+      if(!searchKind){setCatalogueResults([]);setCatalogueLoading(false);return;}
+      setCatalogueLoading(true);
+      void searchMaterialRegister(data.projectId,searchKind,towerId,catalogueQuery).then(results=>{
+        if(cancelled||requestId!==catalogueRequest.current)return;
+        const filtered=kind==="packer"?results.filter(row=>/packer|spacer/i.test(`${row.record.item_type||""} ${row.record.bolt_type||""} ${row.title} ${row.subtitle}`)):
+          kind==="j_bolt"?results.filter(row=>/j.?bolt|anchor/i.test(`${row.record.item_type||""} ${row.record.bolt_type||""} ${row.title} ${row.subtitle}`)):
+          ["bolt","nut","washer","plate"].includes(kind)?results.filter(row=>{const type=String(row.record.item_type||"").toLowerCase();return kind==="bolt"?type==="bolt":kind==="nut"?type==="nut":kind==="washer"?type==="washer":type.includes("plate");}):results;
+        setCatalogueResults(filtered);
+      }).catch(()=>{if(!cancelled&&requestId===catalogueRequest.current)setCatalogueResults([]);}).finally(()=>{if(!cancelled&&requestId===catalogueRequest.current)setCatalogueLoading(false);});
+    },300);
+    return()=>{cancelled=true;clearTimeout(timer);};
+  },[catalogueQuery,data?.projectId,itemOpen,kind,online,sourceMode,towerId]);
 
   const towers=data?.towers||[];
   const towerOptions=towers.map(row=>({id:clean(row.id),label:clean(row.name)||clean(row.line)||"Tower"}));
@@ -60,6 +83,7 @@ export default function ReportMissingMaterialScreen(){
   const itemOptions=useMemo<QualitySelectorOption[]>(()=>{
     const rows:QualitySelectorOption[]=[];
     if(sourceMode!=="existing")return rows;
+    if(online)return catalogueResults.map(row=>({id:`${row.kind}:${row.id}`,label:row.title,subtitle:row.subtitle}));
     if(kind==="bundle")for(const row of (data?.bundles||[]).filter(item=>!towerId||item.tower_id===towerId))rows.push({id:`bundle:${clean(row.id)}`,label:`Bundle ${clean(row.bundle_no)}`,subtitle:clean(row.section)});
     if(kind==="member")for(const row of (data?.members||[]).filter(item=>!towerId||item.tower_id===towerId))rows.push({id:`member:${clean(row.id)}`,label:clean(row.mark_no)||"Member",subtitle:[clean(row.tower_segment||row.section),clean(row.drawing_number),clean(row.bundle_reference)].filter(Boolean).join(" · ")});
     if(["bolt","j_bolt","nut","washer","packer","plate"].includes(kind))for(const row of (data?.bolts||[]).filter(item=>!towerId||item.tower_id===towerId)){
@@ -77,7 +101,7 @@ export default function ReportMissingMaterialScreen(){
       rows.push({id:`${kind==="packer"?"packer":"bolt"}:${clean(row.id)}`,label,subtitle:[clean(row.tower_segment),clean(row.drawing_number),clean(row.dn_sn)].filter(Boolean).join(" · ")});
     }
     return rows;
-  },[data?.bolts,data?.bundles,data?.members,kind,sourceMode,towerId]);
+  },[catalogueResults,data?.bolts,data?.bundles,data?.members,kind,online,sourceMode,towerId]);
   const selectedSummary=useMemo(()=>{
     if(!itemId)return null;
     const [table,id]=itemId.split(":",2);
@@ -91,10 +115,20 @@ export default function ReportMissingMaterialScreen(){
   function selectKind(next:Kind){setKind(next);setCategory(TYPES.find(type=>type.id===next)?.label||"Other");setItemId("");setItemLabel("");setDescription("");setSpecification("");setSegment("");setMember("");setDrawing("");setUnit("ea");setQuantity("1");}
   function selectExisting(row:QualitySelectorOption){
     const [table,id]=row.id.split(":",2);const bundle=data?.bundles.find(item=>clean(item.id)===id);const selectedMember=data?.members.find(item=>clean(item.id)===id);const bolt=data?.bolts.find(item=>clean(item.id)===id);
+    const remote=catalogueResults.find(item=>item.id===id)?.record;
     setItemId(row.id);setItemLabel(row.label);setDescription(row.label);setCategory(TYPES.find(type=>type.id===kind)?.label||"Other");
     const spec=kind==="packer"?[clean(bolt?.bolt_diameter),clean(bolt?.packer_no)].filter(Boolean).join(" mm "):kind==="member"?[clean(selectedMember?.mark_no),clean(selectedMember?.pn_final)].filter(Boolean).join(" · "):kind==="bundle"?"":[clean(bolt?.bolt_diameter),clean(bolt?.length)].filter(Boolean).join(" × ");
     const knownSegments=[...new Set([clean(bundle?.section),clean(selectedMember?.tower_segment||selectedMember?.section),clean(bolt?.tower_segment)].filter(Boolean))];
     setSpecification(spec);setSegment(knownSegments.length===1?knownSegments[0]:"");setDrawing(clean(selectedMember?.drawing_number||bolt?.drawing_number));setMember(clean(selectedMember?.mark_no));setSourceMode("existing");
+    if(remote){
+      const remoteSegments=[clean(remote.section),clean(remote.tower_segment),clean(remote.segment)].filter(Boolean);
+      if(remoteSegments.length===1)setSegment(remoteSegments[0]);
+      setDrawing(clean(remote.drawing_number)||clean(remote.drawing_no)||clean(remote.drawing));
+      setMember(clean(remote.mark_no)||clean(remote.member_number)||clean(remote.member_mark));
+      setUnit(clean(remote.unit)||"ea");
+      const remoteSpec=clean(remote.specification)||[clean(remote.bolt_diameter),clean(remote.length)].filter(Boolean).join(" × ")||[clean(remote.packer_no)].filter(Boolean).join(" mm ");
+      if(remoteSpec)setSpecification(remoteSpec);
+    }
     if(table==="bundle")setQuantity("1");
   }
   async function submit(){
@@ -141,9 +175,9 @@ export default function ReportMissingMaterialScreen(){
       <Text style={styles.label}>Notes · Optional</Text><TextInput value={notes} onChangeText={setNotes} placeholder="Optional" multiline style={[styles.input,styles.notes]}/>
       <Pressable disabled={saving} onPress={()=>void submit()} style={styles.save}><Save size={17} color="#fff"/><Text style={styles.saveText}>{saving?"Saving…":online?"Report Missing":"Save Pending Sync"}</Text></Pressable>
     </ScrollView>
-    <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);setItemId("");setItemLabel("");setSegment("");}}/>
-    <QualitySelector visible={typeOpen} title="Material type" options={TYPES.map(type=>({id:type.id,label:type.label}))} onClose={()=>setTypeOpen(false)} onSelect={row=>{selectKind(row.id as Kind);setTypeOpen(false);}}/>
-    <QualitySelector visible={itemOpen} title={`Search ${selectedTypeLabel}`} options={itemOptions} onClose={()=>setItemOpen(false)} onSelect={selectExisting}/>
+    <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);setItemId("");setItemLabel("");setSegment("");setCatalogueQuery("");}}/>
+    <QualitySelector visible={typeOpen} title="Material type" options={TYPES.map(type=>({id:type.id,label:type.label}))} onClose={()=>setTypeOpen(false)} onSelect={row=>{selectKind(row.id as Kind);setCatalogueQuery("");setTypeOpen(false);}}/>
+    <QualitySelector key={itemPickerKey} visible={itemOpen} title={`Search ${selectedTypeLabel}`} options={itemOptions} onQueryChange={setCatalogueQuery} emptyMessage={catalogueLoading?"Searching…":online&&catalogueQuery.length<2?"Type at least 2 characters to search this tower.":"No matching material found."} onClose={()=>{setItemOpen(false);setCatalogueQuery("");setItemPickerKey(value=>value+1);}} onSelect={selectExisting}/>
     <QualitySelector visible={segmentOpen} title="Select location" options={segments.map(value=>({id:value,label:value}))} onClose={()=>setSegmentOpen(false)} onSelect={row=>setSegment(row.id)}/>
     <QualitySelector visible={urgencyOpen} title="Urgency" options={["Normal","Urgent","Critical"].map(value=>({id:value,label:value}))} onClose={()=>setUrgencyOpen(false)} onSelect={row=>setUrgency(row.id)}/>
     <QualitySelector visible={assigneeOpen} title="Assign to" options={[{id:"",label:"Not assigned"},...projectUsers.map(user=>({id:user.id,label:user.name,subtitle:user.role}))]} onClose={()=>setAssigneeOpen(false)} onSelect={row=>setAssignedToUserId(row.id)}/>

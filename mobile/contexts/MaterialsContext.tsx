@@ -284,7 +284,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       if (!remapped.length) {
         setError(null);
         try {
-          const latest = await refreshMaterials(projectId, undefined, true);
+          const latest = await refreshMaterials(projectId);
           dataRef.current = latest;
           setData(latest);
           setCachedAt(new Date().toISOString());
@@ -309,7 +309,8 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   }, [performFlush]);
 
   const runLoad = useCallback(
-    async (forceRefresh = false, summaryOnly = false) => {
+    async (forceRefresh = false) => {
+      const loadStartedAt = Date.now();
       if (!projectId) {
         projectRef.current = null;
         dataRef.current = null;
@@ -356,6 +357,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           setData(cached.value);
           setCachedAt(cached.updatedAt);
           setLoading(false);
+          if (__DEV__) console.debug("Materials cached render ready", { durationMs: Date.now() - loadStartedAt, eventCount: cached.value.materialEvents.length });
 
           const cachedTime = new Date(cached.updatedAt).getTime();
           if (Number.isFinite(cachedTime)) {
@@ -384,7 +386,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
         const shouldRefreshServer =
           online &&
           remaining.length === 0 &&
-          (forceRefresh || (cached && "requiresCatalogueRefresh" in cached) || !cached || (!cacheFresh && !recentlyRefreshed));
+          (forceRefresh || !cached || (!cacheFresh && !recentlyRefreshed));
 
         if (shouldRefreshServer) {
           if (dataRef.current) {
@@ -398,7 +400,8 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
               setData(snapshot);
               setLoading(false);
               setRefreshing(true);
-            }, summaryOnly);
+            });
+            if (__DEV__) console.debug("Materials server refresh applied", { durationMs: Date.now() - loadStartedAt, eventCount: latest.materialEvents.length });
             if (projectRef.current !== projectId) return;
 
             const now = new Date().toISOString();
@@ -433,7 +436,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   );
 
   const load = useCallback(
-    (forceRefresh = false, summaryOnly = false): Promise<void> => {
+    (forceRefresh = false): Promise<void> => {
       const key = projectId ?? "";
 
       if (
@@ -443,7 +446,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
         return loadPromiseRef.current.promise;
       }
 
-      const task = runLoad(forceRefresh, summaryOnly);
+      const task = runLoad(forceRefresh);
       const tracked = task.finally(() => {
         if (loadPromiseRef.current?.promise === tracked) {
           loadPromiseRef.current = null;
@@ -1179,7 +1182,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(input.sourceBundleId);
       try {
         await createMaterialTransfer(input);
-        await load(true, true);
+        await load(true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1196,7 +1199,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(id);
       try {
         await receiveMaterialTransfer(id);
-        await load(true, true);
+        await load(true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1213,7 +1216,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       setBusyTransferId(id);
       try {
         await cancelMaterialTransfer(id);
-        await load(true, true);
+        await load(true);
       } finally {
         setBusyTransferId(null);
       }
@@ -1239,7 +1242,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           const remaining = await flushQueue(queued);
           const failed = remaining.find((mutation) => mutation.id === receiptMutation?.id);
           if (failed) throw new Error(failed.lastError || "Receipt is queued and needs retry.");
-          await load(true, true);
+          await load(true);
         }
       } finally {
         setBusyIssueKey(null);
@@ -1254,7 +1257,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     const mutation=queued.find(row=>row.id===queued[queued.length-1]?.id);
     const local=mutation?.kind==="report_missing"?mutation.input:null;
     if(local&&dataRef.current){const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:"outstanding",client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||"other",material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
-    if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true,true);}
+    if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true);}
   },[dataRef,enqueue,flushQueue,load,online,persist,projectId]);
 
   const resolveMissingMaterial = useCallback(async (input: { towerId: string; issueKey: string }) => {
@@ -1262,7 +1265,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     const queued = await enqueue(makeResolveMissingMutation({ ...input, projectId }));
     const next = dataRef.current && { ...dataRef.current, materialEvents: dataRef.current.materialEvents.map((event) => event.tower_material_event_items?.some((item) => item.issue_key === input.issueKey) ? { ...event, issue_status: "resolved" } : event) };
     if (next) { dataRef.current = next; setData(next); persist(next); }
-    if (online) { const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Resolution is queued and needs retry.");await load(true, true); }
+    if (online) { const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Resolution is queued and needs retry.");await load(true); }
   }, [dataRef, enqueue, flushQueue, load, online, persist, projectId]);
 
   const isBundlePending = useCallback(

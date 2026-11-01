@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
 import { sendDailyDocketEmail, docketEmailShell } from "@/lib/email/daily-dockets";
 import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
 import { resolveUserDisplayName } from "@/lib/materials/project-users";
@@ -49,7 +50,7 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
     update:`${itemLabel} - ${args.note||"A material update was added."} - ${actorLabel}`,
     cancelled:`${towerLabel} - ${total} x ${itemLabel} - Cancelled by ${actorLabel}${args.cancellationReason?` - ${args.cancellationReason}`:""}`,
   };
-  const title=titles[kind],message=messages[kind],actionParams={project_id:projectId,tower_id:event.tower_id,issue_key:item.issue_key};let inApp=0;
+  const title=titles[kind],message=messages[kind],linkData={type:"missing_material",eventId:event.id,issueKey:item.issue_key,projectId,towerId:event.tower_id,action:kind},actionParams={...linkData};let inApp=0;
   for(const [userId,selected] of channels){if(!selected.inApp||!appUsers.has(userId))continue;const recipientMessage=kind!=="assignment"&&userId===directAssignee?`${message} - Assigned to you by ${actorLabel}`:message;
     const {error}=await service.from("user_notifications").insert({user_id:userId,event_type:notificationType,title,message:recipientMessage,severity:urgent==="urgent"||urgent==="critical"?"warning":kind==="resolved"?"success":"info",read_at:null,archived_at:null,project_id:projectId,fleet_job_id:null,asset_type:null,asset_id:null,docket_id:null,action_route:route,action_params:actionParams,source_table:args.actionId?"tower_material_event_actions":"tower_material_events",source_record_id:args.actionId||sourceEventId,created_at:new Date().toISOString()});
     if(error&&error.code!=="23505")throw new Error(`Missing-material in-app notification failed: ${error.message}`);if(!error)inApp++;
@@ -57,29 +58,34 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   let push=0;let pushFailure:string|null=null;const pushIds=[...channels].filter(([id,selected])=>selected.push&&appUsers.has(id)).map(([id])=>id);
   if(pushIds.length){const {data:tokens,error}=await service.from("user_push_tokens").select("user_id,expo_push_token").in("user_id",pushIds).eq("active",true);if(error)throw new Error(`Missing-material push-token lookup failed: ${error.message}`);
     console.info("TTTracker Missing Materials push dispatch",{kind,sourceEventId,eligibleUsers:pushIds.length,activeDeviceTokens:(tokens||[]).length});
-    for(const token of tokens||[]){const {data:claim,error:claimError}=await service.from("material_notification_deliveries").upsert({project_id:projectId,source_event_id:sourceEventId,event_type:notificationType,user_id:token.user_id,channel:"push"},{onConflict:"source_event_id,event_type,user_id,channel",ignoreDuplicates:true}).select("id").maybeSingle();if(claimError)throw new Error(`Missing-material push dedupe failed: ${claimError.message}`);if(!claim)continue;
+    for(const token of tokens||[]){
       const body=kind!=="assignment"&&token.user_id===directAssignee?`${message} - Assigned to you by ${actorLabel}`:message;
+      const pushPayload={sound:"default",title,body,data:{...linkData,action_route:route,action_params:actionParams}};
+      const tokenHash=createHash("sha256").update(token.expo_push_token).digest("hex");
+      const {data:claim,error:claimError}=await service.from("material_push_delivery_attempts").upsert({project_id:projectId,source_event_id:sourceEventId,event_type:notificationType,user_id:token.user_id,expo_token_hash:tokenHash,push_payload:pushPayload,delivery_status:"sending",attempted_at:new Date().toISOString(),last_error:null},{onConflict:"source_event_id,event_type,user_id,expo_token_hash",ignoreDuplicates:true}).select("id").maybeSingle();if(claimError)throw new Error(`Missing-material push dedupe failed: ${claimError.message}`);if(!claim)continue;
       try{
-        const response=await fetch("https://exp.host/--/api/v2/push/send",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({to:token.expo_push_token,sound:"default",title,body,data:{action_route:route,action_params:actionParams}})});
-        const result=await response.json().catch(()=>null) as {data?:{status?:string;message?:string;details?:{error?:string}}|Array<{status?:string;message?:string;details?:{error?:string}}>};
+        const response=await fetch("https://exp.host/--/api/v2/push/send",{method:"POST",headers:{"Content-Type":"application/json",Accept:"application/json"},body:JSON.stringify({to:token.expo_push_token,...pushPayload})});
+        const result=await response.json().catch(()=>null) as {data?:{id?:string;status?:string;message?:string;details?:{error?:string}}|Array<{id?:string;status?:string;message?:string;details?:{error?:string}}>};
         const ticket=Array.isArray(result?.data)?result.data[0]:result?.data;
         if(!response.ok||ticket?.status==="error"){
           const reason=ticket?.details?.error||ticket?.message||`HTTP ${response.status}`;
           if(ticket?.details?.error==="DeviceNotRegistered")await service.from("user_push_tokens").update({active:false}).eq("user_id",token.user_id).eq("expo_push_token",token.expo_push_token);
           // Expo explicitly rejected this ticket, so release the dedupe row to allow a genuine retry.
-          await service.from("material_notification_deliveries").delete().eq("project_id",projectId).eq("source_event_id",sourceEventId).eq("event_type",notificationType).eq("user_id",token.user_id).eq("channel","push");
+          await service.from("material_push_delivery_attempts").delete().eq("id",claim.id);
           console.error("TTTracker Missing Materials Expo ticket rejected",{kind,sourceEventId,status:response.status,reason});
           if(ticket?.details?.error!=="DeviceNotRegistered")pushFailure=reason;
           continue;
         }
-        if(ticket?.status!=="ok"){
-          await service.from("material_notification_deliveries").delete().eq("project_id",projectId).eq("source_event_id",sourceEventId).eq("event_type",notificationType).eq("user_id",token.user_id).eq("channel","push");
+        if(ticket?.status!=="ok"||!ticket.id){
+          await service.from("material_push_delivery_attempts").delete().eq("id",claim.id);
           console.error("TTTracker Missing Materials Expo response did not include an accepted ticket",{kind,sourceEventId,status:response.status});
           pushFailure="Expo did not confirm push acceptance.";
           continue;
         }
+        const {error:ticketSaveError}=await service.from("material_push_delivery_attempts").update({delivery_status:"ticket_accepted",expo_ticket_id:ticket.id||null,receipt_checked_at:null,last_error:null}).eq("id",claim.id);
+        if(ticketSaveError)console.error("TTTracker Missing Materials accepted Expo ticket could not be recorded",{kind,sourceEventId,error:ticketSaveError.message});
         push++;
-      }catch(error){console.error("TTTracker Missing Materials Expo request failed",{kind,sourceEventId,error:error instanceof Error?error.message:"unknown error"});throw error;}
+      }catch(error){await service.from("material_push_delivery_attempts").delete().eq("id",claim.id);console.error("TTTracker Missing Materials Expo request failed",{kind,sourceEventId,error:error instanceof Error?error.message:"unknown error"});throw error;}
     }
   } else if([...channels.values()].some(selected=>selected.push))console.warn("TTTracker Missing Materials push skipped: no eligible registered device tokens",{kind,sourceEventId,eligibleUsers:pushIds.length});
   let email=0;const emailIds=[...channels].filter(([,selected])=>selected.email).map(([id])=>id);

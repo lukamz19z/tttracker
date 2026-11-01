@@ -4,17 +4,18 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
 } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { apiJson } from "@/lib/api/client";
+import { apiFetch, apiJson } from "@/lib/api/client";
 import { mobileRouteForNotification } from "@/lib/notifications/routing";
 
 Notifications.setNotificationHandler({
@@ -52,6 +53,7 @@ export function PushProvider({
   const [token, setToken] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastHandledResponse = useRef<{ id: string; at: number } | null>(null);
 
   const register = useCallback(async () => {
     if (!session) return;
@@ -161,22 +163,52 @@ export function PushProvider({
   }, [register, session]);
 
   useEffect(() => {
+    let active = true;
+    const openResponse = (response: Notifications.NotificationResponse | null) => {
+      if (!response || !active) return;
+      const id = response.notification.request.identifier;
+      const now = Date.now();
+      if (
+        lastHandledResponse.current?.id === id &&
+        now - lastHandledResponse.current.at < 2_000
+      ) return;
+      lastHandledResponse.current = { id, at: now };
+      const route = mobileRouteForNotification(
+        response.notification.request.content.data as Record<string, unknown>,
+      );
+      if (!route) return;
+      if (String(route).startsWith("/materials/missing")) router.replace(route);
+      else router.push(route);
+    };
     const responseSubscription =
       Notifications.addNotificationResponseReceivedListener(
-        (response) => {
-          const route = mobileRouteForNotification(
-            response.notification.request.content
-              .data as Record<string, unknown>,
-          );
-
-          if (route) {
-            router.push(route);
-          }
-        },
+        (response) => openResponse(response),
       );
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => openResponse(response))
+      .catch((responseError) => {
+        if (__DEV__) console.warn("Could not restore tapped notification route.", responseError);
+      });
 
-    return () => responseSubscription.remove();
+    return () => {
+      active = false;
+      responseSubscription.remove();
+    };
   }, [router]);
+
+  useEffect(() => {
+    if (!session) return;
+    let lastCheck = 0;
+    const checkReceipts = () => {
+      if (AppState.currentState !== "active" || Date.now() - lastCheck < 15 * 60_000) return;
+      lastCheck = Date.now();
+      void apiFetch("/api/mobile/push/material-receipts", { method: "POST", timeoutMs: 20_000 })
+        .catch((error) => { if (__DEV__) console.debug("Material push receipt check deferred", error); });
+    };
+    checkReceipts();
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") checkReceipts(); });
+    return () => subscription.remove();
+  }, [session]);
 
   const value = useMemo(
     () => ({

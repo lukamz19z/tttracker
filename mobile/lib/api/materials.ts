@@ -24,36 +24,30 @@ const legacyMaterialCacheKey = (projectId: string) =>
 
 async function readJson<T>(response: Response, fallback: string) { return jsonBody<T>(response, fallback); }
 
-async function catalogue(projectId: string, kind: "member" | "bolt") {
-  const rows: Record<string, unknown>[] = [];
-  for (let offset = 0; ; offset += 500) {
-    const page = await apiJson<{ rows: Record<string, unknown>[] }>(`/api/mobile/materials/catalogue?projectId=${encodeURIComponent(projectId)}&kind=${kind}&offset=${offset}`);
-    rows.push(...page.rows.map(row => ({ ...row, search_text: Object.values(row).filter(value => typeof value === "string").join(" ").toLowerCase() })));
-    if (page.rows.length < 500) return rows;
-  }
-}
-export async function refreshMaterials(projectId: string, onSnapshot?: (data: MaterialPayload) => void, summaryOnly = false) {
+export async function refreshMaterials(projectId: string, onSnapshot?: (data: MaterialPayload) => void) {
   const started = Date.now();
   const raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 45_000 });
   const cached = await getCache<MaterialPayload>(materialCacheKey(projectId));
   const snapshot = { ...raw, members: cached?.value.members || [], bolts: cached?.value.bolts || [] };
-  await setCache(materialCacheKey(projectId), { ...snapshot, cataloguePending: summaryOnly ? Boolean((cached?.value as MaterialPayload & { cataloguePending?: boolean } | undefined)?.cataloguePending) : true });
+  await setCache(materialCacheKey(projectId), snapshot);
   onSnapshot?.(snapshot);
   if (__DEV__) console.debug("Materials useful snapshot", { durationMs: Date.now() - started, bundles: raw.bundles.length });
-  if (summaryOnly) return snapshot;
-  // Catalogue download is background work: never gate the working bundle register.
-  const [members, bolts] = await Promise.all([catalogue(projectId, "member"), catalogue(projectId, "bolt")]);
-  const data = { ...raw, members, bolts } as MaterialPayload;
-  await setCache(materialCacheKey(projectId), data);
-  if (__DEV__) console.debug("Materials catalogue ready", { durationMs: Date.now() - started, members: members.length, bolts: bolts.length });
-  return data;
+  return snapshot;
 }
 export async function cachedMaterials(projectId: string) {
   const current = await getCache<MaterialPayload>(materialCacheKey(projectId));
-  if (current) return (current.value as MaterialPayload & { cataloguePending?: boolean }).cataloguePending ? { ...current, requiresCatalogueRefresh: true } : current;
+  if (current) return current;
   const legacy = await getCache<MaterialPayload>(`materials:v2:${projectId}`) || await getCache<MaterialPayload>(legacyMaterialCacheKey(projectId));
-  // Render legacy bundle/check data now, but download the missing catalogues in background.
-  return legacy ? { ...legacy, requiresCatalogueRefresh: true } : null;
+  return legacy;
+}
+
+export type MaterialSearchResult={kind:"member"|"bundle"|"bolt";id:string;towerId:string;towerName:string;title:string;subtitle:string;meta:string;record:Record<string,unknown>};
+export async function searchMaterialRegister(projectId:string,kind:"member"|"bundle"|"bolt",towerId:string,query:string){
+  const value=query.trim();if(value.length<2)return [];
+  const started=Date.now(),params=new URLSearchParams({projectId,kind,towerId,q:value,limit:"60"});
+  const response=await apiJson<{results:MaterialSearchResult[]}>(`/api/mobile/materials/search?${params.toString()}`,{timeoutMs:30_000});
+  if(__DEV__)console.debug("Materials type search",{kind,durationMs:Date.now()-started,resultCount:response.results.length});
+  return response.results;
 }
 
 export async function saveBundleCheck(
@@ -216,8 +210,11 @@ export async function loadMaterialProjectUsers(projectId: string) {
   return result.users;
 }
 
-export async function loadMissingMaterialDetails(projectId:string,issueKey:string){
-  return apiJson<{event:Record<string,unknown>;actions:Array<Record<string,unknown>>;files:Array<Record<string,unknown>>;receipts:Array<Record<string,unknown>>}>(`/api/mobile/materials/missing/actions?projectId=${encodeURIComponent(projectId)}&issueKey=${encodeURIComponent(issueKey)}`,{timeoutMs:30_000});
+export async function loadMissingMaterialDetails(projectId:string,issueKey?:string,eventId?:string){
+  const params=new URLSearchParams({projectId});
+  if(issueKey)params.set("issueKey",issueKey);
+  if(eventId)params.set("eventId",eventId);
+  return apiJson<{event:Record<string,unknown>;issueKey:string;actions:Array<Record<string,unknown>>;files:Array<Record<string,unknown>>;receipts:Array<Record<string,unknown>>}>(`/api/mobile/materials/missing/actions?${params.toString()}`,{timeoutMs:30_000});
 }
 
 export async function saveMissingMaterialAction(input:{projectId:string;towerId:string;issueKey:string;clientMutationId:string;actionType:"update"|"assignment"|"cancel";text?:string;assignedToUserId?:string|null;notifyUserIds?:string[]}){

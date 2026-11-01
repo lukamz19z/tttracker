@@ -1,6 +1,6 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Search, X } from "lucide-react-native";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   FlatList,
   Modal,
@@ -23,18 +23,18 @@ export function QualitySelector({
   options,
   onClose,
   onSelect,
+  onQueryChange,
+  emptyMessage,
 }: {
   visible: boolean;
   title: string;
   options: QualitySelectorOption[];
   onClose: () => void;
   onSelect: (option: QualitySelectorOption) => void;
+  onQueryChange?: (query: string) => void;
+  emptyMessage?: string;
 }) {
   const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    if (visible) setQuery("");
-  }, [visible]);
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -57,7 +57,7 @@ export function QualitySelector({
           <Search size={17} color="#64748b" />
           <TextInput
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(value) => { setQuery(value); onQueryChange?.(value); }}
             placeholder="Search…"
             placeholderTextColor="#94a3b8"
             style={styles.searchInput}
@@ -81,7 +81,7 @@ export function QualitySelector({
               {item.subtitle ? <Text style={styles.optionSubtitle}>{item.subtitle}</Text> : null}
             </Pressable>
           )}
-          ListEmptyComponent={<Text style={styles.empty}>No matching options.</Text>}
+          ListEmptyComponent={<Text style={styles.empty}>{emptyMessage || "No matching options."}</Text>}
         />
       </SafeAreaView>
     </Modal>
