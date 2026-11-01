@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendDailyDocketEmail, docketEmailShell } from "@/lib/email/daily-dockets";
 import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
+import { resolveUserDisplayName } from "@/lib/materials/project-users";
 
 export type MissingMaterialNotificationKind = "raised" | "partial_receipt" | "full_receipt" | "resolved" | "assignment" | "update" | "cancelled";
 type Rule = { user_id:string;notify_raised:boolean;notify_urgent:boolean;notify_partial_receipt:boolean;notify_full_receipt:boolean;notify_resolved:boolean;notify_assignment:boolean;notify_update?:boolean;notify_cancel?:boolean;receives_in_app:boolean;receives_push:boolean;receives_email:boolean };
@@ -29,8 +30,7 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   for(const id of Array.isArray(event.notify_user_ids)?event.notify_user_ids:[])if(clean(id)){const configured=channels.get(clean(id));channels.set(clean(id),{inApp:configured?.inApp??true,push:configured?.push??true,email:configured?.email??false});}
   if(args.actorUserId)channels.delete(args.actorUserId);if(!channels.size)return {recipients:0,inApp:0,push:0,email:0};
   const notificationType=eventType(kind,args.actionId),route="/materials/missing";
-  const actorResult=args.actorUserId?await service.auth.admin.getUserById(args.actorUserId):null;
-  const actorLabel=clean(actorResult?.data.user?.user_metadata?.full_name||actorResult?.data.user?.user_metadata?.name)||"Project user";
+  const actorLabel=await resolveUserDisplayName(service,args.actorUserId);
   const appUsers=new Set(await filterAppNotificationUserIds(service,[...channels.keys()],notificationType,route));
   const item=(event.tower_material_event_items||[])[0]||{},towerLabel=clean(tower?.name||tower?.line)||"Tower",projectLabel=clean(project?.project_number||project?.name);
   const itemLabel=[item.item_reference||item.item_description,item.specification].map(clean).filter(Boolean).join(" ")||"Material item";

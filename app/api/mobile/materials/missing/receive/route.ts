@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const clean = (value: unknown) => String(value ?? "").trim();
 const numberValue = (value: unknown) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0; };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
     const quantity = numberValue(body.quantity);
     const mutationId = clean(body.clientMutationId);
     if (!issueKey || quantity <= 0 || !mutationId) return NextResponse.json({ error: "Issue key, positive received quantity and mutation ID are required." }, { status: 400 });
+    if (!issueKey.startsWith("pending:") && !UUID.test(issueKey)) return NextResponse.json({ error: "The missing-material item ID is invalid. Refresh the Materials list and retry." }, { status: 400 });
 
     let issueQuery = service.from("tower_material_event_items").select("id,event_id,issue_key,quantity").eq("issue_key", issueKey);
     if (requestedProjectId && issueKey.startsWith("pending:")) {

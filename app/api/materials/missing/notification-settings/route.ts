@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { userHasAccess } from "@/lib/access/server";
 import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
+import { resolveProjectUserLabels } from "@/lib/materials/project-users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,12 +32,8 @@ export async function GET(request: Request) {
     ]);
     if(rulesError||accessError||rolesError) throw new Error(rulesError?.message||accessError?.message||rolesError?.message);
     const ids=[...new Set((access||[]).map(row=>clean(row.user_id)))];
-    const {data:employees,error:employeeError}=ids.length?await service.from("employees").select("user_id,full_name").in("user_id",ids):{data:[],error:null};
-    if(employeeError) throw new Error(employeeError.message);
-    const names=new Map((employees||[]).map(row=>[clean(row.user_id),clean(row.full_name)]));
     const roleMap=new Map((roles||[]).map(row=>[clean(row.user_id),clean(row.role)]));
-    const users=[];
-    for(const id of ids){const {data}=await service.auth.admin.getUserById(id);if(!data.user)continue;users.push({id,name:names.get(id)||clean(data.user.user_metadata?.full_name||data.user.user_metadata?.name)||"TTTracker User",role:roleMap.get(id)||"user"});}
+    const users=(await resolveProjectUserLabels(service,ids)).map(label=>({...label,role:roleMap.get(label.id)||label.role||"user"}));
     users.sort((a,b)=>a.name.localeCompare(b.name));
     return NextResponse.json({users,rules:rules||[]});
   } catch(error) { const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status}); }

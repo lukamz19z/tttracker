@@ -6,6 +6,7 @@ import { qualityApiError, requireQualityUser } from "@/lib/quality/server";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 const clean=(value:unknown)=>String(value??"").trim();
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request:Request){
   try{
@@ -30,6 +31,7 @@ export async function POST(request:Request){
   try{
     const {service,user}=await requireQualityUser(request);const body=await request.json() as Record<string,unknown>;
     const projectId=clean(body.projectId),towerId=clean(body.towerId),issueKey=clean(body.issueKey),clientMutationId=clean(body.clientMutationId),actionType=clean(body.actionType),text=clean(body.text),assignedToUserId=clean(body.assignedToUserId)||null;
+    if(issueKey&&!UUID.test(issueKey))return NextResponse.json({error:"The missing-material item ID is invalid. Refresh the Materials list and retry."},{status:400});
     if(!projectId||!towerId||!issueKey||!clientMutationId||!(["update","assignment","cancel"].includes(actionType)))return NextResponse.json({error:"Project, tower, issue, mutation ID and action are required."},{status:400});
     if(["update","cancel"].includes(actionType)&&!text)return NextResponse.json({error:actionType==="cancel"?"Enter a cancellation reason.":"Enter an update."},{status:400});
     const permission=await Promise.all([userHasAccess(service,user.id,"materials.manage_issues"),userHasAccess(service,user.id,"mobile.materials"),service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",user.id).maybeSingle()]);
