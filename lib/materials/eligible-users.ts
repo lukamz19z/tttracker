@@ -4,15 +4,10 @@ import { resolveProjectUserLabels, type ProjectUserLabel } from "@/lib/materials
 export type MaterialUserChoices = { assignmentUsers: ProjectUserLabel[]; notifyUsers: ProjectUserLabel[] };
 
 export async function eligibleMaterialUsers(service: SupabaseClient, projectId: string): Promise<MaterialUserChoices> {
-  const [{ data: access, error: accessError }, { data: rules, error: rulesError }] = await Promise.all([
-    service.from("project_access").select("user_id").eq("project_id", projectId),
-    service.from("project_material_notification_rules").select("user_id").eq("project_id", projectId).eq("active", true),
-  ]);
-  if (accessError || rulesError) throw new Error(accessError?.message || rulesError?.message);
+  const { data: access, error: accessError } = await service.from("project_access").select("user_id").eq("project_id", projectId);
+  if (accessError) throw new Error(accessError.message);
   const projectUsers = [...new Set((access || []).map(row => String(row.user_id || "")).filter(Boolean))];
   if (!projectUsers.length) return { assignmentUsers: [], notifyUsers: [] };
-  const projectUserSet = new Set(projectUsers);
-  const notifyIds = [...new Set((rules || []).map(row => String(row.user_id || "")).filter(id => projectUserSet.has(id)))];
   const { data: permissions, error: permissionError } = await service.from("effective_user_permissions")
     .select("user_id,code,allowed")
     .in("user_id", projectUsers)
@@ -20,9 +15,11 @@ export async function eligibleMaterialUsers(service: SupabaseClient, projectId: 
     .eq("allowed", true);
   if (permissionError) throw new Error(permissionError.message);
   const assignmentIds = [...new Set((permissions || []).map(row => String(row.user_id || "")))];
-  const allIds = [...new Set([...assignmentIds, ...notifyIds])];
-  const labels = await resolveProjectUserLabels(service, allIds);
+  // Manual assignment and per-issue notification are selection privileges.
+  // They must not depend on project-wide automatic notification rules.
+  const labels = await resolveProjectUserLabels(service, assignmentIds);
   const byId = new Map(labels.map(label => [label.id, label]));
   const sort = (ids: string[]) => ids.map(id => byId.get(id)).filter((value): value is ProjectUserLabel => Boolean(value)).sort((a, b) => a.name.localeCompare(b.name));
-  return { assignmentUsers: sort(assignmentIds), notifyUsers: sort(notifyIds) };
+  const eligible = sort(assignmentIds);
+  return { assignmentUsers: eligible, notifyUsers: eligible };
 }

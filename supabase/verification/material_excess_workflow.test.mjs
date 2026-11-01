@@ -52,10 +52,28 @@ test("existing material source/category IDs and legacy Missing schema are preser
 test("Assign and Notify pools use dynamic permission/configuration data rather than all project users", () => {
   assert.match(eligibleUsers, /materials\.manage_issues/);
   assert.match(eligibleUsers, /materials\.configure/);
-  assert.match(eligibleUsers, /project_material_notification_rules/);
+  assert.doesNotMatch(eligibleUsers, /project_material_notification_rules/);
+  assert.match(eligibleUsers, /return \{ assignmentUsers: eligible, notifyUsers: eligible \}/);
   assert.match(reportScreen, /assignmentUsers/);
   assert.match(reportScreen, /notifyUsers/);
   assert.match(mobileApi, /authorised Materials manager/);
+});
+
+test("personnel controls remain available for Missing and Excess independently of configured rules", async () => {
+  const mobileScreen = reportScreen;
+  const websiteForm = await readFile(new URL("../../components/materials/ReportMissingMaterialForm.tsx", import.meta.url), "utf8");
+  const mobileCreateApi = await readFile(new URL("../../app/api/mobile/materials/missing/route.ts", import.meta.url), "utf8");
+  assert.match(mobileScreen, /<Text style=\{styles\.label\}>Assign To · Optional<\/Text>/);
+  assert.match(mobileScreen, /<Text style=\{styles\.label\}>Also Notify · Optional/);
+  assert.match(mobileScreen, /assignedToUserId:assignedToUserId\|\|null,notifyUserIds/);
+  assert.match(mobileScreen, /No eligible Materials managers available/);
+  assert.match(websiteForm, /Assign To · Optional/);
+  assert.match(websiteForm, /Also Notify · Optional/);
+  assert.match(websiteForm, /assignedToUserId:assignee\|\|null,notifyUserIds:notify/);
+  assert.match(websiteApi, /eligible\.notifyUsers/);
+  assert.match(mobileCreateApi, /eligible\.notifyUsers/);
+  assert.match(websiteApi, /notifyMissingMaterialEvent\(\{service,projectId,sourceEventId:issue\.event_id,kind:issueType==="excess"\?"excess_raised":"raised"/);
+  assert.match(mobileCreateApi, /kind: issueType === "excess" \? "excess_raised" : "raised"/);
 });
 
 test("Excess transfers extend the canonical bundle transfer ledger with atomic quantity reservations", () => {
