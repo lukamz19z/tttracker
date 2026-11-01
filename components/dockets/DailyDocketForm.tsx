@@ -7,6 +7,7 @@ import TowerMemberFields, { type TowerMaterialMember } from "@/components/qualit
 import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
 import {
   resolveSystemUserIdentity,
   type SystemUserIdentity,
@@ -5422,11 +5423,13 @@ const deleteRes = await supabase
             bundle_section: item.bundle_section || null,
             source_table: isManualBolt ? null : item.source_table || null,
             source_record_id: isManualBolt ? null : item.source_record_id || null,
-            material_type: isManualBolt
-              ? "bolt"
-              : item.source_table === "tower_material_members"
-              ? "steel_member"
-              : "other",
+            material_type: normalizeMissingMaterialType({
+              sourceTable: isManualBolt ? "" : item.source_table,
+              sourceRecordId: isManualBolt ? "" : item.source_record_id,
+              linkedType: isManualBolt ? "bolt" : item.source_table === "tower_material_members" ? "steel_member" : "",
+              category: item.material_kind === "manual_bolt" ? "Bolt" : item.manual_category,
+            }),
+            material_category: isManualBolt ? "Bolt" : item.material_kind === "manual" ? item.manual_category.trim() || "Other" : item.source_table === "tower_material_members" ? "Steel" : "Bundle",
             bolt_size: isManualBolt ? item.bolt_size.trim() || null : null,
             item_reference: isManualBolt ? null : item.item_reference.trim() || null,
             item_description:

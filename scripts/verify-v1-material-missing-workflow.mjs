@@ -31,7 +31,8 @@ assert.match(catalogue, /item_type,tower_segment,drawing_number,bolt_diameter,dn
 assert.match(search, /packer_no\.ilike/);
 assert.match(search, /packer_mark\.ilike/);
 assert.match(report, /clean\(row\.item_type\)==="packer"/);
-assert.match(report, /sourceTable==="packer"\?"packer"/);
+assert.match(report, /normalizeMissingMaterialType/);
+assert.match(report, /selectedBolt\?\.item_type/);
 assert.match(missingScreen, /Quantity Received/);
 assert.match(missingScreen, /Delivery \/ Docket Reference/);
 assert.match(missingScreen, /Add delivery or condition notes/);

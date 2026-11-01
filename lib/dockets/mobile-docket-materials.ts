@@ -14,6 +14,7 @@
 // kept out of this file until Batch 2B-2.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
 
 import {
   clean,
@@ -249,12 +250,13 @@ export async function syncMobileDocketMaterialEvents(args: {
         source_table: sourceTable || null,
         source_record_id:
           sourceRecordId || null,
-        material_type: manualBolt
-          ? "bolt"
-          : sourceTable ===
-              "tower_material_members"
-            ? "steel_member"
-            : "other",
+        material_type: normalizeMissingMaterialType({
+          sourceTable: manualBolt ? "" : sourceTable,
+          sourceRecordId: manualBolt ? "" : sourceRecordId,
+          linkedType: manualBolt ? "bolt" : item.material_type,
+          category: manualBolt ? "Bolt" : item.material_category || item.item_description,
+        }),
+        material_category: manualBolt ? "Bolt" : clean(item.material_category) || (clean(item.material_kind) === "manual" ? "Other" : sourceTable.includes("member") ? "Steel" : "Bundle"),
         bolt_size: manualBolt
           ? clean(item.bolt_size) || null
           : null,

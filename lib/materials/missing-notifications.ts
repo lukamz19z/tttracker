@@ -33,7 +33,7 @@ export async function notifyMissingMaterialEvent(args:{service:SupabaseClient;pr
   const actorLabel=await resolveUserDisplayName(service,args.actorUserId);
   const appUsers=new Set(await filterAppNotificationUserIds(service,[...channels.keys()],notificationType,route));
   const item=(event.tower_material_event_items||[])[0]||{},towerLabel=clean(tower?.name||tower?.line)||"Tower",projectLabel=clean(project?.project_number||project?.name);
-  const itemLabel=[item.item_reference||item.item_description,item.specification].map(clean).filter(Boolean).join(" ")||"Material item";
+  const itemLabel=[item.item_reference||[item.material_category,item.item_description].map(clean).filter(Boolean).join(" "),item.specification].map(clean).filter(Boolean).join(" ")||"Material item";
   const total=Number(args.totalQuantity||item.quantity||0),remaining=args.remainingQuantity;
   const due=event.required_by?`${String(event.required_by).slice(8,10)}/${String(event.required_by).slice(5,7)}/${String(event.required_by).slice(0,4)}`:"";
   const urgent=clean(event.urgency).toLowerCase(),severity=["urgent","critical"].includes(urgent)?`${urgent.toUpperCase()} `:"";

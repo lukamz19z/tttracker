@@ -2,6 +2,7 @@ import { QualitySelector, type QualitySelectorOption } from "@/components/qualit
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { useMaterials } from "@/contexts/MaterialsContext";
 import { loadMaterialProjectUsers, type MaterialProjectUser } from "@/lib/api/materials";
+import { normalizeMissingMaterialType } from "@/lib/materials/canonical-material-type";
 import { useLocalSearchParams, router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -30,7 +31,6 @@ export default function ReportMissingMaterialScreen(){
   const [notes,setNotes]=useState("");
   const [towerOpen,setTowerOpen]=useState(false);
   const [itemOpen,setItemOpen]=useState(false);
-  const [categoryOpen,setCategoryOpen]=useState(false);
   const [urgencyOpen,setUrgencyOpen]=useState(false);
   const [assigneeOpen,setAssigneeOpen]=useState(false);
   const [notifyOpen,setNotifyOpen]=useState(false);
@@ -59,7 +59,11 @@ export default function ReportMissingMaterialScreen(){
     setSaving(true);
     try{
       const [sourceTable,sourceRecordId]=itemId?itemId.split(":",2):["",""];
-      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:itemLabel||description.trim(),description:description.trim(),quantity:Number(quantity),unit:unit.trim()||"ea",category,specification:specification.trim()||undefined,sourceTable:sourceTable?`tower_${sourceTable==='member'?'material_members':sourceTable==='bolt'||sourceTable==='packer'?'material_bolts':'required_bundles'}`:undefined,sourceRecordId:sourceRecordId||undefined,materialType:sourceTable==="packer"?"packer":category.toLowerCase(),boltSize:sourceTable==="bolt"?itemLabel:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:due,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds});
+      const selectedBolt=data?.bolts.find(item=>clean(item.id)===sourceRecordId);
+      const selectedMember=data?.members.find(item=>clean(item.id)===sourceRecordId);
+      const sourceTableName=sourceTable?`tower_${sourceTable==='member'?'material_members':sourceTable==='bolt'||sourceTable==='packer'?'material_bolts':'required_bundles'}`:"";
+      const materialType=normalizeMissingMaterialType({sourceTable:sourceTableName,sourceRecordId,linkedType:sourceTable==="member"?"steel_member":selectedBolt?.item_type||"bolt",category});
+      await reportMissingMaterial({towerId,clientMutationId:mutationId(),itemReference:itemLabel||description.trim(),description:description.trim(),quantity:Number(quantity),unit:unit.trim()||"ea",category:category.trim()||"Other",specification:specification.trim()||undefined,sourceTable:sourceTableName||undefined,sourceRecordId:sourceRecordId||undefined,materialType,boltSize:sourceTable==="bolt"?itemLabel:undefined,segment:segment.trim()||undefined,memberNumber:member?.trim()||selectedMember?.mark_no||undefined,drawingNumber:drawing.trim()||undefined,urgency,requiredBy:due,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds});
       Alert.alert(online?"Missing material reported":"Saved for sync",online?"It is now linked to the tower and will appear in Materials and the next Daily Docket.":"The report is safely queued and will sync when connected.");
       router.back();
     }catch(error){Alert.alert("Could not report material",error instanceof Error?error.message:"Please retry.");}
@@ -69,7 +73,7 @@ export default function ReportMissingMaterialScreen(){
     <Text style={styles.label}>Tower *</Text><Pressable style={styles.selector} onPress={()=>setTowerOpen(true)}><Text style={styles.value}>{towerName(towerId)||"Choose tower"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
     <Text style={styles.label}>Find existing material</Text><Pressable style={styles.selector} onPress={()=>setItemOpen(true)}><Text style={styles.value}>{itemLabel||"Search bundle, member or bolt"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
     <Text style={styles.label}>Or add other material</Text><TextInput value={description} onChangeText={setDescription} placeholder="e.g. Grid mesh – Bottom Crossarm" style={styles.input}/>
-    <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Category</Text><Pressable style={styles.selector} onPress={()=>setCategoryOpen(true)}><Text style={styles.value}>{category}</Text><ChevronDown size={16} color="#64748b"/></Pressable></View><View style={styles.grow}><Text style={styles.label}>Quantity</Text><TextInput value={quantity} onChangeText={setQuantity} keyboardType="decimal-pad" style={styles.input}/></View></View>
+    <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Material Category</Text><TextInput value={category} onChangeText={setCategory} placeholder="e.g. Grid Mesh, Special Bracket" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Quantity</Text><TextInput value={quantity} onChangeText={setQuantity} keyboardType="decimal-pad" style={styles.input}/></View></View>
     <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Specification</Text><TextInput value={specification} onChangeText={setSpecification} placeholder="Size / spec" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Unit</Text><TextInput value={unit} onChangeText={setUnit} style={styles.input}/></View></View>
     <Text style={styles.label}>Segment / location</Text><TextInput value={segment} onChangeText={setSegment} placeholder="Optional" style={styles.input}/>
     <View style={styles.two}><View style={styles.grow}><Text style={styles.label}>Member</Text><TextInput value={member} onChangeText={setMember} placeholder="Optional" style={styles.input}/></View><View style={styles.grow}><Text style={styles.label}>Drawing</Text><TextInput value={drawing} onChangeText={setDrawing} placeholder="Optional" style={styles.input}/></View></View>
@@ -80,7 +84,6 @@ export default function ReportMissingMaterialScreen(){
     <Pressable disabled={saving} onPress={()=>void submit()} style={styles.save}><Save size={17} color="#fff"/><Text style={styles.saveText}>{saving?"Saving…":online?"Report Missing":"Save Pending Sync"}</Text></Pressable>
     <QualitySelector visible={towerOpen} title="Choose tower" options={towerOptions} onClose={()=>setTowerOpen(false)} onSelect={row=>{setTowerId(row.id);setTowerOpen(false);}}/>
     <QualitySelector visible={itemOpen} title="Search tower materials" options={itemOptions} onClose={()=>setItemOpen(false)} onSelect={row=>{setItemId(row.id);setItemLabel(row.label);setDescription(row.label);const selectedPacker=row.id.startsWith("packer:");const selectedBolt=data?.bolts.find(item=>clean(item.id)===row.id.split(":")[1]);const selectedMember=data?.members.find(item=>clean(item.id)===row.id.split(":")[1]);setSpecification(selectedPacker?[clean(selectedBolt?.bolt_diameter),clean(selectedBolt?.packer_no)].filter(Boolean).join(" mm "):row.subtitle||"");setSegment(clean(selectedPacker?selectedBolt?.tower_segment:selectedMember?.tower_segment||selectedMember?.section)||segment);setDrawing(clean(selectedPacker?selectedBolt?.drawing_number:selectedMember?.drawing_number)||drawing);setMember(clean(selectedMember?.mark_no)||member);setCategory(row.id.startsWith("member:")?"Steel":selectedPacker?"Packer":row.id.startsWith("bolt:")?"Bolt":"Bundle");}}/>
-    <QualitySelector visible={categoryOpen} title="Material category" options={["Steel","Bolt","Packer","Mesh","Fitting","Consumable","Other"].map(value=>({id:value,label:value}))} onClose={()=>setCategoryOpen(false)} onSelect={row=>setCategory(row.id)}/>
     <QualitySelector visible={urgencyOpen} title="Urgency" options={["Normal","Urgent","Critical"].map(value=>({id:value,label:value}))} onClose={()=>setUrgencyOpen(false)} onSelect={row=>setUrgency(row.id)}/>
     <QualitySelector visible={assigneeOpen} title="Assign to" options={[{id:"",label:"Not assigned"},...projectUsers.map(user=>({id:user.id,label:user.name,subtitle:user.role}))]} onClose={()=>setAssigneeOpen(false)} onSelect={row=>setAssignedToUserId(row.id)}/>
     <QualitySelector visible={notifyOpen} title="Notify an additional person" options={projectUsers.filter(user=>user.id!==assignedToUserId).map(user=>({id:user.id,label:`${notifyUserIds.includes(user.id)?"✓ ":""}${user.name}`,subtitle:user.role}))} onClose={()=>setNotifyOpen(false)} onSelect={row=>setNotifyUserIds(ids=>ids.includes(row.id)?ids.filter(id=>id!==row.id):[...ids,row.id])}/>

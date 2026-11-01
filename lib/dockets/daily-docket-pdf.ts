@@ -247,20 +247,10 @@ function overallProgressForTower(data: DailyDocketPdfData, towerId: string) {
     hasBodyExtension: hasBodyExtensionForRows(model, rows),
   });
 }
-function allocationManhours(row: Row) {
-  const workers = Array.isArray(row.worker_names) ? row.worker_names.length : 0;
-  return number(row.hours) * Math.max(workers, 1);
-}
 function productionAllocations(data: DailyDocketPdfData) {
   return (data.hourAllocations || []).filter(
     row => text(row.allocation_type).trim().toLowerCase() === "production",
   );
-}
-function revisionAllocations(data: DailyDocketPdfData) {
-  return (data.hourAllocations || []).filter(row => {
-    const type = text(row.allocation_type).trim().toLowerCase();
-    return !type || type === "revision";
-  });
 }
 function towerDisplayName(data: DailyDocketPdfData, towerId: string) {
   if (!towerId) return "Tower";
@@ -588,7 +578,6 @@ function towerName(data: DailyDocketPdfData) {
 export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const pageWidth = 210;
-  const pageHeight = 297;
   const margin = 13;
   const contentWidth = pageWidth - margin * 2;
   const footerTop = 283;
@@ -607,10 +596,6 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
       durationMinutes: mobilisationForCalc.hours * 60,
       workerNames: mobilisationForCalc.workers,
     },
-  );
-  const revisionMh = revisionAllocations(data).reduce(
-    (sum, row) => sum + allocationManhours(row),
-    0,
   );
   const materialEvents = selectedMaterialEvents(data, visible);
   const bundleTransfers = data.bundleTransfers || [];
@@ -1143,7 +1128,8 @@ export function generateDailyDocketPdf(data: DailyDocketPdfData): Uint8Array {
                   ? `Missing ${snapshot.originalQty} · Delivered ${snapshot.deliveredQty} · Remaining ${snapshot.remainingQty} · ${snapshot.status}`
                   : "";
                 return [
-                  titleCase(item.material_type),
+                  text(item.material_category) || titleCase(item.material_type),
+                  text(item.specification),
                   text(item.item_description),
                   text(item.drawing_number)
                     ? `Drawing ${text(item.drawing_number)}`

@@ -256,6 +256,8 @@ type MaterialEventItem = {
   source_table?: string | null;
   source_record_id?: string | null;
   material_type?: string | null;
+  material_category?: string | null;
+  specification?: string | null;
   bolt_size?: string | null;
   item_reference?: string | null;
   item_description?: string | null;
@@ -1624,6 +1626,8 @@ function useMaterialsData(projectId: string, towerId: string) {
               source_table,
               source_record_id,
               material_type,
+              material_category,
+              specification,
               bolt_size,
               item_reference,
               item_description,
@@ -4295,7 +4299,7 @@ function MaterialEventCard({ event, data, tone }: { event: MaterialEvent; data: 
             <div className="min-w-0">
               <div className="font-black text-slate-950">{itemDisplayReference(item)}</div>
               <div className="mt-0.5 text-xs text-slate-500">
-                {item.bundle_no ? `Bundle ${item.bundle_no}${item.bundle_section ? ` · ${item.bundle_section}` : ""}` : item.item_description || item.material_type || "—"}
+                {item.bundle_no ? `Bundle ${item.bundle_no}${item.bundle_section ? ` · ${item.bundle_section}` : ""}` : [item.material_category, item.specification, item.item_description || (item.material_category ? "" : item.material_type)].filter(Boolean).join(" · ") || "—"}
               </div>
               {item.bundle_no && item.item_description && <div className="mt-0.5 text-xs text-slate-500">{item.item_description}</div>}
             </div>

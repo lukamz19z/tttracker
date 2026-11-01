@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
+import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,9 @@ export async function POST(request: NextRequest) {
       p_item: {
         sourceTable: clean(body.sourceTable) || null,
         sourceRecordId: clean(body.sourceRecordId) || null,
-        materialType: clean(body.materialType) || null,
+        // Legacy clients sent the display category here (for example "steel").
+        // Normalize at the API boundary; the configured category is separate.
+        materialType: normalizeMissingMaterialType({sourceTable:body.sourceTable,sourceRecordId:body.sourceRecordId,linkedType:body.materialType,category:body.category}),
         boltSize: clean(body.boltSize) || null,
         itemReference: clean(body.itemReference) || description,
         description,
@@ -69,6 +72,9 @@ export async function POST(request: NextRequest) {
     await notifyMissingMaterialEvent({ service, projectId, sourceEventId: issue.event_id, kind: "raised", actorUserId: identity.userId });
     return NextResponse.json({ ok: true, issue });
   } catch (error) {
+    if (error instanceof Error && /tower_material_event_items_material_type_check/.test(error.message)) {
+      return NextResponse.json({ error: "This material category could not be saved. The report is still available to retry; refresh Materials and try again." }, { status: 400 });
+    }
     const apiError = mobileApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
   }
