@@ -5,7 +5,7 @@ import { createRequestResilientFetch } from "./backend-resilience";
 
 export async function createSupabaseServer() {
   const cookieStore = await cookies();
-  const requestFetch = createRequestResilientFetch();
+  const requestFetch = createRequestResilientFetch({ circuitBreaker: false });
 
   return createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
     global: { fetch: requestFetch },

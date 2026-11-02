@@ -40,7 +40,7 @@ export async function proxy(request: NextRequest) {
     supabaseUrl,
     supabaseAnonKey,
     {
-      global: { fetch: createRequestResilientFetch() },
+      global: { fetch: createRequestResilientFetch({ circuitBreaker: false }) },
       cookies: {
         getAll() {
           return request.cookies.getAll();

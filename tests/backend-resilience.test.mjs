@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   BackendResilience,
-  BackendUnavailableError,
+  BackendRequestTimeoutError,
   classifyBackendFailure,
   createRequestResilientFetch,
   retryDelayMs,
@@ -16,7 +16,7 @@ test("classifies only transient gateway, PostgREST outage and network failures",
     assert.equal(classifyBackendFailure({ code, message: "PostgREST unavailable" }).transient, true);
   }
   assert.equal(classifyBackendFailure(new TypeError("Failed to fetch")).transient, true);
-  assert.equal(classifyBackendFailure(new BackendUnavailableError()).transient, true);
+  assert.equal(classifyBackendFailure(new BackendRequestTimeoutError(1000)).transient, true);
   for (const status of [400, 401, 403, 404]) assert.equal(classifyBackendFailure({ status }).transient, false);
   assert.equal(classifyBackendFailure({ status: 401, message: "fetch failed" }).transient, false);
   assert.equal(classifyBackendFailure({ status: 403, message: "timeout" }).transient, false);
@@ -69,7 +69,7 @@ test("healthy requests and one 503 followed by success never open the circuit", 
   assert.equal(policy.circuitOpen, false);
 });
 
-test("three separate transient request failures open a circuit; one real recovery request closes it", async () => {
+test("three separate transient failures open a client circuit without throwing a global outage error", async () => {
   let calls = 0;
   let now = 10_000;
   let recovered = 0;
@@ -86,7 +86,9 @@ test("three separate transient request failures open a circuit; one real recover
   await policy.fetch("https://example.test/read");
   assert.equal(policy.circuitOpen, true);
   const callsWhileOpen = calls;
-  await assert.rejects(policy.fetch("https://example.test/read"), BackendUnavailableError);
+  const deferred = await policy.fetch("https://example.test/read");
+  assert.equal(deferred.status, 503);
+  assert.equal(deferred.headers.get("x-tttracker-transient-failure"), "circuit-open");
   assert.equal(calls, callsWhileOpen);
   now += 21_000;
   policy["fetchImpl"] = async () => { calls++; return new Response("ok", { status: 200 }); };
@@ -123,17 +125,96 @@ test("an optional endpoint circuit does not block unrelated project data", async
   assert.equal((await policy.fetch("https://example.test/rest/v1/towers")).status, 200);
 });
 
-test("Next server request clients keep circuit state isolated between users", async () => {
+test("Next server request clients have no circuit and do not block the next request", async () => {
   const makeFetch = () => createRequestResilientFetch({
     fetchImpl: async () => new Response("unavailable", { status: 503 }),
     sleep: async () => {},
     log: () => {},
+    circuitBreaker: false,
   });
   const userA = makeFetch();
-  const userB = createRequestResilientFetch({ fetchImpl: async () => new Response("ok", { status: 200 }), log: () => {} });
-  for (let n = 0; n < 3; n++) await userA("https://example.test/rest/v1/projects");
-  await assert.rejects(userA("https://example.test/rest/v1/projects"), BackendUnavailableError);
+  let userBCalls = 0;
+  const userB = createRequestResilientFetch({ fetchImpl: async () => { userBCalls++; return new Response("ok", { status: 200 }); }, log: () => {}, circuitBreaker: false });
+  for (let n = 0; n < 4; n++) assert.equal((await userA("https://example.test/rest/v1/projects")).status, 503);
   assert.equal((await userB("https://example.test/rest/v1/projects")).status, 200);
+  assert.equal(userBCalls, 1);
+});
+
+test("exhausted network reads preserve the original thrown error", async () => {
+  const original = new TypeError("fetch failed");
+  const policy = new BackendResilience({ fetchImpl: async () => { throw original; }, sleep: async () => {}, log: () => {} });
+  await assert.rejects(policy.fetch("https://example.test/read"), (error) => error === original);
+});
+
+test("PGRST002 exhausted optional read stays a local response failure", async () => {
+  const policy = new BackendResilience({
+    fetchImpl: async () => new Response(JSON.stringify({ code: "PGRST002", message: "schema cache unavailable" }), { status: 500 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  const response = await policy.fetch("https://example.test/rest/v1/notifications");
+  assert.equal(response.status, 500);
+  assert.equal((await response.json()).code, "PGRST002");
+  assert.equal(policy.circuitOpen, false);
+});
+
+test("server mode leaves circuit state disabled and the following request recovers", async () => {
+  let calls = 0;
+  const fetch = createRequestResilientFetch({
+    circuitBreaker: false,
+    fetchImpl: async () => ++calls <= 4 ? new Response("temporary", { status: 503 }) : new Response("ok", { status: 200 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  assert.equal((await fetch("https://example.test/rest/v1/projects")).status, 503);
+  assert.equal((await fetch("https://example.test/rest/v1/projects")).status, 200);
+  assert.equal(calls, 5);
+});
+
+test("optional notification failure does not prevent a healthy towers request", async () => {
+  const policy = new BackendResilience({
+    fetchImpl: async (input) => String(input).includes("notifications") ? new Response("down", { status: 503 }) : new Response("ok", { status: 200 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  const notifications = await policy.fetch("https://example.test/rest/v1/notifications");
+  const towers = await policy.fetch("https://example.test/rest/v1/towers");
+  assert.equal(notifications.status, 503);
+  assert.equal(towers.status, 200);
+});
+
+test("critical website bootstrap handles transient session verification locally", () => {
+  const layout = fs.readFileSync(path.resolve("app/(protected)/layout.tsx"), "utf8");
+  assert.match(layout, /if \(!user\)[\s\S]*?if \(error && isTransientBackendFailure\(error\)\)[\s\S]*?return <main/);
+  assert.match(layout, /redirect\("\/login"\)/);
+  assert.doesNotMatch(layout, /BackendUnavailableError/);
+  const provider = fs.readFileSync(path.resolve("components/access/access-provider.tsx"), "utf8");
+  assert.match(provider, /keeping the current access snapshot/);
+  assert.match(provider, /finally \{[\s\S]*?setLoading\(false\)/);
+});
+
+test("timeout is reported as timeout rather than backend unavailable", async () => {
+  const policy = new BackendResilience({
+    fetchImpl: (_input, init) => new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(new TypeError("fetch failed")), { once: true });
+    }),
+    timeoutMs: 5,
+    sleep: async () => {},
+    log: () => {},
+  });
+  await assert.rejects(policy.fetch("https://example.test/hang"), BackendRequestTimeoutError);
+});
+
+test("server request-local fetch does not retain failure state between invocations", async () => {
+  let calls = 0;
+  const serverFetch = createRequestResilientFetch({
+    circuitBreaker: false,
+    fetchImpl: async () => ++calls <= 4 ? new Response("down", { status: 503 }) : new Response("ok", { status: 200 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  assert.equal((await serverFetch("https://example.test/rest/v1/projects")).status, 503);
+  assert.equal((await serverFetch("https://example.test/rest/v1/projects")).status, 200);
 });
 
 test("unsafe mutations are never automatically retried", async () => {
@@ -164,7 +245,7 @@ test("twenty overlapping identical bootstrap reads share one bounded request", a
   assert.deepEqual(await responses[0].json(), { projects: [] });
 });
 
-test("request timeout terminates a hanging request with a recoverable error", async () => {
+test("request timeout terminates a hanging request with timeout metadata", async () => {
   const policy = new BackendResilience({
     fetchImpl: (_input, init) => new Promise((_, reject) => {
       init.signal.addEventListener("abort", () => reject(new TypeError("fetch failed")), { once: true });
@@ -173,7 +254,7 @@ test("request timeout terminates a hanging request with a recoverable error", as
     sleep: async () => {},
     log: () => {},
   });
-  await assert.rejects(policy.fetch("https://example.test/hang"), BackendUnavailableError);
+  await assert.rejects(policy.fetch("https://example.test/hang"), BackendRequestTimeoutError);
 });
 
 test("mobile has one user-notification Realtime channel with deterministic cleanup", () => {
