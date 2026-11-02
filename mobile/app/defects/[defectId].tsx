@@ -1059,7 +1059,9 @@ function DefectDetailContent() {
                   color="#64748b"
                 />
               </Pressable>
+              {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
               <FieldLabel text="Also notify (optional)" />
+              {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
               {edit.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setEdit(current=>current?({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}):null)} style={styles.recipientChip}><Text style={styles.recipientChipText}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
               <Pressable style={styles.selector} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>{edit.notifyUserIds.length?`${edit.notifyUserIds.length} additional recipient${edit.notifyUserIds.length===1?"":"s"}`:"Choose people"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 

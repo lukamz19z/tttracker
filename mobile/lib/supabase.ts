@@ -27,11 +27,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 });
 
 if (Platform.OS !== "web") {
+  let previousState = AppState.currentState;
+  if (previousState === "active") supabase.auth.startAutoRefresh();
+
   AppState.addEventListener("change", (state) => {
-    if (state === "active") {
-      supabase.auth.startAutoRefresh();
-    } else {
-      supabase.auth.stopAutoRefresh();
-    }
+    if (state === previousState) return;
+    previousState = state;
+    if (state === "active") supabase.auth.startAutoRefresh();
+    else supabase.auth.stopAutoRefresh();
   });
 }

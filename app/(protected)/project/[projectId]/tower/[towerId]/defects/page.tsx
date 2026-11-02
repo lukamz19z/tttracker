@@ -21,8 +21,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import DefectNotificationManager from "@/components/quality/DefectNotificationManager";
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
@@ -178,6 +178,8 @@ function statusClasses(value: DefectRow["status"]) {
 
 export default function TowerDefectsPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
+  const openedNotificationDefect = useRef("");
   const projectId = params.projectId as string;
   const towerId = params.towerId as string;
   const supabase = useMemo(() => createSupabaseBrowser(), []);
@@ -702,7 +704,7 @@ export default function TowerDefectsPage() {
     }
   }
 
-  async function openActions(row: DefectRow) {
+  const openActions = useCallback(async (row: DefectRow) => {
     const { data, error } = await supabase
       .from("defect_actions")
       .select("*")
@@ -715,7 +717,16 @@ export default function TowerDefectsPage() {
     setActionsDefect(row);
     setActions((data ?? []) as DefectAction[]);
     setNewAction("");
-  }
+  }, [supabase]);
+
+  useEffect(() => {
+    const requestedId = String(searchParams.get("defectId") || searchParams.get("defect_id") || "").trim();
+    if (!requestedId || openedNotificationDefect.current === requestedId) return;
+    const row = rows.find((item) => item.id === requestedId);
+    if (!row) return;
+    openedNotificationDefect.current = requestedId;
+    void openActions(row);
+  }, [openActions, rows, searchParams]);
 
   async function addAction() {
     if (!actionsDefect || !newAction.trim()) return;
@@ -1033,13 +1044,14 @@ export default function TowerDefectsPage() {
                     </option>
                   ))}
                 </select>
+                {assigneeOptions.length === 0 ? <p className="mt-1 text-xs text-amber-700">No Defect users configured</p> : null}
               </Field>
               <Field label="Responsibility"><input value={form.responsibility} onChange={(event) => setForm((current) => ({ ...current, responsibility: event.target.value }))} placeholder="BC / UGL / Supplier / Client" className="input" /></Field>
               <Field label="Client / RFI reference"><input value={form.client_reference} onChange={(event) => setForm((current) => ({ ...current, client_reference: event.target.value }))} placeholder="Optional" className="input" /></Field>
               <Field label="Photos"><input type="file" multiple accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" onChange={(event) => setForm((current) => ({ ...current, files: Array.from(event.target.files ?? []) }))} className="input" /></Field>
             </div>
             <div className="mt-3"><Field label="Urgency / impact note"><input value={form.urgency_note} onChange={event=>setForm(current=>({...current,urgency_note:event.target.value}))} placeholder="What work is at risk?" className="input"/></Field></div>
-            <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary><div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==form.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.notify_user_ids.includes(user.id)} onChange={event=>setForm(current=>({...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}))}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
+            <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary>{assigneeOptions.length===0?<p className="mt-2 text-xs text-amber-700">No Defect users configured</p>:null}<div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==form.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.notify_user_ids.includes(user.id)} onChange={event=>setForm(current=>({...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}))}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
             <div className="mt-3"><Field label="Defect description"><textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={4} placeholder="Describe what was identified and where." className="input" /></Field></div>
             <div className="mt-4 flex justify-end"><button type="button" onClick={() => void saveDefect()} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} Save Defect</button></div>
           </div>
@@ -1188,13 +1200,14 @@ export default function TowerDefectsPage() {
                   </option>
                 ))}
               </select>
+              {assigneeOptions.length === 0 ? <p className="mt-1 text-xs text-amber-700">No Defect users configured</p> : null}
             </Field>
             <Field label="Responsibility"><input value={editDraft.responsibility} onChange={(event) => setEditDraft((current) => current ? { ...current, responsibility: event.target.value } : current)} className="input" /></Field>
             <Field label="Client / RFI reference"><input value={editDraft.client_reference} onChange={(event) => setEditDraft((current) => current ? { ...current, client_reference: event.target.value } : current)} className="input" /></Field>
           </div>
           <div className="mt-3"><Field label="Description"><textarea rows={4} value={editDraft.description} onChange={(event) => setEditDraft((current) => current ? { ...current, description: event.target.value } : current)} className="input" /></Field></div>
           <div className="mt-3"><Field label="Urgency / impact note"><textarea rows={2} value={editDraft.urgency_note} onChange={event=>setEditDraft(current=>current?{...current,urgency_note:event.target.value}:current)} className="input"/></Field></div>
-          <details className="mt-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary><div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==editDraft.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editDraft.notify_user_ids.includes(user.id)} onChange={event=>setEditDraft(current=>current?{...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}:current)}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
+          <details className="mt-3 rounded-xl border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-bold text-slate-600">Also notify (optional)</summary>{assigneeOptions.length===0?<p className="mt-2 text-xs text-amber-700">No Defect users configured</p>:null}<div className="mt-2 grid max-h-36 gap-2 overflow-auto sm:grid-cols-2">{assigneeOptions.filter(user=>user.id!==editDraft.assigned_to_user_id).map(user=><label key={user.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editDraft.notify_user_ids.includes(user.id)} onChange={event=>setEditDraft(current=>current?{...current,notify_user_ids:event.target.checked?[...current.notify_user_ids,user.id]:current.notify_user_ids.filter(id=>id!==user.id)}:current)}/><span>{user.name} <span className="text-xs text-slate-400">{user.role}</span></span></label>)}</div></details>
           <div className="mt-3"><Field label="Resolution / close-out notes"><textarea rows={3} value={editDraft.resolution_notes} onChange={(event) => setEditDraft((current) => current ? { ...current, resolution_notes: event.target.value } : current)} className="input" /></Field></div>
           <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditDraft(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold">Cancel</button><button type="button" onClick={() => void saveEdit()} disabled={editSaving} className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{editSaving ? "Saving…" : "Save Changes"}</button></div>
         </Modal>

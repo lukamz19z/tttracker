@@ -14,13 +14,11 @@ function clean(value: unknown) {
   return String(value ?? "").trim();
 }
 
-async function availableProjectUsers(
+async function projectUsers(
   service: Awaited<ReturnType<typeof requireQualityUser>>["service"],
   projectId: string,
-  currentUserId: string,
 ) {
-  const [{ data: accessRows }, { data: roleRows }, { data: ruleRows }] =
-    await Promise.all([
+  const [{ data: accessRows, error: accessError }, { data: roleRows, error: roleError }] = await Promise.all([
       service
         .from("project_access")
         .select("user_id")
@@ -28,11 +26,8 @@ async function availableProjectUsers(
       service
         .from("user_roles")
         .select("user_id,role"),
-      service
-        .from("project_defect_notification_rules")
-        .select("user_id")
-        .eq("project_id", projectId),
     ]);
+  if (accessError || roleError) throw new Error(accessError?.message || roleError?.message);
 
   const roleMap = new Map(
     (roleRows ?? []).map((row) => [
@@ -41,23 +36,9 @@ async function availableProjectUsers(
     ]),
   );
 
-  const ids = new Set<string>([currentUserId]);
+  const ids = new Set<string>();
 
   for (const row of accessRows ?? []) {
-    if (row.user_id) ids.add(String(row.user_id));
-  }
-
-  for (const row of roleRows ?? []) {
-    const role = clean(row.role).toLowerCase();
-    if (
-      ["admin", "administrator", "site_admin"].includes(role) &&
-      row.user_id
-    ) {
-      ids.add(String(row.user_id));
-    }
-  }
-
-  for (const row of ruleRows ?? []) {
     if (row.user_id) ids.add(String(row.user_id));
   }
 
@@ -84,8 +65,9 @@ async function availableProjectUsers(
     role: string;
   }> = [];
 
-  for (const userId of userIds) {
-    const { data } = await service.auth.admin.getUserById(userId);
+  const identities = await Promise.all(userIds.map(async (userId) => ({ userId, response: await service.auth.admin.getUserById(userId) })));
+  for (const { userId, response } of identities) {
+    const { data } = response;
     if (!data.user) continue;
 
     const name =
@@ -128,23 +110,22 @@ export async function GET(request: Request) {
       projectId,
     });
 
-    const [{ data: rules, error: ruleError }, users] = await Promise.all([
+    const [{ data: rules, error: ruleError }, projectUserOptions] = await Promise.all([
       service
         .from("project_defect_notification_rules")
         .select(
-          "id,project_id,user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,notify_assignment,receives_email,receives_in_app,receives_push,active,created_at,updated_at",
+          "id,project_id,user_id,notify_new,notify_status_change,notify_action,notify_closed,notify_critical,notify_assignment,receives_email,receives_in_app,receives_push,active,available_for_selection,created_at,updated_at",
         )
         .eq("project_id", projectId)
         .order("created_at"),
-      availableProjectUsers(service, projectId, user.id),
+      projectUsers(service, projectId),
     ]);
 
     if (ruleError) throw new Error(ruleError.message);
 
-    return NextResponse.json({
-      users,
-      rules: rules ?? [],
-    });
+    const selectedIds = new Set((rules ?? []).filter((rule) => rule.available_for_selection).map((rule) => String(rule.user_id)));
+    const users = projectUserOptions.filter((option) => selectedIds.has(option.id));
+    return NextResponse.json({ users, projectUsers: projectUserOptions, rules: rules ?? [] });
   } catch (error) {
     const apiError = qualityApiError(error);
     return NextResponse.json(
@@ -170,6 +151,7 @@ export async function PUT(request: Request) {
       receivesInApp?: boolean;
       receivesPush?: boolean;
       active?: boolean;
+      availableForSelection?: boolean;
     };
 
     const projectId = clean(body.projectId);
@@ -189,6 +171,15 @@ export async function PUT(request: Request) {
       projectId,
     });
 
+    const { data: membership, error: membershipError } = await service
+      .from("project_access")
+      .select("user_id")
+      .eq("project_id", projectId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (membershipError) throw new Error(membershipError.message);
+    if (!membership) return NextResponse.json({ error: "Select a user who belongs to this project." }, { status: 400 });
+
     const payload = {
       project_id: projectId,
       user_id: userId,
@@ -202,6 +193,7 @@ export async function PUT(request: Request) {
       receives_in_app: body.receivesInApp !== false,
       receives_push: body.receivesPush === true,
       active: body.active !== false,
+      available_for_selection: body.availableForSelection !== false,
       created_by: user.id,
     };
 
@@ -250,7 +242,7 @@ export async function DELETE(request: Request) {
 
     const { error } = await service
       .from("project_defect_notification_rules")
-      .delete()
+      .update({ available_for_selection: false })
       .eq("project_id", projectId)
       .eq("user_id", targetUserId);
 

@@ -106,12 +106,20 @@ export function MaterialsShell({
   children,
   root = false,
   items,
+  onNearEnd,
+  footer,
+  onRefresh,
+  refreshingOverride,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   root?: boolean;
   items?: ReactNode[];
+  onNearEnd?: () => void;
+  footer?: ReactNode;
+  onRefresh?: () => void;
+  refreshingOverride?: boolean;
 }) {
   const { refreshing, refresh, cachedAt, error, pendingSyncCount } = useMaterials();
   const { profile } = useAuth();
@@ -161,7 +169,7 @@ export function MaterialsShell({
       style={styles.safe}
       edges={["top", "left", "right"]}
     >
-      {items ? <FlatList data={items} keyExtractor={(_, index) => String(index)} renderItem={({ item }) => <>{item}</>} ListHeaderComponent={header} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5} /> : <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]}>{header}</ScrollView>}
+      {items ? <FlatList data={items} keyExtractor={(_, index) => String(index)} renderItem={({ item }) => <>{item}</>} ListHeaderComponent={header} ListFooterComponent={footer ? <>{footer}</> : null} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]} refreshControl={<RefreshControl refreshing={refreshingOverride ?? refreshing} onRefresh={() => onRefresh ? onRefresh() : void refresh()} />} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5} onEndReached={onNearEnd} onEndReachedThreshold={0.45} /> : <ScrollView refreshControl={<RefreshControl refreshing={refreshingOverride ?? refreshing} onRefresh={() => onRefresh ? onRefresh() : void refresh()} />} onScroll={onNearEnd ? ({ nativeEvent }) => { const remaining = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y; if (remaining < 420) onNearEnd(); } : undefined} scrollEventThrottle={300} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]}>{header}</ScrollView>}
     </SafeAreaView>
   );
 }

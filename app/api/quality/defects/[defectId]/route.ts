@@ -165,7 +165,7 @@ export async function PATCH(
     const notifyUserIds = body.notifyUserIds === undefined
       ? (Array.isArray(current.notify_user_ids) ? current.notify_user_ids as string[] : [])
       : cleanDefectRecipientIds(body.notifyUserIds);
-    await assertProjectDefectRecipients(service,current.project_id,[...notifyUserIds,...(nextAssignedUserId?[nextAssignedUserId]:[])]);
+    await assertProjectDefectRecipients(service,current.project_id,[...notifyUserIds,...(nextAssignedUserId?[nextAssignedUserId]:[])],[...(Array.isArray(current.notify_user_ids)?current.notify_user_ids:[]),...(current.assigned_to_user_id?[current.assigned_to_user_id]:[])]);
 
     const nextStatus =
       body.status === undefined ? current.status : body.status;

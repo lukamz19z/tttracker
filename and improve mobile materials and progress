@@ -1,0 +1,26 @@
+warning: in the working copy of 'app/(protected)/project/[projectId]/tower/[towerId]/defects/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/api/quality/defects/[defectId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'lib/quality/defect-recipients.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'mobile/app/defects/[defectId].tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'mobile/types/daily-dockets.ts', LF will be replaced by CRLF the next time Git touches it
+app/(protected)/project/[projectId]/tower/[towerId]/defects/page.tsx
+app/api/mobile/materials/bootstrap/route.ts
+app/api/mobile/tower-progress/route.ts
+app/api/quality/defects/[defectId]/route.ts
+app/api/quality/defects/notification-settings/route.ts
+components/quality/DefectNotificationManager.tsx
+lib/dockets/mobile-progress-context.ts
+lib/dockets/tower-progress.ts
+lib/quality/defect-notifications.ts
+lib/quality/defect-recipients.ts
+mobile/app/(drawer)/tower-progress.tsx
+mobile/app/defects/[defectId].tsx
+mobile/app/defects/new.tsx
+mobile/app/materials/bundles.tsx
+mobile/components/materials/MaterialLiveSearch.tsx
+mobile/components/materials/MaterialsShell.tsx
+mobile/components/quality/QualityEvidenceGallery.tsx
+mobile/contexts/AuthContext.tsx
+mobile/lib/api/materials.ts
+mobile/lib/supabase.ts
+mobile/types/daily-dockets.ts

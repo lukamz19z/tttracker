@@ -488,6 +488,7 @@ function NewDefectContent() {
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
       <Text style={styles.label}>Also notify (optional)</Text>
+      {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
       {form.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setForm(current=>({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}))} style={styles.notifyChip}><Text style={{fontSize:12,fontWeight:"700",color:"#334155"}}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
       <Pressable style={[styles.selector,{minHeight:40}]} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>Add person to notify</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 
@@ -570,6 +571,7 @@ function NewDefectContent() {
         </Text>
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
+      {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
 
       <Text style={styles.label}>Responsibility</Text>
       <TextInput

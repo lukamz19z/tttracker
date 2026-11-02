@@ -37,6 +37,7 @@ type RuleRow = {
   receives_in_app: boolean;
   receives_push: boolean;
   active: boolean;
+  available_for_selection: boolean;
 };
 
 type DraftRule = RuleRow & {
@@ -63,8 +64,10 @@ export default function DefectNotificationManager({
   onChanged,
 }: Props) {
   const [users, setUsers] = useState<UserOption[]>([]);
+  const [projectUsers, setProjectUsers] = useState<UserOption[]>([]);
   const [rules, setRules] = useState<DraftRule[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
+  const [userSearch, setUserSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -82,6 +85,7 @@ export default function DefectNotificationManager({
       );
       const payload = (await response.json()) as {
         users?: UserOption[];
+        projectUsers?: UserOption[];
         rules?: RuleRow[];
         error?: string;
       };
@@ -93,6 +97,7 @@ export default function DefectNotificationManager({
       }
 
       setUsers(payload.users ?? []);
+      setProjectUsers(payload.projectUsers ?? []);
       setRules((payload.rules ?? []).map((rule) => ({ ...rule })));
       const optionsResponse=await apiFetch(`/api/quality/defects/options?projectId=${encodeURIComponent(projectId)}`);
       const options=await optionsResponse.json() as {workImpactOptions?:string[];affectedActivityOptions?:string[]};
@@ -122,18 +127,28 @@ export default function DefectNotificationManager({
   }, [load]);
 
   const ruleUserIds = useMemo(
-    () => new Set(rules.map((rule) => rule.user_id)),
-    [rules],
+    () => new Set(users.map((user) => user.id)),
+    [users],
   );
 
   const availableUsers = useMemo(
-    () => users.filter((user) => !ruleUserIds.has(user.id)),
-    [ruleUserIds, users],
+    () => projectUsers.filter((user) => !ruleUserIds.has(user.id) && `${user.name} ${user.role}`.toLowerCase().includes(userSearch.trim().toLowerCase())),
+    [projectUsers, ruleUserIds, userSearch],
   );
 
   function addRule() {
     const userId = selectedUserId;
     if (!userId) return;
+
+    const existing = rules.find((rule) => rule.user_id === userId);
+    if (existing) {
+      setRules((current) => current.map((rule) => rule.user_id === userId ? { ...rule, available_for_selection: true, dirty: true } : rule));
+      const reselectedUser = projectUsers.find((user) => user.id === userId);
+      if (reselectedUser) setUsers((current) => current.some((user) => user.id === userId) ? current : [...current, reselectedUser].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedUserId("");
+      setMessage("Save the user to add them to the Defect Users pool.");
+      return;
+    }
 
     setRules((current) => [
       ...current,
@@ -141,19 +156,22 @@ export default function DefectNotificationManager({
         id: `new-${userId}`,
         project_id: projectId,
         user_id: userId,
-        notify_new: true,
-        notify_status_change: true,
+        notify_new: false,
+        notify_status_change: false,
         notify_action: false,
-        notify_closed: true,
-        notify_critical: true,
-        notify_assignment: true,
-        receives_email: true,
-        receives_in_app: true,
+        notify_closed: false,
+        notify_critical: false,
+        notify_assignment: false,
+        receives_email: false,
+        receives_in_app: false,
         receives_push: false,
-        active: true,
+        active: false,
+        available_for_selection: true,
         dirty: true,
       },
     ]);
+    const addedUser = projectUsers.find((user) => user.id === userId);
+    if (addedUser) setUsers((current) => current.some((user) => user.id === userId) ? current : [...current, addedUser].sort((a, b) => a.name.localeCompare(b.name)));
     setSelectedUserId("");
   }
 
@@ -193,6 +211,7 @@ export default function DefectNotificationManager({
             receivesInApp: rule.receives_in_app,
             receivesPush: rule.receives_push,
             active: rule.active,
+            availableForSelection: true,
           }),
         },
       );
@@ -215,6 +234,8 @@ export default function DefectNotificationManager({
             : row,
         ),
       );
+      const addedUser = projectUsers.find((user) => user.id === rule.user_id);
+      if (addedUser) setUsers((current) => current.some((user) => user.id === addedUser.id) ? current : [...current, addedUser].sort((a, b) => a.name.localeCompare(b.name)));
 
       setMessage("Defect notification recipient saved.");
       onChanged?.();
@@ -240,9 +261,8 @@ export default function DefectNotificationManager({
     }
 
     if (rule.id.startsWith("new-")) {
-      setRules((current) =>
-        current.filter((row) => row.user_id !== rule.user_id),
-      );
+      setRules((current) => current.filter((row) => row.user_id !== rule.user_id));
+      setUsers((current) => current.filter((user) => user.id !== rule.user_id));
       return;
     }
 
@@ -273,8 +293,9 @@ export default function DefectNotificationManager({
       }
 
       setRules((current) =>
-        current.filter((row) => row.user_id !== rule.user_id),
+        current.map((row) => row.user_id === rule.user_id ? { ...row, available_for_selection: false } : row),
       );
+      setUsers((current) => current.filter((user) => user.id !== rule.user_id));
       setMessage("Defect notification recipient removed.");
       onChanged?.();
     } catch (error) {
@@ -332,8 +353,9 @@ export default function DefectNotificationManager({
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                   <label>
                     <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
-                      Add project user
+                      Defect Users · Add project user
                     </span>
+                    <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Search name or role" className="mb-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm" />
                     <select
                       value={selectedUserId}
                       onChange={(event) =>
@@ -344,7 +366,7 @@ export default function DefectNotificationManager({
                       <option value="">Select user...</option>
                       {availableUsers.map((user) => (
                         <option key={user.id} value={user.id}>
-                          {user.name}
+                          {user.name} · {roleLabel(user.role)}
 
                         </option>
                       ))}
@@ -358,7 +380,7 @@ export default function DefectNotificationManager({
                     className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
                   >
                     <Plus size={16} />
-                    Add Recipient
+                    Add User
                   </button>
                 </div>
               </div>
@@ -399,7 +421,7 @@ export default function DefectNotificationManager({
                     </tr>
                   </thead>
                   <tbody>
-                    {rules.length === 0 ? (
+                    {rules.filter((rule) => users.some((user) => user.id === rule.user_id)).length === 0 ? (
                       <tr>
                         <td
                           colSpan={11}
@@ -409,7 +431,7 @@ export default function DefectNotificationManager({
                         </td>
                       </tr>
                     ) : (
-                      rules.map((rule) => {
+                      rules.filter((rule) => users.some((user) => user.id === rule.user_id)).map((rule) => {
                         const user = users.find(
                           (item) => item.id === rule.user_id,
                         );

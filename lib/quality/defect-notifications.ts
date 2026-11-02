@@ -226,11 +226,10 @@ export async function notifyDefectEvent({
   // The assigned person and explicitly selected additional recipients receive
   // direct visibility even when they are not general project recipients.
   if (defect.assigned_to_user_id) {
-    const configured = channels.get(defect.assigned_to_user_id);
     channels.set(defect.assigned_to_user_id, {
       // In-app and push are direct assignment channels; email follows the
       // project's configured email preference for this user/event.
-      email: configured?.email ?? false,
+      email: true,
       inApp: true,
       push: true,
     });
@@ -238,8 +237,7 @@ export async function notifyDefectEvent({
 
   for (const userId of defect.notify_user_ids || []) {
     if (!clean(userId)) continue;
-    const existing = channels.get(userId) ?? { email: false, inApp: false, push: false };
-    channels.set(userId, { email: existing.email, inApp: true, push: true });
+    channels.set(userId, { email: true, inApp: true, push: true });
   }
 
   if (actorUserId) {
@@ -247,8 +245,12 @@ export async function notifyDefectEvent({
   }
 
   const category = eventType(kind);
-  const actionRoute = `/project/${defect.project_id}/tower/${defect.tower_id}/defects`;
-  const appEligible = new Set(await filterAppNotificationUserIds(service, [...channels.keys()], category, actionRoute));
+  const actionRoute = `/project/${defect.project_id}/tower/${defect.tower_id}/defects?defectId=${encodeURIComponent(defect.id)}`;
+  const explicitIds = new Set([clean(defect.assigned_to_user_id), ...(defect.notify_user_ids || []).map(clean)].filter(Boolean));
+  const appEligible = new Set([
+    ...await filterAppNotificationUserIds(service, [...channels.keys()], category, actionRoute),
+    ...explicitIds,
+  ]);
   const recipients: Recipient[] = await Promise.all([...channels.entries()].map(async ([userId, selectedChannels]) => {
     const identity = await userIdentity(service, userId);
     return {
@@ -339,23 +341,14 @@ export async function notifyDefectEvent({
     }
   }
 
-  const emailRecipients = [
-    ...new Set(
-      recipients
-        .filter(
-          (recipient) =>
-            recipient.receivesEmail && Boolean(recipient.email),
-        )
-        .map((recipient) => recipient.email as string),
-    ),
-  ];
+  const emailRecipients = [...new Map(recipients.filter((recipient) => recipient.receivesEmail && recipient.email).map((recipient) => [recipient.userId, recipient])).values()];
 
   if (emailRecipients.length > 0) {
     const base = appUrl();
-    const defectUrl = base ? `${base}${actionRoute}` : "";
+    const defectUrl = base ? `${base}/project/${encodeURIComponent(defect.project_id)}/tower/${encodeURIComponent(defect.tower_id)}/defects?defectId=${encodeURIComponent(defect.id)}` : "";
 
-    await sendDailyDocketEmail({
-      to: emailRecipients,
+    await Promise.all(emailRecipients.map((recipient) => sendDailyDocketEmail({
+      to: [recipient.email!],
       subject: `${title}${towerLabel ? ` · ${towerLabel}` : ""}`,
       html: docketEmailShell(
         title,
@@ -414,7 +407,7 @@ export async function notifyDefectEvent({
               ? `
                 <p style="margin:24px 0;">
                   <a href="${escapeHtml(defectUrl)}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px;">
-                    Open Defect Register
+                    View Defect
                   </a>
                 </p>
               `
@@ -422,7 +415,7 @@ export async function notifyDefectEvent({
           }
         `,
       ),
-    });
+    })));
   }
 
   const pushUserIds = recipients.filter((recipient) => recipient.receivesPush).map((recipient) => recipient.userId);

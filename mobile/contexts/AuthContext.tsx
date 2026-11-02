@@ -39,6 +39,7 @@ export type MobileProfile = {
 
 type AuthContextValue = {
   session: Session | null;
+  status: "initialising" | "signed_in" | "signed_out";
   loading: boolean;
   profile: MobileProfile | null;
   profileLoading: boolean;
@@ -145,6 +146,8 @@ async function writeCachedProfile(profile: MobileProfile) {
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const mountedRef = useRef(true);
+  const authGenerationRef = useRef(0);
+  const activeSessionRef = useRef<Session | null>(null);
   const profileRef = useRef<MobileProfile | null>(null);
   const profileRequestRef = useRef<{
     userId: string;
@@ -152,6 +155,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   } | null>(null);
 
   const [session, setSession] = useState<Session | null>(null);
+  const [status, setStatus] = useState<AuthContextValue["status"]>("initialising");
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<MobileProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -252,7 +256,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             availableProjects[0] ??
             null;
 
-          if (!mountedRef.current) return;
+          if (!mountedRef.current || activeSessionRef.current?.user.id !== userId) return;
 
           applyProfile({
             userId,
@@ -278,12 +282,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
           console.error("Unable to load profile:", error);
 
-          if (mountedRef.current) {
+          if (mountedRef.current && activeSessionRef.current?.user.id === userId) {
             /* Keep a valid cached profile visible if the live refresh fails. */
             setProfileError(message);
           }
         } finally {
-          if (mountedRef.current) {
+          if (mountedRef.current && activeSessionRef.current?.user.id === userId) {
             setProfileLoading(false);
           }
         }
@@ -306,7 +310,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const userId = currentSession.user.id;
       const cached = await readCachedProfile(userId);
 
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || activeSessionRef.current?.user.id !== userId) return;
 
       if (cached?.profile) {
         applyProfile(cached.profile);
@@ -379,14 +383,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     mountedRef.current = true;
     let active = true;
+    const initialGeneration = authGenerationRef.current;
 
     void (async () => {
       try {
         const { data, error } = await supabase.auth.getSession();
-        if (error) throw error;
-        if (!active) return;
+        if (!active || initialGeneration !== authGenerationRef.current) return;
 
+        /* A locally restored session is authoritative for signed-in UI. */
+        if (error && !data.session) throw error;
+        if (error) console.warn("TTTracker local session restored; background verification reported an error.", error.message);
+
+        authGenerationRef.current++;
+        activeSessionRef.current = data.session;
         setSession(data.session);
+        setStatus(data.session ? "signed_in" : "signed_out");
         setLoading(false);
 
         if (data.session) {
@@ -395,17 +406,29 @@ export function AuthProvider({ children }: PropsWithChildren) {
           clearProfile();
         }
       } catch (error) {
-        if (active) {
+        if (active && initialGeneration === authGenerationRef.current) {
           if (isTransientBackendFailure(error)) {
             console.warn("TTTracker session check temporarily unavailable; keeping the current local auth state.");
             setProfileError("Unable to verify your saved session right now. Check your connection and retry.");
             setProfileLoading(false);
+            if (activeSessionRef.current) {
+              setSession(activeSessionRef.current);
+              setStatus("signed_in");
+              setLoading(false);
+            } else {
+              /* Wait for Supabase INITIAL_SESSION; never treat delayed storage as sign-out. */
+              setStatus("initialising");
+              setLoading(true);
+            }
           } else {
             console.error("Unable to initialise authentication:", error);
+            authGenerationRef.current++;
+            activeSessionRef.current = null;
             setSession(null);
+            setStatus("signed_out");
             clearProfile();
+            setLoading(false);
           }
-          setLoading(false);
         }
       }
     })();
@@ -414,14 +437,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
       (event, nextSession) => {
         if (!active) return;
 
-        /*
-         * getSession() above owns cold-start hydration. Ignoring INITIAL_SESSION
-         * here prevents the duplicate profile query the old provider created.
-         */
-        if (event === "INITIAL_SESSION") return;
-
+        authGenerationRef.current++;
+        activeSessionRef.current = nextSession;
         setSession(nextSession);
+        setStatus(nextSession ? "signed_in" : "signed_out");
         setLoading(false);
+
+        /*
+         * INITIAL_SESSION can win the race against iOS SecureStore/AsyncStorage
+         * hydration. Accept it as the canonical local session and hydrate once.
+         */
+        if (event === "INITIAL_SESSION") {
+          if (nextSession) void hydrateThenRefresh(nextSession);
+          else clearProfile();
+          return;
+        }
 
         if (event === "TOKEN_REFRESHED") {
           /* A new JWT does not require re-downloading the employee profile. */
@@ -479,13 +509,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
       await AsyncStorage.removeItem(profileCacheKey(userId));
     }
 
+    authGenerationRef.current++;
+    activeSessionRef.current = null;
     setSession(null);
+    setStatus("signed_out");
+    setLoading(false);
     clearProfile();
   }, [clearProfile, session?.user.id]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       session,
+      status,
       loading,
       profile,
       profileLoading,
@@ -497,6 +532,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }),
     [
       session,
+      status,
       loading,
       profile,
       profileLoading,

@@ -1,4 +1,5 @@
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getTowerProgress } from "@/lib/api/tower-progress";
 import type { ResolvedMobileTowerProgress } from "@/types/daily-dockets";
 import { Ionicons } from "@expo/vector-icons";
@@ -93,6 +94,7 @@ type OutstandingBundle = {
   delivered: number;
   outstanding: number;
 };
+const progressCacheKey = (projectId: string) => `tttracker:tower-progress:${projectId}`;
 
 function safeString(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
@@ -371,6 +373,20 @@ export default function TowerProgressScreen() {
 
       if (!silent) setLoading(true);
 
+      if (!silent) {
+        try {
+          const cached = await AsyncStorage.getItem(progressCacheKey(selectedProjectId));
+          if (cached) {
+            const snapshot = JSON.parse(cached) as { towers?: Tower[]; dockets?: DocketRow[]; progress?: Record<string, ResolvedMobileTowerProgress> };
+            if (snapshot.towers && snapshot.dockets && snapshot.progress) {
+              setTowers(snapshot.towers);
+              setDockets(snapshot.dockets);
+              setResolvedProgress(snapshot.progress);
+            }
+          }
+        } catch { /* A corrupt cache is ignored; server refresh remains authoritative. */ }
+      }
+
       const [towerResponse, docketResponse] =
         await Promise.all([
           supabase
@@ -393,9 +409,6 @@ export default function TowerProgressScreen() {
           towerResponse.error.message,
         );
 
-        setTowers([]);
-        setDockets([]);
-
         if (!silent) setLoading(false);
         return;
       }
@@ -403,9 +416,12 @@ export default function TowerProgressScreen() {
       try {
         const result = await getTowerProgress(selectedProjectId);
         setResolvedProgress(result.progress);
+        void AsyncStorage.setItem(progressCacheKey(selectedProjectId), JSON.stringify({ towers: (towerResponse.data ?? []) as Tower[], dockets: (docketResponse.data ?? []) as DocketRow[], progress: result.progress })).catch(() => undefined);
       } catch (error) {
         Alert.alert("Could not load tower progress", error instanceof Error ? error.message : "Please try again.");
-        setResolvedProgress({}); setTowers([]); setDockets([]); setLoading(false); return;
+        setTowers((current) => current.length ? current : ((towerResponse.data ?? []) as Tower[]));
+        setDockets((current) => current.length ? current : ((docketResponse.data ?? []) as DocketRow[]));
+        setLoading(false); return;
       }
 
       setTowers(
@@ -776,6 +792,8 @@ export default function TowerProgressScreen() {
       status:
         getProgressStatus(progress),
       latestDate: resolved?.latestDocketDate ?? null,
+      rawMhPerTonne: resolved?.rawMhPerTonne ?? null,
+      productionMhPerTonne: resolved?.productionMhPerTonne ?? null,
       latestCrew:
         latestDocket?.crew ||
         latestDocket?.leading_hand ||
@@ -993,6 +1011,7 @@ export default function TowerProgressScreen() {
           <Text>Assembly {resolvedProgress[item.id]?.assemblyPercent ?? 0}%</Text>
           <Text>Erection {resolvedProgress[item.id]?.erectionPercent ?? 0}%</Text>
           <Text>Overall {progress}%</Text>
+          {resolvedProgress[item.id]?.rawMhPerTonne != null ? <Text>MH/t {Number(resolvedProgress[item.id]?.rawMhPerTonne).toFixed(1)}</Text> : null}
         </View>
         <View style={styles.progressTrack}>
           <View
@@ -1433,7 +1452,10 @@ export default function TowerProgressScreen() {
                     </View>
                   </View>
                 </View>
-
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, paddingVertical: 10 }}>
+                  <Text style={{ color: "#334155", fontWeight: "700" }}>MH/t {overviewStats.rawMhPerTonne == null ? "—" : Number(overviewStats.rawMhPerTonne).toFixed(1)}</Text>
+                  <Text style={{ color: "#64748b" }}>Prod MH/t {overviewStats.productionMhPerTonne == null ? "—" : Number(overviewStats.productionMhPerTonne).toFixed(1)}</Text>
+                </View>
                 <SectionCard title="Quick Actions">
                   <View
                     style={

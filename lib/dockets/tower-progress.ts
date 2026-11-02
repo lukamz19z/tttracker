@@ -18,6 +18,8 @@ export type TowerProgressDocket = {
   approval_status?: string | null;
   deleted_at?: string | null;
   progress_model?: string | null;
+  raw_manhours?: number | null;
+  production_manhours?: number | null;
 };
 export type TowerProgressHistoryRow = {
   docket_id: string;

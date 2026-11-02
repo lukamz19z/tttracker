@@ -500,6 +500,8 @@ export type ResolvedMobileTowerProgress = {
   assemblyPercent: number; erectionPercent: number; totalProgressPercent: number;
   status: "Not Started" | "In Progress" | "Complete"; latestDocketDate: string | null;
   sectionV2Rows?: SectionV2ProgressRow[];
+  totalHours?: number; productionHours?: number; completedTonnes?: number | null;
+  rawMhPerTonne?: number | null; productionMhPerTonne?: number | null;
 };
 export type DailyDocketEditorPayload = {
   resolvedDefaults: { prestartMinutes: string; lunchBreakMinutes: string };
