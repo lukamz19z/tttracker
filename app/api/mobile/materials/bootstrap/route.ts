@@ -6,9 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 1000;
-// Keep the general Materials bootstrap small. The Bundles screen obtains its
-// own tower/filter-scoped pages as the user scrolls.
-const BUNDLE_BOOTSTRAP_LIMIT = 20;
 
 async function paged(
   build: (
@@ -46,7 +43,6 @@ export async function GET(request: NextRequest) {
 
     const projectId =
       request.nextUrl.searchParams.get("projectId")?.trim() ?? "";
-    const bundlePage = request.nextUrl.searchParams.get("bundlePage") === "1";
 
     if (!projectId) {
       return NextResponse.json(
@@ -80,35 +76,6 @@ export async function GET(request: NextRequest) {
     if (towerError) throw new Error(towerError.message);
 
     const towerIds = (towers ?? []).map((tower) => tower.id);
-
-    if (bundlePage) {
-      const requestedTowerId = request.nextUrl.searchParams.get("towerId")?.trim() ?? "";
-      const section = request.nextUrl.searchParams.get("section")?.trim() ?? "";
-      const search = (request.nextUrl.searchParams.get("q") ?? "").replace(/[,%()\"']/g, " ").replace(/\s+/g, " ").trim();
-      const offset = Math.max(0, Number.parseInt(request.nextUrl.searchParams.get("offset") ?? "0", 10) || 0);
-      const requestedSize = Number.parseInt(request.nextUrl.searchParams.get("limit") ?? "20", 10) || 20;
-      const pageSize = Math.max(1, Math.min(requestedSize, 50));
-      if (requestedTowerId && !towerIds.includes(requestedTowerId)) {
-        return NextResponse.json({ error: "The selected tower is not available in this project." }, { status: 400 });
-      }
-      if (!towerIds.length) return NextResponse.json({ bundles: [], offset, nextOffset: null, hasMore: false, pageSize });
-      let bundleQuery = service
-        .from("tower_required_bundles")
-        .select("id,tower_id,bundle_no,section,qty_required,total_weight,member_qty")
-        .in("tower_id", requestedTowerId ? [requestedTowerId] : towerIds);
-      if (section) bundleQuery = bundleQuery.eq("section", section);
-      if (search.length > 0) bundleQuery = bundleQuery.or(`bundle_no.ilike.%${search}%,section.ilike.%${search}%`);
-      const { data: page, error: pageError } = await bundleQuery
-        .order("bundle_no", { ascending: true })
-        .order("tower_id", { ascending: true })
-        .order("section", { ascending: true })
-        .order("id", { ascending: true })
-        .range(offset, offset + pageSize - 1);
-      if (pageError) throw new Error(`Materials bundle page could not be loaded: ${pageError.message}`);
-      const bundles = page ?? [];
-      const hasMore = bundles.length === pageSize;
-      return NextResponse.json({ bundles, offset, nextOffset: hasMore ? offset + bundles.length : null, hasMore, pageSize }, { headers: { "Cache-Control": "private, no-store" } });
-    }
 
     if (towerIds.length === 0) {
       return NextResponse.json({
@@ -147,22 +114,25 @@ export async function GET(request: NextRequest) {
      * check-off state.
      */
     const [
-      bundleBootstrap,
+      bundles,
       bundleChecks,
       memberChecks,
       deliveries,
       events,
       transfers,
     ] = await Promise.all([
-      service
-        .from("tower_required_bundles")
-        .select("id,tower_id,bundle_no,section,qty_required,total_weight,member_qty")
-        .in("tower_id", towerIds)
-        .order("tower_id")
-        .order("section")
-        .order("bundle_no")
-        .order("id")
-        .limit(BUNDLE_BOOTSTRAP_LIMIT),
+      paged((from, to) =>
+        service
+          .from("tower_required_bundles")
+          .select(
+            "id,tower_id,bundle_no,section,qty_required,total_weight,member_qty",
+          )
+          .in("tower_id", towerIds)
+          .order("tower_id")
+          .order("section")
+          .order("bundle_no")
+          .range(from, to),
+      ),
       paged((from, to) =>
         service
           .from("tower_material_bundle_checks")
@@ -208,9 +178,6 @@ export async function GET(request: NextRequest) {
           .range(from, to),
       ),
     ]);
-
-    if (bundleBootstrap.error) throw new Error(bundleBootstrap.error.message);
-    const bundles = bundleBootstrap.data ?? [];
 
     return NextResponse.json({
       cacheVersion: 2,

@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
@@ -13,8 +13,6 @@ import {
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { MaterialRegisterFilters } from "@/components/materials/MaterialRegisterFilters";
 import { useMaterials } from "@/contexts/MaterialsContext";
-import { compareBundles } from "@/lib/materials-sort";
-import { cachedMaterialBundlePages, loadMaterialBundlePage, type MaterialBundlePage } from "@/lib/api/materials";
 import {
   cachedBundleMembers,
   loadBundleMembers,
@@ -59,7 +57,6 @@ export default function Bundles() {
 
   const {
     data,
-    online,
     busyBundleId,
     busyMemberId,
     towerName,
@@ -87,17 +84,6 @@ export default function Bundles() {
   );
   const [showArrived, setShowArrived] = useState(false);
   const [showOutstanding, setShowOutstanding] = useState(true);
-  const [bundlePages, setBundlePages] = useState<MaterialBundlePage[]>([]);
-  const [nextOffset, setNextOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingFirstPage, setLoadingFirstPage] = useState(false);
-  const [loadingNextPage, setLoadingNextPage] = useState(false);
-  const [pageError, setPageError] = useState("");
-  const [pageErrorOffset, setPageErrorOffset] = useState(0);
-  const generationRef = useRef(0);
-  const inFlightPageRef = useRef<string | null>(null);
-  const replaceOnPageZeroRef = useRef(false);
-  const [refreshingPages, setRefreshingPages] = useState(false);
   const [actionBundle, setActionBundle] = useState<BundleRecord | null>(null);
   const [memberAction, setMemberAction] = useState<MemberRecord | null>(null);
   const [packMembersByBundleId, setPackMembersByBundleId] = useState<
@@ -105,96 +91,6 @@ export default function Bundles() {
   >({});
   const [packLoadingId, setPackLoadingId] = useState<string | null>(null);
   const [packErrors, setPackErrors] = useState<Record<string, string>>({});
-
-  const projectId = clean(data?.projectId);
-
-  const requestBundlePage = useCallback(async (offset: number, generation: number) => {
-    if (!projectId || !online || generation !== generationRef.current) return;
-    const requestKey = `${generation}:${offset}`;
-    if (inFlightPageRef.current) return;
-    inFlightPageRef.current = requestKey;
-    if (offset === 0) setLoadingFirstPage(true);
-    else setLoadingNextPage(true);
-    setPageError("");
-    try {
-      const page = await loadMaterialBundlePage({ projectId, towerId, section, query: deferredQuery, offset, limit: 20 });
-      if (generation !== generationRef.current) return;
-      setBundlePages((current) => {
-        if (page.offset === 0 && replaceOnPageZeroRef.current) {
-          replaceOnPageZeroRef.current = false;
-          return [page];
-        }
-        if (page.offset === 0) {
-          const previousFirstPage = current.find((item) => item.offset === 0);
-          const oldIds = previousFirstPage?.bundles.map((bundle) => clean(bundle.id)).join("|");
-          const newIds = page.bundles.map((bundle) => clean(bundle.id)).join("|");
-          if (previousFirstPage && oldIds !== newIds) return [page];
-        }
-        const byOffset = new Map(current.map((item) => [item.offset, item]));
-        byOffset.set(page.offset, page);
-        return [...byOffset.values()].sort((a, b) => a.offset - b.offset);
-      });
-      setPageErrorOffset(0);
-      setNextOffset(page.nextOffset ?? offset + page.bundles.length);
-      setHasMore(page.hasMore);
-    } catch (error) {
-      if (generation === generationRef.current) {
-        setPageErrorOffset(offset);
-        setPageError(error instanceof Error ? error.message : "Bundles could not be refreshed.");
-      }
-    } finally {
-      if (inFlightPageRef.current === requestKey) inFlightPageRef.current = null;
-      if (generation === generationRef.current) {
-        setLoadingFirstPage(false);
-        setLoadingNextPage(false);
-      }
-    }
-  }, [deferredQuery, online, projectId, section, towerId]);
-
-  useEffect(() => {
-    const generation = ++generationRef.current;
-    inFlightPageRef.current = null;
-    setBundlePages([]);
-    setNextOffset(0);
-    setHasMore(true);
-    setPageError("");
-    setLoadingFirstPage(online);
-    setLoadingNextPage(false);
-    let active = true;
-    void cachedMaterialBundlePages(projectId, towerId, section, deferredQuery).then((cachedPages) => {
-      if (!active || generation !== generationRef.current) return;
-      if (cachedPages.length) {
-        setBundlePages(cachedPages);
-        const last = cachedPages[cachedPages.length - 1];
-        setNextOffset(last.nextOffset ?? last.offset + last.bundles.length);
-        setHasMore(last.hasMore);
-      }
-      if (online) void requestBundlePage(0, generation);
-      else setLoadingFirstPage(false);
-    }).catch(() => {
-      if (active && generation === generationRef.current) {
-        if (online) void requestBundlePage(0, generation);
-        else setLoadingFirstPage(false);
-      }
-    });
-    return () => { active = false; };
-  }, [deferredQuery, online, projectId, requestBundlePage, section, towerId]);
-
-  const loadNextServerPage = useCallback(() => {
-    if (!online || !hasMore || loadingNextPage || pageError || inFlightPageRef.current) return;
-    void requestBundlePage(nextOffset, generationRef.current);
-  }, [hasMore, loadingNextPage, nextOffset, online, pageError, requestBundlePage]);
-
-  const refreshServerPages = useCallback(async () => {
-    if (!online) return;
-    const generation = ++generationRef.current;
-    inFlightPageRef.current = null;
-    setRefreshingPages(true);
-    replaceOnPageZeroRef.current = true;
-    setPageError("");
-    try { await requestBundlePage(0, generation); }
-    finally { if (generation === generationRef.current) setRefreshingPages(false); }
-  }, [online, requestBundlePage]);
 
   useEffect(() => {
     const nextTowerId = clean(params.towerId);
@@ -278,12 +174,12 @@ export default function Bundles() {
   );
 
   useEffect(() => {
-    if (!expandedBundleId || !bundlePages.length) return;
-    const bundle = bundlePages.flatMap((page) => page.bundles).find(
+    if (!expandedBundleId || !data?.bundles?.length) return;
+    const bundle = data.bundles.find(
       (item) => clean(item.id) === expandedBundleId,
     );
     if (bundle) void ensureBundleMembers(bundle);
-  }, [bundlePages, ensureBundleMembers, expandedBundleId]);
+  }, [data?.bundles, ensureBundleMembers, expandedBundleId]);
 
   const indexedBundles = useMemo(() => {
     return (data?.bundles ?? []).map((bundle) => {
@@ -305,22 +201,9 @@ export default function Bundles() {
 
   const sectionOptions = useMemo(() => {
     const counts = new Map<string, number>();
-    const knownBundles = new Map<string, BundleRecord>();
     for (const row of indexedBundles) {
-      const id = clean(row.bundle.id);
-      if (id) knownBundles.set(id, row.bundle);
-    }
-    for (const page of bundlePages) {
-      for (const bundle of page.bundles) {
-        const id = clean(bundle.id);
-        if (id) knownBundles.set(id, bundle);
-      }
-    }
-
-    for (const bundle of knownBundles.values()) {
-      if (towerId && clean(bundle.tower_id) !== towerId) continue;
-      const sectionName = clean(bundle.section) || "General";
-      counts.set(sectionName, (counts.get(sectionName) ?? 0) + 1);
+      if (towerId && row.towerId !== towerId) continue;
+      counts.set(row.section, (counts.get(row.section) ?? 0) + 1);
     }
 
     const options = Array.from(counts.entries())
@@ -335,7 +218,7 @@ export default function Bundles() {
       },
       ...options,
     ];
-  }, [bundlePages, indexedBundles, towerId]);
+  }, [indexedBundles, towerId]);
 
   useEffect(() => {
     if (!section) return;
@@ -344,24 +227,19 @@ export default function Bundles() {
   }, [section, sectionOptions]);
 
   const rows = useMemo(() => {
-    const unique = new Map<string, BundleRecord>();
-    for (const page of bundlePages) {
-      for (const bundle of page.bundles) {
-        const id = clean(bundle.id);
-        if (id) unique.set(id, bundle);
-      }
-    }
-    return [...unique.values()].sort(compareBundles);
-  }, [bundlePages]);
+    const search = deferredQuery.trim().toLowerCase();
+    return indexedBundles
+      .filter((row) => {
+        if (towerId && row.towerId !== towerId) return false;
+        if (section && row.section !== section) return false;
+        if (search && !row.search.includes(search)) return false;
+        return true;
+      })
+      .map((row) => row.bundle);
+  }, [deferredQuery, indexedBundles, section, towerId]);
 
   const outstandingRows = rows.filter((bundle) => deriveBundleStatus(bundle) !== "arrived");
   const arrivedRows = rows.filter((bundle) => deriveBundleStatus(bundle) === "arrived");
-  const retryPage = useCallback(() => {
-    if (!online || inFlightPageRef.current) return;
-    setPageError("");
-    void requestBundlePage(pageErrorOffset, generationRef.current);
-  }, [online, pageErrorOffset, requestBundlePage]);
-
   const summary = useMemo(() => {
     let checked = 0;
     let outstanding = 0;
@@ -723,11 +601,7 @@ export default function Bundles() {
     <MaterialsShell
       title="Bundles"
       subtitle="Fast site check-off. Changes save on the phone immediately and sync when a connection is available."
-      onNearEnd={loadNextServerPage}
       items={bundleListItems}
-      onRefresh={refreshServerPages}
-      refreshingOverride={refreshingPages}
-      footer={loadingNextPage || loadingFirstPage ? <View style={{ minHeight: 36, alignItems: "center", justifyContent: "center" }}><ActivityIndicator size="small" /></View> : pageError ? <View style={{ minHeight: 48, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 }}><Text style={styles.packErrorText}>Unable to refresh bundles.</Text><Pressable onPress={retryPage} style={styles.packRetryButton}><Text style={styles.packRetryText}>Retry</Text></Pressable></View> : null}
     >
       <MaterialRegisterFilters
         towers={data?.towers ?? []}
@@ -1284,20 +1158,6 @@ const styles = StyleSheet.create({
   transferText: {
     fontSize: 10,
     color: "#475569",
-  },
-  loadMore: {
-    minHeight: 44,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: "#94a3b8",
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  loadMoreText: {
-    color: "#334155",
-    fontWeight: "900",
-    fontSize: 11,
   },
   modalBackdrop: {
     flex: 1,

@@ -1,6 +1,6 @@
 import { compareBundles } from "@/lib/materials-sort";
 import { Search, X } from "lucide-react-native";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -18,8 +18,6 @@ import {
 import { TowerPicker } from "@/components/materials/TowerPicker";
 import { useMaterials } from "@/contexts/MaterialsContext";
 import {
-  cachedMaterialSearch,
-  searchMaterials,
   type MaterialMemberSearchField,
   type MaterialSearchKind,
   type MaterialSearchResult,
@@ -274,9 +272,7 @@ export function MaterialLiveSearch({
   const [memberField, setMemberField] =
     useState<MaterialMemberSearchField>("all");
   const deferredQuery = useDeferredValue(query);
-  const [remoteSearch, setRemoteSearch] = useState<{ key: string; results: MaterialSearchResult[] } | null>(null);
-  const [searchingKey, setSearchingKey] = useState("");
-  const searchGeneration = useRef(0);
+  const searching = false;
   const message = !online ? "Offline - searching cached project materials." : null;
 
   const towers = useMemo(() => data?.towers ?? [], [data?.towers]);
@@ -290,30 +286,7 @@ export function MaterialLiveSearch({
     bundles: [...(data?.bundles || [])].sort(compareBundles),
     bolts: data?.bolts || [],
   }), [data]);
-  const searchKey = `${data?.projectId ?? ""}:${effectiveKind}:${towerId}:${effectiveMemberField}:${deferredQuery.trim().toLowerCase()}`;
-  useEffect(() => {
-    const generation = ++searchGeneration.current;
-    if (!data?.projectId || deferredQuery.trim().length < 2) return;
-    const lookup = async () => online
-      ? searchMaterials(data.projectId!, deferredQuery, effectiveKind, limit, { towerId, memberField: effectiveMemberField })
-      : (await cachedMaterialSearch(data.projectId!, deferredQuery, effectiveKind, { towerId, memberField: effectiveMemberField }))?.value ?? null;
-    void Promise.resolve().then(() => {
-      if (generation === searchGeneration.current && online) setSearchingKey(searchKey);
-      return lookup();
-    }).then((payload) => {
-      if (generation !== searchGeneration.current) return;
-      if (payload) setRemoteSearch({ key: searchKey, results: payload.results });
-      else setRemoteSearch(null);
-    }).catch(() => {
-      if (generation === searchGeneration.current) setRemoteSearch(null);
-    }).finally(() => {
-      if (generation === searchGeneration.current) setSearchingKey("");
-    });
-    return () => { if (generation === searchGeneration.current) searchGeneration.current += 1; };
-  }, [data?.projectId, deferredQuery, effectiveKind, effectiveMemberField, limit, online, searchKey, towerId]);
-  const localResultsValue = useMemo(() => localResults(effectiveKind, indexed as NonNullable<typeof data>, deferredQuery, limit, towerName, towerId, effectiveMemberField), [indexed, deferredQuery, effectiveKind, limit, towerName, towerId, effectiveMemberField]);
-  const results = remoteSearch?.key === searchKey ? remoteSearch.results : localResultsValue;
-  const searching = searchingKey === searchKey;
+  const results = useMemo(() => localResults(effectiveKind, indexed as NonNullable<typeof data>, deferredQuery, limit, towerName, towerId, effectiveMemberField), [indexed, deferredQuery, effectiveKind, limit, towerName, towerId, effectiveMemberField]);
 
   return (
     <MaterialsShell title={title} subtitle={subtitle} items={results.map((result, index) => (

@@ -1,10 +1,9 @@
 import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
 import { File as ExpoFile } from "expo-file-system";
-import { cacheEntriesWithPrefix, getCache, setCache } from "@/lib/offline/db";
+import { getCache, setCache } from "@/lib/offline/db";
 import type {
   BundleCheckRecord,
   CreateTransferInput,
-  BundleRecord,
   MaterialPayload,
   MaterialReceiptEvidenceInput,
   MemberCheckRecord,
@@ -22,32 +21,6 @@ export const materialCacheKey = (projectId: string) =>
 
 const legacyMaterialCacheKey = (projectId: string) =>
   `materials:${projectId}`;
-
-export type MaterialBundlePage = { bundles: BundleRecord[]; offset: number; nextOffset: number | null; hasMore: boolean; pageSize: number };
-const bundlePageCachePrefix = (projectId: string, towerId: string, section: string, query: string) =>
-  `materials:bundle-pages:v1:${encodeURIComponent(projectId)}:${encodeURIComponent(towerId)}:${encodeURIComponent(section)}:${encodeURIComponent(query.trim().toLowerCase())}:`;
-
-export async function cachedMaterialBundlePages(projectId: string, towerId: string, section: string, query: string) {
-  const prefix = bundlePageCachePrefix(projectId, towerId, section, query);
-  const entries = await cacheEntriesWithPrefix<MaterialBundlePage>(prefix);
-  return entries.map((entry) => entry.value).sort((a, b) => a.offset - b.offset);
-}
-
-export async function loadMaterialBundlePage(input: { projectId: string; towerId: string; section: string; query: string; offset: number; limit?: number }) {
-  const params = new URLSearchParams({
-    projectId: input.projectId,
-    bundlePage: "1",
-    towerId: input.towerId,
-    section: input.section,
-    q: input.query.trim(),
-    offset: String(input.offset),
-    limit: String(input.limit ?? 20),
-  });
-  const page = await apiJson<MaterialBundlePage>(`/api/mobile/materials/bootstrap?${params.toString()}`, { timeoutMs: 30_000 });
-  const key = `${bundlePageCachePrefix(input.projectId, input.towerId, input.section, input.query)}${page.offset}`;
-  await setCache(key, page);
-  return page;
-}
 
 async function readJson<T>(response: Response, fallback: string) { return jsonBody<T>(response, fallback); }
 
