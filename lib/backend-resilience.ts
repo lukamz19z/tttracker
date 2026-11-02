@@ -96,7 +96,10 @@ export class BackendResilience {
   private readonly circuitBreaker: boolean;
 
   constructor(options: ResilienceOptions = {}) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    const nativeFetch = options.fetchImpl ?? globalThis.fetch;
+    // Native browser fetch requires Window as its receiver. Store a bound
+    // function because later invoking this.fetchImpl(...) supplies this class.
+    this.fetchImpl = nativeFetch.bind(globalThis);
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
     this.sleep = options.sleep ?? defaultSleep;

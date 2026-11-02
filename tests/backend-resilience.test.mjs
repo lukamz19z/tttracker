@@ -40,6 +40,24 @@ test("retry policy is bounded to three jittered retries", async () => {
   assert.equal(retryDelayMs(2, () => 1), 6_000);
 });
 
+test("browser-like native fetch is invoked with its required global receiver through retries", async () => {
+  let attempts = 0;
+  const expectedGlobal = globalThis;
+  function browserFetch(input, init) {
+    assert.equal(this, expectedGlobal, "fetch must be called with the browser global receiver");
+    assert.ok(input);
+    assert.ok(init);
+    attempts++;
+    return Promise.resolve(attempts === 1
+      ? new Response("temporary", { status: 503 })
+      : new Response("ok", { status: 200 }));
+  }
+  const policy = new BackendResilience({ fetchImpl: browserFetch, sleep: async () => {}, log: () => {} });
+  const response = await policy.fetch("https://example.test/rest/v1/projects");
+  assert.equal(response.status, 200);
+  assert.equal(attempts, 2);
+});
+
 test("auth requests are not retried or placed behind the data API circuit", async () => {
   let calls = 0;
   const policy = new BackendResilience({
