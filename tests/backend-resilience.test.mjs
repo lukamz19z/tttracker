@@ -6,6 +6,7 @@ import {
   BackendResilience,
   BackendUnavailableError,
   classifyBackendFailure,
+  createRequestResilientFetch,
   retryDelayMs,
 } from "../lib/backend-resilience.ts";
 
@@ -17,6 +18,9 @@ test("classifies only transient gateway, PostgREST outage and network failures",
   assert.equal(classifyBackendFailure(new TypeError("Failed to fetch")).transient, true);
   assert.equal(classifyBackendFailure(new BackendUnavailableError()).transient, true);
   for (const status of [400, 401, 403, 404]) assert.equal(classifyBackendFailure({ status }).transient, false);
+  assert.equal(classifyBackendFailure({ status: 401, message: "fetch failed" }).transient, false);
+  assert.equal(classifyBackendFailure({ status: 403, message: "timeout" }).transient, false);
+  assert.equal(classifyBackendFailure({ status: 500, code: "PGRST116", message: "no rows" }).transient, false);
 });
 
 test("retry policy is bounded to three jittered retries", async () => {
@@ -49,7 +53,23 @@ test("auth requests are not retried or placed behind the data API circuit", asyn
   assert.equal(policy.circuitOpen, false);
 });
 
-test("data API outage opens a circuit, suppresses requests, then performs one recovery probe", async () => {
+test("healthy requests and one 503 followed by success never open the circuit", async () => {
+  let attempts = 0;
+  const policy = new BackendResilience({
+    fetchImpl: async () => {
+      attempts++;
+      return attempts === 1 ? new Response("temporary", { status: 503 }) : new Response("ok", { status: 200 });
+    },
+    sleep: async () => {},
+    log: () => {},
+  });
+  assert.equal((await policy.fetch("https://example.test/rest/v1/projects")).status, 200);
+  assert.equal((await policy.fetch("https://example.test/rest/v1/towers")).status, 200);
+  assert.equal(attempts, 3);
+  assert.equal(policy.circuitOpen, false);
+});
+
+test("three separate transient request failures open a circuit; one real recovery request closes it", async () => {
   let calls = 0;
   let now = 10_000;
   let recovered = 0;
@@ -62,6 +82,8 @@ test("data API outage opens a circuit, suppresses requests, then performs one re
   policy.subscribeRecovery(() => recovered++);
   await policy.fetch("https://example.test/read");
   await policy.fetch("https://example.test/read");
+  assert.equal(policy.circuitOpen, false);
+  await policy.fetch("https://example.test/read");
   assert.equal(policy.circuitOpen, true);
   const callsWhileOpen = calls;
   await assert.rejects(policy.fetch("https://example.test/read"), BackendUnavailableError);
@@ -73,6 +95,45 @@ test("data API outage opens a circuit, suppresses requests, then performs one re
   assert.equal(calls, callsWhileOpen + 1);
   assert.equal(recovered, 1);
   assert.equal(policy.circuitOpen, false);
+});
+
+test("auth, permission, not-found and PGRST116 responses never increment the circuit", async () => {
+  for (const response of [
+    new Response("auth", { status: 401 }),
+    new Response("forbidden", { status: 403 }),
+    new Response("not found", { status: 404 }),
+    new Response(JSON.stringify({ code: "PGRST116", message: "no rows" }), { status: 500 }),
+  ]) {
+    const policy = new BackendResilience({ fetchImpl: async () => response.clone(), log: () => {} });
+    for (let n = 0; n < 4; n++) await policy.fetch("https://example.test/rest/v1/optional");
+    assert.equal(policy.circuitOpen, false);
+  }
+});
+
+test("an optional endpoint circuit does not block unrelated project data", async () => {
+  const policy = new BackendResilience({
+    fetchImpl: async (input) => String(input).includes("notifications")
+      ? new Response("unavailable", { status: 503 })
+      : new Response("ok", { status: 200 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  for (let n = 0; n < 3; n++) await policy.fetch("https://example.test/rest/v1/notifications");
+  assert.equal(policy.circuitOpen, true);
+  assert.equal((await policy.fetch("https://example.test/rest/v1/towers")).status, 200);
+});
+
+test("Next server request clients keep circuit state isolated between users", async () => {
+  const makeFetch = () => createRequestResilientFetch({
+    fetchImpl: async () => new Response("unavailable", { status: 503 }),
+    sleep: async () => {},
+    log: () => {},
+  });
+  const userA = makeFetch();
+  const userB = createRequestResilientFetch({ fetchImpl: async () => new Response("ok", { status: 200 }), log: () => {} });
+  for (let n = 0; n < 3; n++) await userA("https://example.test/rest/v1/projects");
+  await assert.rejects(userA("https://example.test/rest/v1/projects"), BackendUnavailableError);
+  assert.equal((await userB("https://example.test/rest/v1/projects")).status, 200);
 });
 
 test("unsafe mutations are never automatically retried", async () => {

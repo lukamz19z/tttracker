@@ -2,7 +2,7 @@ export type BackendFailureKind = "http" | "postgrest" | "network" | "timeout";
 export type BackendFailure = { transient: boolean; kind?: BackendFailureKind; status?: number; code?: string };
 
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000] as const;
-const CIRCUIT_FAILURE_THRESHOLD = 8;
+const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 20_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPT_TIMEOUT_MS = 10_000;
@@ -17,9 +17,23 @@ function errorFields(value: unknown): { status?: number; code?: string; message:
   return { ...(Number.isFinite(status) && status > 0 ? { status } : {}), ...(code ? { code } : {}), message };
 }
 
+function safeRequestPath(value: string) {
+  try {
+    return new URL(value, "https://tttracker.invalid")
+      .pathname
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, "[id]")
+      .replace(/\/(\d{5,})(?=\/|$)/g, "/[id]");
+  } catch {
+    return "[unknown-path]";
+  }
+}
+
 export function classifyBackendFailure(value: unknown): BackendFailure {
   const fields = errorFields(value);
   const combined = `${fields.code ?? ""} ${fields.message}`.toLowerCase();
+  if (fields.code?.toUpperCase() === "PGRST116" || [400, 401, 403, 404].includes(fields.status ?? 0)) {
+    return { transient: false, ...(fields.status ? { status: fields.status } : {}), ...(fields.code ? { code: fields.code } : {}) };
+  }
   if (fields.code === "TT_BACKEND_UNAVAILABLE") return { transient: true, kind: "network", ...(fields.status ? { status: fields.status } : {}) };
   const postgrest = combined.match(/\bpgrst00[0-2]\b/i)?.[0]?.toUpperCase();
   if (postgrest) return { transient: true, kind: "postgrest", ...(fields.status ? { status: fields.status } : {}), code: postgrest };
@@ -53,6 +67,8 @@ type ResilienceOptions = {
   log?: (event: string, fields: Record<string, unknown>) => void;
 };
 
+type CircuitState = { consecutiveFailures: number; openedUntil: number; probeInFlight: boolean };
+
 function defaultSleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) return reject(new DOMException("Request aborted", "AbortError"));
@@ -64,11 +80,9 @@ function defaultSleep(ms: number, signal?: AbortSignal) {
 }
 
 export class BackendResilience {
-  private failures = 0;
-  private openedUntil = 0;
-  private probeInFlight = false;
   private listeners = new Set<() => void>();
   private inFlightReads = new Map<string, Promise<Response>>();
+  private circuits = new Map<string, CircuitState>();
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly random: () => number;
@@ -85,7 +99,7 @@ export class BackendResilience {
     this.log = options.log;
   }
 
-  get circuitOpen() { return this.openedUntil > this.now(); }
+  get circuitOpen() { return [...this.circuits.values()].some((circuit) => circuit.openedUntil > this.now()); }
 
   subscribeRecovery(listener: () => void) {
     this.listeners.add(listener);
@@ -123,18 +137,28 @@ export class BackendResilience {
     const safeRead = method === "GET" || method === "HEAD";
     const authRequest = /\/auth\/v1\//i.test(url);
     const circuitProtected = !authRequest;
+    const path = safeRequestPath(url);
+    const circuitKey = `${safeOrigin(url)}${path}`;
+    const circuit = this.circuitFor(circuitKey);
     let probing = false;
 
-    if (circuitProtected && this.openedUntil) {
-      if (this.now() < this.openedUntil) throw new BackendUnavailableError();
-      if (this.probeInFlight) throw new BackendUnavailableError("TTTracker is checking its connection. Retry shortly.");
-      this.probeInFlight = true;
+    if (circuitProtected && circuit.openedUntil) {
+      if (this.now() < circuit.openedUntil) {
+        this.log?.("backend_request_blocked", { method, path, blockedBeforeRequest: true, circuitFailures: circuit.consecutiveFailures });
+        throw new BackendUnavailableError();
+      }
+      if (circuit.probeInFlight) {
+        this.log?.("backend_request_blocked", { method, path, blockedBeforeRequest: true, reason: "recovery_probe_in_flight" });
+        throw new BackendUnavailableError("TTTracker is checking its connection. Retry shortly.");
+      }
+      circuit.probeInFlight = true;
       probing = true;
-      this.log?.("backend_probe_started", { method });
+      this.log?.("backend_probe_started", { method, path, probe: "first real request after cooldown" });
     }
 
     const retries = safeRead && !authRequest ? RETRY_DELAYS_MS.length : 0;
     let lastTransient: BackendFailure | null = null;
+    let requestFailureRecorded = false;
     const deadline = this.now() + this.timeoutMs;
     try {
       for (let attempt = 0; attempt <= retries; attempt++) {
@@ -156,7 +180,6 @@ export class BackendResilience {
           }
           if (failure.transient) {
             lastTransient = failure;
-            if (circuitProtected) this.recordFailure(failure, method, attempt + 1);
             if (attempt < retries) {
               const delayMs = retryDelayMs(attempt, this.random);
               if (this.now() + delayMs >= deadline) throw new BackendUnavailableError(`TTTracker request timed out after ${Math.ceil(this.timeoutMs / 1000)} seconds.`);
@@ -165,16 +188,21 @@ export class BackendResilience {
               continue;
             }
           } else if (circuitProtected) {
-            this.recordSuccess(probing, method);
+              this.recordSuccess(circuit, probing, method, path);
             probing = false;
           }
-          if (failure.transient) this.log?.("backend_retry_exhausted", { method, attempts: attempt + 1, kind: failure.kind, status: failure.status, code: failure.code });
+          if (failure.transient) {
+            if (circuitProtected && !requestFailureRecorded) {
+              this.recordFailure(circuit, failure, method, attempt + 1, path);
+              requestFailureRecorded = true;
+            }
+            this.log?.("backend_retry_exhausted", { method, path, attempts: attempt + 1, kind: failure.kind, status: failure.status, code: failure.code });
+          }
           return response;
         } catch (error) {
           const failure = timedOut ? { transient: true, kind: "timeout" as const } : classifyBackendFailure(error);
           if (!failure.transient || externalSignal?.aborted) throw error;
           lastTransient = failure;
-          if (circuitProtected) this.recordFailure(failure, method, attempt + 1);
           if (attempt < retries) {
             const delayMs = retryDelayMs(attempt, this.random);
             if (this.now() + delayMs >= deadline) throw new BackendUnavailableError(`TTTracker request timed out after ${Math.ceil(this.timeoutMs / 1000)} seconds.`);
@@ -182,7 +210,11 @@ export class BackendResilience {
             await this.sleep(delayMs, externalSignal ?? undefined);
             continue;
           }
-          this.log?.("backend_retry_exhausted", { method, attempts: attempt + 1, kind: failure.kind });
+          if (circuitProtected && !requestFailureRecorded) {
+            this.recordFailure(circuit, failure, method, attempt + 1, path);
+            requestFailureRecorded = true;
+          }
+          this.log?.("backend_retry_exhausted", { method, path, attempts: attempt + 1, kind: failure.kind });
           if (timedOut) throw new BackendUnavailableError(`TTTracker request timed out after ${Math.ceil(this.timeoutMs / 1000)} seconds.`);
           throw new BackendUnavailableError();
         } finally {
@@ -193,29 +225,43 @@ export class BackendResilience {
       if (lastTransient) throw new BackendUnavailableError();
       throw new BackendUnavailableError();
     } finally {
-      if (probing) this.probeInFlight = false;
+      if (probing) circuit.probeInFlight = false;
     }
   }
 
-  private recordFailure(failure: BackendFailure, method: string, attempt: number) {
-    this.failures++;
-    this.log?.("backend_transient_failure", { method, attempt, kind: failure.kind, status: failure.status, code: failure.code });
-    if (this.failures >= CIRCUIT_FAILURE_THRESHOLD && !this.circuitOpen) {
-      this.openedUntil = this.now() + CIRCUIT_COOLDOWN_MS;
-      this.log?.("backend_circuit_opened", { cooldownMs: CIRCUIT_COOLDOWN_MS, failures: this.failures });
+  private circuitFor(key: string): CircuitState {
+    let circuit = this.circuits.get(key);
+    if (!circuit) {
+      circuit = { consecutiveFailures: 0, openedUntil: 0, probeInFlight: false };
+      this.circuits.set(key, circuit);
+    }
+    return circuit;
+  }
+
+  private recordFailure(circuit: CircuitState, failure: BackendFailure, method: string, attempt: number, path: string) {
+    circuit.consecutiveFailures++;
+    this.log?.("backend_transient_failure", { method, path, attempt, kind: failure.kind, status: failure.status, code: failure.code, circuitFailures: circuit.consecutiveFailures, requestSent: true });
+    if (circuit.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && circuit.openedUntil <= this.now()) {
+      circuit.openedUntil = this.now() + CIRCUIT_COOLDOWN_MS;
+      this.log?.("backend_circuit_opened", { path, cooldownMs: CIRCUIT_COOLDOWN_MS, consecutiveFailures: circuit.consecutiveFailures });
     }
   }
 
-  private recordSuccess(probing: boolean, method: string) {
-    const wasOpen = Boolean(this.openedUntil);
-    this.failures = 0;
-    this.openedUntil = 0;
-    if (this.probeInFlight) this.probeInFlight = false;
+  private recordSuccess(circuit: CircuitState, probing: boolean, method: string, path: string) {
+    const wasOpen = Boolean(circuit.openedUntil);
+    circuit.consecutiveFailures = 0;
+    circuit.openedUntil = 0;
+    circuit.probeInFlight = false;
     if (wasOpen || probing) {
-      this.log?.("backend_recovered", { method });
+      this.log?.("backend_recovered", { method, path });
       for (const listener of this.listeners) listener();
     }
   }
+}
+
+function safeOrigin(value: string) {
+  try { return new URL(value, "https://tttracker.invalid").origin; }
+  catch { return "unknown-origin"; }
 }
 
 function developmentLog(event: string, fields: Record<string, unknown>) {
@@ -224,5 +270,9 @@ function developmentLog(event: string, fields: Record<string, unknown>) {
 
 export const backendResilience = new BackendResilience({ log: developmentLog });
 export const resilientFetch: typeof fetch = (input, init) => backendResilience.fetch(input, init);
+export function createRequestResilientFetch(options: ResilienceOptions = {}): typeof fetch {
+  const requestResilience = new BackendResilience({ ...options, log: options.log ?? developmentLog });
+  return (input, init) => requestResilience.fetch(input, init);
+}
 export const isTransientBackendFailure = (error: unknown) => classifyBackendFailure(error).transient;
 export const subscribeBackendRecovery = (listener: () => void) => backendResilience.subscribeRecovery(listener);
