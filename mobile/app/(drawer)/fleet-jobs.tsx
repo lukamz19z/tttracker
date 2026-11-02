@@ -2,11 +2,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Notifications from "expo-notifications";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -1087,29 +1087,10 @@ export default function FleetJobsScreen() {
     [projectId, projectName, projectNumber],
   );
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     void loadData();
     void loadNotificationPreferences();
-  }, [loadData, loadNotificationPreferences]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("mobile-fleet-jobs-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "fleet_jobs" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "fleet_job_updates" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_prestarts" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "asset_history" }, () => void loadData(false))
-      .subscribe();
-
-    const appState = AppState.addEventListener("change", (state) => {
-      if (state === "active") void loadData(false);
-    });
-
-    return () => {
-      appState.remove();
-      void supabase.removeChannel(channel);
-    };
-  }, [loadData]);
+  }, [loadData,loadNotificationPreferences]));
 
   const selected = useMemo(
     () => bundles.find((bundle) => bundle.job.id === selectedId) ?? null,

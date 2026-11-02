@@ -2,11 +2,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
+import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -895,51 +895,7 @@ export default function PrestartsScreen() {
     void loadIdentity();
   }, [loadIdentity]);
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("mobile-prestarts-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "vehicle_prestarts",
-        },
-        () => {
-          void loadData(false);
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "fleet_jobs",
-        },
-        () => {
-          void loadData(false);
-        },
-      )
-      .subscribe();
-
-    const appStateSubscription = AppState.addEventListener(
-      "change",
-      (state) => {
-        if (state === "active") {
-          void loadData(false);
-        }
-      },
-    );
-
-    return () => {
-      appStateSubscription.remove();
-      void supabase.removeChannel(channel);
-    };
-  }, [loadData]);
+  useFocusEffect(useCallback(() => { void loadData(); }, [loadData]));
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -3455,10 +3411,6 @@ function OptionSelector({
 }) {
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    if (visible) setQuery("");
-  }, [visible]);
-
   const filtered = useMemo(() => {
     const searchValue =
       query.trim().toLowerCase();
@@ -3478,6 +3430,7 @@ function OptionSelector({
       visible={visible}
       transparent
       animationType="slide"
+      onShow={() => setQuery("")}
       onRequestClose={onClose}
     >
       <View style={styles.sheetOverlay}>

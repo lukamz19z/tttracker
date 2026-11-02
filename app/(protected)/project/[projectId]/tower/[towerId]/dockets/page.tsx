@@ -642,7 +642,7 @@ export default function TowerDocketsPage() {
       .eq("project_id", projectId)
       .is("deleted_at", null);
     if (activeError) throw new Error("Docket lifecycle changed, but active Daily Dockets could not be loaded.");
-    const activeIds = (activeDockets || []).map((row) => row.id);
+    const activeIds = ((activeDockets || []) as { id: string }[]).map((row) => row.id);
     const { data: rows, error } = await supabase
       .from("tower_docket_progress")
       .select(

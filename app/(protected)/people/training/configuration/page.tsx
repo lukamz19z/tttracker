@@ -267,7 +267,7 @@ export default function TrainingConfigurationPage() {
 
     setCategories((categoryResult.data ?? []) as Category[]);
     setRecordTypes(
-      (typeResult.data ?? []).map((item) => ({
+      ((typeResult.data ?? []) as Record<string, unknown>[]).map((item) => ({
         ...(item as Omit<
           RecordType,
           "filename_components" | "linked_evidence_training_type_ids"

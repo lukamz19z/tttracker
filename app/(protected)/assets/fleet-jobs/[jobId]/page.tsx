@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
 "use client";
 
 import Link from "next/link";
@@ -19,7 +17,7 @@ import {
   X,
   Trash2,
 } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
+import { createSupabaseBrowser } from "@/lib/supabase";
 import {
   DetailGrid,
   PageHeader,
@@ -439,16 +437,7 @@ export default function FleetJobDetailPage() {
     return raw || "";
   }, [params]);
 
-  const supabase = useMemo(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error("Missing Supabase environment variables.");
-    }
-
-    return createClient(supabaseUrl, supabaseAnonKey);
-  }, []);
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [job, setJob] = useState<FleetJob | null>(null);
   const [vehicle, setVehicle] = useState<VehicleAsset | null>(null);
@@ -675,13 +664,6 @@ export default function FleetJobDetailPage() {
       : assetType === "Plant" && job?.plant_id
         ? `/assets/plant/${job.plant_id}`
         : "/assets";
-
-  const assetUpdateHref =
-    assetType === "Vehicle" && resolvedVehicleId
-      ? `/assets/vehicles/${resolvedVehicleId}/update`
-      : assetType === "Plant" && job?.plant_id
-        ? `/assets/plant/${job.plant_id}/update`
-        : assetHref;
 
   const prestartHref = resolvedPrestartId
     ? `/assets/prestarts/${resolvedPrestartId}`

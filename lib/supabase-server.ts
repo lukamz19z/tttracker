@@ -1,11 +1,13 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getSupabaseAnonKey, getSupabaseUrl } from "./supabase-config";
+import { resilientFetch } from "./backend-resilience";
 
 export async function createSupabaseServer() {
   const cookieStore = await cookies();
 
   return createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+    global: { fetch: resilientFetch },
     cookies: {
       getAll() {
         return cookieStore.getAll();

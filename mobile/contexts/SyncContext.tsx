@@ -14,6 +14,7 @@ import {
 } from "react";
 import { AppState } from "react-native";
 import * as Network from "expo-network";
+import { subscribeBackendRecovery } from "../../lib/backend-resilience";
 
 import {
   queueRows,
@@ -27,6 +28,7 @@ import { syncQualityQueueRecord, cleanupQualityRecord } from "@/lib/offline/qual
 
 type SyncState = {
   ready: boolean;
+  recoveryVersion: number;
   online: boolean;
   effectiveOnline: boolean;
   networkOnline: boolean;
@@ -66,6 +68,7 @@ async function processRecord(record: QueueRecord) {
 
 export function SyncProvider({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
+  const [recoveryVersion,setRecoveryVersion]=useState(0);
   const [online, setOnline] = useState(false);
   const [forcedOffline, setForcedOfflineState] = useState(false);
   const [materialPendingCount, setMaterialPendingCount] = useState(0);
@@ -85,6 +88,9 @@ export function SyncProvider({ children }: PropsWithChildren) {
   const [lastError, setLastError] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
+  const onlineRef=useRef(false);
+  const lastRecoveryAtRef=useRef(0);
+  const announceRecovery=useCallback(()=>{const now=Date.now();if(now-lastRecoveryAtRef.current<30_000)return;lastRecoveryAtRef.current=now;setRecoveryVersion(value=>value+1);},[]);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const syncAgainRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,6 +119,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     if (!mountedRef.current) return;
 
     setOnline(isOnlineState(network));
+    onlineRef.current=isOnlineState(network);
     applyQueueState(rows);
     setLastError(safeSyncMessage(rows.find(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status))?.lastError || null));
   }, [applyQueueState]);
@@ -226,7 +233,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (state === "active") {
-        void refresh().then(() => void syncNow({ manual: false }));
+        void refresh().then(() => { if(onlineRef.current)announceRecovery(); return syncNow({ manual: false }); });
       }
     });
 
@@ -236,14 +243,22 @@ export function SyncProvider({ children }: PropsWithChildren) {
      */
     const networkListener = Network.addNetworkStateListener((state) => {
       const connected = isOnlineState(state);
+      const wasConnected=onlineRef.current;
+      onlineRef.current=connected;
 
       if (mountedRef.current) {
         setOnline(connected);
       }
 
       if (connected) {
+        if(!wasConnected)announceRecovery();
         void syncNow({ manual: false });
       }
+    });
+
+    const unsubscribeBackendRecovery = subscribeBackendRecovery(() => {
+      if (__DEV__) console.debug("TTTracker coordinated backend recovery refresh");
+      announceRecovery();
     });
 
     return () => {
@@ -251,14 +266,16 @@ export function SyncProvider({ children }: PropsWithChildren) {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       appListener.remove();
       networkListener.remove();
+      unsubscribeBackendRecovery();
     };
-  }, [refresh, syncNow]);
+  }, [announceRecovery,refresh, syncNow]);
 
   useEffect(() => { if (!forcedOffline && online) void syncNow({ manual: false }); }, [forcedOffline, online, syncNow]);
 
   const value = useMemo(
     () => ({
       ready,
+      recoveryVersion,
       online: online && !forcedOffline,
       effectiveOnline: online && !forcedOffline,
       networkOnline: online,
@@ -272,6 +289,7 @@ export function SyncProvider({ children }: PropsWithChildren) {
     }),
     [
       ready,
+      recoveryVersion,
       online,
       syncing,
       pendingCount,

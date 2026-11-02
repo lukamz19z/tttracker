@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { supabase } from "@/lib/supabase";
+import { isTransientBackendFailure } from "../../lib/backend-resilience";
 
 export type AvailableProject = {
   id: string;
@@ -394,11 +395,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
           clearProfile();
         }
       } catch (error) {
-        console.error("Unable to initialise authentication:", error);
-
         if (active) {
-          setSession(null);
-          clearProfile();
+          if (isTransientBackendFailure(error)) {
+            console.warn("TTTracker session check temporarily unavailable; keeping the current local auth state.");
+            setProfileError("Unable to verify your saved session right now. Check your connection and retry.");
+            setProfileLoading(false);
+          } else {
+            console.error("Unable to initialise authentication:", error);
+            setSession(null);
+            clearProfile();
+          }
           setLoading(false);
         }
       }

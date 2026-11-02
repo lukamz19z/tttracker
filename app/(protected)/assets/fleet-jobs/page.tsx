@@ -1,5 +1,3 @@
-/* eslint-disable react-hooks/set-state-in-effect */
-
 "use client";
 
 import Link from "next/link";
@@ -16,7 +14,7 @@ import {
   Settings,
   X,
 } from "lucide-react";
-import { createBrowserClient } from "@supabase/ssr";
+import { createSupabaseBrowser } from "@/lib/supabase";
 import { PageHeader, PageShell } from "../components";
 
 type Tone = "slate" | "blue" | "emerald" | "amber" | "rose" | "violet";
@@ -706,16 +704,7 @@ function JobCard({ job }: { job: EnhancedFleetJob }) {
 }
 
 export default function FleetJobsPage() {
-  const supabase = useMemo(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      throw new Error("Missing Supabase environment variables.");
-    }
-
-    return createBrowserClient(supabaseUrl, supabaseAnonKey);
-  }, []);
+  const supabase = useMemo(() => createSupabaseBrowser(), []);
 
   const [jobs, setJobs] = useState<FleetJob[]>([]);
   const [updates, setUpdates] = useState<FleetJobUpdate[]>([]);

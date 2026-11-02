@@ -2,12 +2,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Redirect,
   router,
+  useFocusEffect,
   type Href,
 } from "expo-router";
 import {
   useCallback,
-  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -251,9 +252,12 @@ export default function NotificationsScreen() {
   >(null);
 
   const userId = session?.user.id ?? null;
+  const loadPromiseRef = useRef<Promise<void> | null>(null);
 
   const loadNotifications = useCallback(
-    async (showRefresh = false) => {
+    (showRefresh = false) => {
+      if (loadPromiseRef.current) return loadPromiseRef.current;
+      const task = (async () => {
       if (!userId) {
         setNotifications([]);
         setStats(EMPTY_STATS);
@@ -324,37 +328,15 @@ export default function NotificationsScreen() {
         setPageLoading(false);
         setRefreshing(false);
       }
+      })();
+      const tracked = task.finally(() => { if (loadPromiseRef.current === tracked) loadPromiseRef.current = null; });
+      loadPromiseRef.current = tracked;
+      return tracked;
     },
     [userId],
   );
 
-  useEffect(() => {
-    void loadNotifications();
-  }, [loadNotifications]);
-
-  useEffect(() => {
-    if (!userId) return;
-
-    const channel = supabase
-      .channel(`notification-centre-${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "user_notifications",
-          filter: `user_id=eq.${userId}`,
-        },
-        () => {
-          void loadNotifications();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [loadNotifications, userId]);
+  useFocusEffect(useCallback(() => { void loadNotifications(); }, [loadNotifications]));
 
   const filteredNotifications = useMemo(() => {
     const query = searchText.trim().toLowerCase();

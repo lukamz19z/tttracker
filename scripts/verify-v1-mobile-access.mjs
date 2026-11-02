@@ -1,7 +1,7 @@
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url),fs=require('node:fs'),assert=require('node:assert/strict'),ts=require('typescript');
 globalThis.__DEV__=false;
-function load(file,mocks){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText)(n=>{assert.ok(n in mocks,n);return mocks[n]},exports);return exports;}
+function load(file,mocks){const exports={};new Function('require','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText)(n=>{if(n.endsWith('/backend-resilience'))return{resilientFetch:(...args)=>globalThis.fetch(...args),subscribeBackendRecovery:()=>()=>{}};assert.ok(n in mocks,n);return mocks[n]},exports);return exports;}
 let offline=false,calls=[];const client=load('mobile/lib/api/client.ts',{'@/lib/offline/connectivity':{manuallyOffline:()=>offline},'@/lib/supabase':{supabase:{auth:{getSession:async()=>({data:{session:{user:{id:'U'},access_token:'test-token'}}})}}}});
 for(const input of ['https://tttracker.com.au','http://tttracker.com.au/','https://WWW.TTTRACKER.COM.AU'])assert.equal(client.canonicalBase(input),'https://www.tttracker.com.au');
 for(const input of ['http://localhost:3000','http://192.168.1.10:3000','https://example.com'])assert.equal(client.canonicalBase(input),input);

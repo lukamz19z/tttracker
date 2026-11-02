@@ -20,7 +20,6 @@ import {
 } from "lucide-react-native";
 import {
   useCallback,
-  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -818,31 +817,6 @@ export default function HomeScreen() {
       void loadNotifications();
     }, [loadNotifications, loadPersonalDashboard, loadProjectDashboard]),
   );
-
-  useEffect(() => {
-    if (!canUseNotifications || !session?.user.id) return;
-
-    const userId = session.user.id;
-    const channel = supabase
-      .channel(`home-notifications-${userId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "user_notifications",
-          filter: `user_id=eq.${userId}`,
-        },
-        () => {
-          void loadNotifications();
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [canUseNotifications, loadNotifications, session?.user.id]);
 
   if (!loading && !session) {
     return <Redirect href="/login" />;

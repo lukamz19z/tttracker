@@ -1207,7 +1207,7 @@ export default function AddTrainingRecordPage() {
     }
 
     const currentApproved =
-      (data ?? []).filter(
+      ((data ?? []) as { id: string; workflow_status: string | null }[]).filter(
         (row) =>
           clean(row.workflow_status) ===
           "approved",

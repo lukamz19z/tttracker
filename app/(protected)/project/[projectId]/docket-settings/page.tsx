@@ -729,8 +729,8 @@ export default function DailyDocketApprovalSettingsPage() {
         throw new Error(existingResult.error.message);
       }
 
-      const existingIds = new Set(
-        (existingResult.data ?? []).map((row) => String(row.id)),
+      const existingIds = new Set<string>(
+        ((existingResult.data ?? []) as { id: string }[]).map((row) => String(row.id)),
       );
       const retainedIds = new Set(
         cleaned

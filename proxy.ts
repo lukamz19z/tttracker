@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
+import { resilientFetch, isTransientBackendFailure } from "./lib/backend-resilience";
 
 /*
  * Next.js 16 uses proxy.ts for request interception.
@@ -39,6 +40,7 @@ export async function proxy(request: NextRequest) {
     supabaseUrl,
     supabaseAnonKey,
     {
+      global: { fetch: resilientFetch },
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -83,6 +85,9 @@ export async function proxy(request: NextRequest) {
    * layer from changing your current login flow.
    */
   if (userError || !user) {
+    if (userError && isTransientBackendFailure(userError)) {
+      console.warn("TTTracker auth verification temporarily unavailable; preserving request session state.");
+    }
     return response;
   }
 

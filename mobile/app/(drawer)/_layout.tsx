@@ -85,13 +85,14 @@ const NOTIFICATION_BADGE_STALE_MS = 2 * 60_000;
 function NotificationBadgeProvider({ children }: PropsWithChildren) {
   const { session } = useAuth();
   const userId = session?.user.id ?? null;
-  const [count, setCount] = useState(0);
+  const [countSnapshot, setCountSnapshot] = useState<{ userId: string | null; count: number }>({ userId: null, count: 0 });
+  const count = countSnapshot.userId === userId ? countSnapshot.count : 0;
   const lastLoadedRef = useRef(0);
   const requestRef = useRef<Promise<void> | null>(null);
 
   const runLoad = useCallback(async () => {
     if (!userId) {
-      setCount(0);
+      setCountSnapshot({ userId: null, count: 0 });
       lastLoadedRef.current = Date.now();
       return;
     }
@@ -111,7 +112,7 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    setCount(unreadCount ?? 0);
+    setCountSnapshot({ userId, count: unreadCount ?? 0 });
     lastLoadedRef.current = Date.now();
   }, [userId]);
 
@@ -130,12 +131,9 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
   }, [runLoad]);
 
   useEffect(() => {
-    if (!userId) {
-      setCount(0);
-      return;
-    }
+    if (!userId) return;
 
-    void refresh();
+    void Promise.resolve().then(refresh);
 
     const channel = supabase
       .channel(`mobile-notification-badge-${userId}`)
@@ -151,7 +149,10 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
           void refresh();
         },
       )
-      .subscribe();
+      .subscribe((status, error) => {
+        if (__DEV__) console.debug("TTTracker notification Realtime", { status, error: error?.message });
+      });
+    if (__DEV__) console.debug("TTTracker notification Realtime subscribe requested");
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (
@@ -164,6 +165,7 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
 
     return () => {
       appListener.remove();
+      if (__DEV__) console.debug("TTTracker notification Realtime unsubscribe requested");
       void supabase.removeChannel(channel);
     };
   }, [refresh, userId]);

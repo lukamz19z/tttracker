@@ -502,7 +502,7 @@ export default function ExpenseClaimsPage() {
       (accessRuleResult.data ?? []) as FinancialAccessRule[],
     );
 
-    const employee = (employeeResult.data ?? []).find(
+    const employee = ((employeeResult.data ?? []) as Employee[]).find(
       (row) => row.user_id === user.id,
     ) as Employee | undefined;
 

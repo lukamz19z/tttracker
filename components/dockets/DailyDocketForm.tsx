@@ -2565,7 +2565,9 @@ export default function DailyDocketForm({
           .order("created_at", { ascending: true }),
       ]);
 
-      if (labour && labour.length > 0) setLabourRows(labour.map((r) => makeLabourRow(r)));
+      const labourRecords = (labour ?? []) as Partial<LabourRow>[];
+      const plantRecords = (plant ?? []) as Partial<PlantRow>[];
+      if (labourRecords.length > 0) setLabourRows(labourRecords.map((r) => makeLabourRow(r)));
 
       setTowerRevisionAllocations(
         ((revisionAllocations || []) as any[])
@@ -2586,9 +2588,9 @@ export default function DailyDocketForm({
 
       if (delays && delays.length > 0) {
         setDelayRows((delays as DbDelayRow[]).map((r) => makeDelayRow(r)));
-      } else if (labour && labour.length > 0) {
+      } else if (labourRecords.length > 0) {
         setDelayRows(
-          (labour as any[])
+          labourRecords
             .filter((r) => Number(r.delay_hours || 0) > 0)
             .map((r) =>
               makeDelayRow({
@@ -2596,13 +2598,13 @@ export default function DailyDocketForm({
                 delay_reason: r.delay_reason || "Legacy labour delay",
                 delay_hours: r.delay_hours,
                 applies_to: "selected_workers",
-                worker_names: [r.worker_name],
+                worker_names: [r.worker_name ?? ""],
               })
             )
         );
       }
 
-      if (plant && plant.length > 0) setPlantRows(plant.map((r) => makePlantRow(r)));
+      if (plantRecords.length > 0) setPlantRows(plantRecords.map((r) => makePlantRow(r)));
 
       if (progress && progress.length > 0) {
         const rawRows = (progress as any[]).filter((row) => !row.tower_id || String(row.tower_id) === towerId);
@@ -4196,7 +4198,8 @@ export default function DailyDocketForm({
           const dockets = await supabase.from("tower_daily_dockets")
             .select("id, docket_date").in("id", docketIds).is("deleted_at", null);
           if (dockets.error) throw dockets.error;
-          const dates = new Map((dockets.data || []).map((row) => [row.id, row.docket_date || ""]));
+          const dateRows = (dockets.data || []) as { id: string; docket_date: string | null }[];
+          const dates = new Map<string, string>(dateRows.map((row) => [row.id, row.docket_date || ""]));
           savedRows.sort((a, b) => toStringValue(dates.get(b.docket_id))
             .localeCompare(toStringValue(dates.get(a.docket_id))));
         }
@@ -6709,8 +6712,10 @@ const deleteRes = await supabase
       setSharePointStatus("");
       setPublishedPdfName("");
 
-      if (labour && labour.length > 0) {
-        const mappedLabour = labour.map((r) => makeLabourRow(r));
+      const labourRecords = (labour ?? []) as Partial<LabourRow>[];
+      const plantRecords = (plant ?? []) as Partial<PlantRow>[];
+      if (labourRecords.length > 0) {
+        const mappedLabour = labourRecords.map((r) => makeLabourRow(r));
         const dedupedLabour: LabourRow[] = [];
         const seen = new Set<string>();
 
@@ -6733,8 +6738,8 @@ const deleteRes = await supabase
         ]);
       }
 
-      if (plant && plant.length > 0) {
-        setPlantRows([...plant.map((r) => makePlantRow(r)), blankPlantRow()]);
+      if (plantRecords.length > 0) {
+        setPlantRows([...plantRecords.map((r) => makePlantRow(r)), blankPlantRow()]);
       } else {
         setPlantRows([]);
       }

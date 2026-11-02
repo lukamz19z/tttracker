@@ -1,5 +1,6 @@
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import type { Session } from "@supabase/supabase-js";
+import { resilientFetch } from "../../../lib/backend-resilience";
 
 import { supabase } from "@/lib/supabase";
 
@@ -75,6 +76,7 @@ async function performFetch(
     signal: externalSignal,
     ...requestInit
   } = init;
+  void _dedupe;
 
   if (manuallyOffline()) throw new Error("This action requires a connection.");
   const headers = new Headers(requestInit.headers);
@@ -117,14 +119,14 @@ async function performFetch(
       cache: "no-store",
       signal: controller.signal,
     };
-    let response = await fetch(url, options);
+    let response = await resilientFetch(url, options);
     // Safety only: a redirected authenticated GET may lose its Authorization.
     // Never forward credentials to an arbitrary redirect host or retry writes.
     if (response.status === 401 && response.redirected &&
         response.url.startsWith("https://www.tttracker.com.au/") &&
         canonicalBase(response.url) === canonicalBase(url) &&
         String(requestInit.method ?? "GET").toUpperCase() === "GET") {
-      response = await fetch(canonicalBase(response.url), options);
+      response = await resilientFetch(canonicalBase(response.url), options);
     }
     if (__DEV__ && (new URL(url).pathname === "/api/access/me" || /\/api\/(mobile\/)?quality\//.test(new URL(url).pathname))) {
       const path = new URL(url).pathname;

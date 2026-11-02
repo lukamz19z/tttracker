@@ -11,7 +11,6 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
-import { AppState } from "react-native";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiJson, apiUrl } from "@/lib/api/client";
@@ -150,7 +149,6 @@ const EMPTY_COUNTS: ApprovalCounts = {
  * still enforce current server-side permissions on every request.
  */
 const ACCESS_STALE_MS = 5 * 60_000;
-const ACCESS_FALLBACK_CHECK_MS = 5 * 60_000;
 const ACCESS_CACHE_PREFIX = "tttracker:mobile-access:v2:";
 
 const AccessContext = createContext<AccessState | null>(null);
@@ -205,7 +203,7 @@ async function writeAccessCache(userId: string, cache: AccessCache) {
 
 export function AccessProvider({ children }: PropsWithChildren) {
   const { session, loading: authLoading } = useAuth();
-  const { ready, effectiveOnline, forcedOffline } = useSync();
+  const { ready, effectiveOnline, recoveryVersion, forcedOffline } = useSync();
   const connectivityRef = useRef({ ready, effectiveOnline });
   connectivityRef.current = { ready, effectiveOnline };
   const [stale, setStale] = useState(false);
@@ -448,35 +446,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
   }, [ready, effectiveOnline, forcedOffline, authLoading, cacheUserId, session?.user.id, refresh]);
 
   useEffect(() => {
-    if (!session?.user.id) return;
-
-    const appListener = AppState.addEventListener("change", (state) => {
-      if (
-        state === "active" &&
-        Date.now() - lastServerRefreshRef.current >= ACCESS_STALE_MS
-      ) {
-        void refresh();
-      }
-    });
-
-    /*
-     * Low-frequency fallback for a role/permission change while the app stays
-     * continuously open. This is 5x less frequent than the old full refresh.
-     */
-    const interval = setInterval(() => {
-      if (
-        AppState.currentState === "active" &&
-        Date.now() - lastServerRefreshRef.current >= ACCESS_STALE_MS
-      ) {
-        void refresh();
-      }
-    }, ACCESS_FALLBACK_CHECK_MS);
-
-    return () => {
-      appListener.remove();
-      clearInterval(interval);
-    };
-  }, [refresh, session?.user.id]);
+    if(session?.user.id&&recoveryVersion>0&&Date.now()-lastServerRefreshRef.current>=ACCESS_STALE_MS)void refresh();
+  },[recoveryVersion,refresh,session?.user.id]);
 
   const roleCodes = useMemo(
     () =>

@@ -1,5 +1,4 @@
 import { compareBundles } from "@/lib/materials-sort";
-import { AppState } from "react-native";
 import {
   createContext,
   useCallback,
@@ -137,7 +136,7 @@ function localBundleStatus(
 
 export function MaterialsProvider({ children }: PropsWithChildren) {
   const { profile } = useAuth();
-  const { online, setMaterialPendingCount, registerMaterialSync } = useSync();
+  const { online, recoveryVersion, setMaterialPendingCount, registerMaterialSync } = useSync();
   const projectId = profile?.projectId ?? null;
 
   const [data, setData] = useState<MaterialPayload | null>(null);
@@ -482,18 +481,8 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   }, [load]);
 
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (
-        state === "active" &&
-        online &&
-        Date.now() - lastServerRefreshRef.current >= MATERIALS_STALE_MS
-      ) {
-        void load(false);
-      }
-    });
-
-    return () => sub.remove();
-  }, [load, online]);
+    if(recoveryVersion>0&&online&&Date.now()-lastServerRefreshRef.current>=MATERIALS_STALE_MS)void load(false);
+  },[load,online,recoveryVersion]);
 
   const towerMap = useMemo(
     () =>

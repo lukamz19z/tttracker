@@ -1,4 +1,3 @@
-import { AppState } from "react-native";
 import {
   createContext,
   useCallback,
@@ -47,7 +46,7 @@ export function QualityProvider({
   children,
 }: PropsWithChildren) {
   const { profile } = useAuth();
-  const { online, syncNow } = useSync();
+  const { online, recoveryVersion, syncNow } = useSync();
   const projectId = profile?.projectId ?? null;
 
   useEffect(() => { if (projectId && online) void syncNow({ manual: false }); }, [online, projectId, syncNow]);
@@ -210,35 +209,9 @@ export function QualityProvider({
   }, [loadProject, projectId]);
 
   useEffect(() => {
-    const subscription =
-      AppState.addEventListener(
-        "change",
-        (state) => {
-          if (
-            state !== "active" ||
-            !projectRef.current ||
-            !online
-          ) {
-            return;
-          }
-
-          if (
-            ageMs(cachedAt) >= QUALITY_STALE_MS
-          ) {
-            void runLiveRefresh(
-              projectRef.current,
-              Boolean(dataRef.current),
-            );
-          }
-        },
-      );
-
-    return () => subscription.remove();
-  }, [
-    cachedAt,
-    online,
-    runLiveRefresh,
-  ]);
+    if(recoveryVersion===0||!online||!projectRef.current||ageMs(cachedAt)<QUALITY_STALE_MS)return;
+    void runLiveRefresh(projectRef.current,Boolean(dataRef.current));
+  },[cachedAt,online,recoveryVersion,runLiveRefresh]);
 
   const refresh = useCallback(async () => {
     const currentProjectId =

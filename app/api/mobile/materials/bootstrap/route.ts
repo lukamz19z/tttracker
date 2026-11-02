@@ -120,8 +120,6 @@ export async function GET(request: NextRequest) {
       deliveries,
       events,
       transfers,
-      memberCountResult,
-      boltCountResult,
     ] = await Promise.all([
       paged((from, to) =>
         service
@@ -179,33 +177,13 @@ export async function GET(request: NextRequest) {
           .order("transferred_at", { ascending: false })
           .range(from, to),
       ),
-      service
-        .from("tower_material_members")
-        .select("id", { count: "exact", head: true })
-        .in("tower_id", towerIds),
-      service
-        .from("tower_material_bolts")
-        .select("id", { count: "exact", head: true })
-        .in("tower_id", towerIds),
     ]);
-
-    if (memberCountResult.error) {
-      throw new Error(memberCountResult.error.message);
-    }
-
-    if (boltCountResult.error) {
-      throw new Error(boltCountResult.error.message);
-    }
 
     return NextResponse.json({
       cacheVersion: 2,
       snapshotMode: "summary",
       projectId,
       generatedAt: new Date().toISOString(),
-      catalogCounts: {
-        members: memberCountResult.count ?? 0,
-        bolts: boltCountResult.count ?? 0,
-      },
       towers: towers ?? [],
       bundles,
 

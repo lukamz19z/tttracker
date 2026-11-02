@@ -91,7 +91,7 @@ export default function ProjectCommercialDashboard() {
           .in("docket_id", docketIds);
 
         if (!error && data) {
-          labourLoaded = data.map((row) => ({
+          labourLoaded = (data as Record<string, unknown>[]).map((row) => ({
             docket_id: getString(row, "docket_id"),
             total_hours: getNumberLike(row, "total_hours"),
             hours: getNumberLike(row, "hours"),

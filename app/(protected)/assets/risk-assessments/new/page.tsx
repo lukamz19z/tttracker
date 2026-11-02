@@ -96,6 +96,26 @@ type AssessorOption = {
   role: string;
 };
 
+type RiskAssessorRecord = { id: string; full_name: string | null; role: string | null };
+type RiskResponsePrefill = {
+  library_item_id: string | null;
+  response: string | null;
+  comment: string | null;
+  assessor_observation: string | null;
+  recommended_action: string | null;
+  verification_method: string | null;
+  function_test_completed: boolean | null;
+  document_verified: boolean | null;
+  preliminary_likelihood: number | null;
+  preliminary_consequence: number | null;
+  residual_likelihood: number | null;
+  residual_consequence: number | null;
+  treatment_due_date: string | null;
+  responsible_person_name: string | null;
+  stop_use: boolean | null;
+};
+type RiskResponseDestination = { id: string; library_item_id: string | null };
+
 type StepNumber = 1 | 2 | 3;
 
 const PURPOSE_OPTIONS = [
@@ -700,7 +720,7 @@ export default function NewRiskAssessmentPage() {
       );
     } else {
       setAssessors(
-        (employeesResult.data ?? []).map((employee) => ({
+        ((employeesResult.data ?? []) as RiskAssessorRecord[]).map((employee) => ({
           id: clean(employee.id),
           name: clean(employee.full_name),
           role: clean(employee.role),
@@ -963,8 +983,8 @@ export default function NewRiskAssessmentPage() {
       return;
     }
 
-    const sourceByLibraryId = new Map(
-      (sourceResult.data ?? [])
+    const sourceByLibraryId = new Map<string, RiskResponsePrefill>(
+      ((sourceResult.data ?? []) as RiskResponsePrefill[])
         .filter((row) => row.library_item_id)
         .map((row) => [
           clean(row.library_item_id),
@@ -975,7 +995,7 @@ export default function NewRiskAssessmentPage() {
     const sourceAssessmentDate =
       latestPreviousAssessment?.assessment_date ?? null;
 
-    const updates = (destinationResult.data ?? [])
+    const updates = ((destinationResult.data ?? []) as RiskResponseDestination[])
       .map((destination) => {
         const libraryId = clean(destination.library_item_id);
         const source = sourceByLibraryId.get(libraryId);

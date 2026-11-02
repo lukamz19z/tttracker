@@ -1,10 +1,10 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  AppState,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -871,31 +871,7 @@ export default function AssetsScreen() {
     if (showLoader) setLoading(false);
   }, []);
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("mobile-assets-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_assets" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "plant_assets" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_prestarts" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "fleet_jobs" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "equipment_torque_wrenches" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "equipment_lifting_gear" }, () => void loadData(false))
-      .on("postgres_changes", { event: "*", schema: "public", table: "equipment_ladders" }, () => void loadData(false))
-      .subscribe();
-
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void loadData(false);
-    });
-
-    return () => {
-      subscription.remove();
-      void supabase.removeChannel(channel);
-    };
-  }, [loadData]);
+  useFocusEffect(useCallback(()=>{void loadData();},[loadData]));
 
   const crewById = useMemo(
     () => new Map(crews.map((row) => [row.id, row])),
