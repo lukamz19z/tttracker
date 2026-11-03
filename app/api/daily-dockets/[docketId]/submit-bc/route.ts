@@ -1,6 +1,6 @@
 import { isFutureDocketDate } from "@/lib/dockets/calendar-date";
 import { loadOutstandingMobileMaterialIssues } from "@/lib/dockets/mobile-docket-materials";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
@@ -9,6 +9,7 @@ import {
   isConfiguredBcReviewer,
 } from "@/lib/dockets/reviewers";
 import { resolveSystemUserIdentity } from "@/lib/dockets/system-user-identity";
+import { isSubmittedDailyDocketStatus } from "@/lib/dockets/submission-status";
 import {
   docketEmailShell,
   sendDailyDocketEmail,
@@ -34,6 +35,7 @@ type DocketRow = {
   bc_signature_data_url: string | null;
   bc_signed_at: string | null;
   approval_revision: number | null;
+  bc_submitted_at?: string | null;
   raw_manhours?: number | null;
   production_manhours?: number | null;
   prestart_minutes?: number | null;
@@ -503,6 +505,14 @@ export async function POST(
   _request: Request,
   context: RouteContext,
 ) {
+  let phaseStartedAt = Date.now();
+  const logSubmitPhase = (phase: string) => {
+    if (process.env.NODE_ENV !== "production") {
+      console.info("Daily Docket submit timing", { phase, durationMs: Date.now() - phaseStartedAt });
+    }
+    phaseStartedAt = Date.now();
+  };
+
   try {
     const { docketId } = await context.params;
 
@@ -559,6 +569,7 @@ export async function POST(
         { status: 401 },
       );
     }
+    logSubmitPhase("authenticate");
 
     const service = createServiceClient();
 
@@ -577,6 +588,7 @@ export async function POST(
         bc_rep_user_id,
         bc_signature_data_url,
         bc_signed_at,
+        bc_submitted_at,
         approval_revision,
         raw_manhours,
         production_manhours,
@@ -600,32 +612,9 @@ export async function POST(
         { status: 404 },
       );
     }
+    logSubmitPhase("load_docket");
 
     const docket = docketData as DocketRow;
-    const materialIssueSnapshot = Array.isArray(docket.material_issue_snapshot)
-      ? docket.material_issue_snapshot
-      : await loadOutstandingMobileMaterialIssues(service, docket.tower_id, docket.docket_date || undefined);
-    if (docket.docket_date && isFutureDocketDate(docket.docket_date, new Date(), _request.headers.get("X-TTTracker-Timezone"))) {
-      return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
-    }
-
-    const allowedStatuses = new Set([
-      "draft",
-      "legacy",
-      "bc_changes_requested",
-      "client_changes_requested",
-    ]);
-
-    if (!allowedStatuses.has(String(docket.approval_status || "legacy"))) {
-      return NextResponse.json(
-        {
-          error:
-            "This Daily Docket cannot be submitted from its current approval status.",
-        },
-        { status: 409 },
-      );
-    }
-
     const { data: accessData, error: accessError } = await service
       .from("project_access")
       .select("user_id")
@@ -651,6 +640,40 @@ export async function POST(
         { error: "You do not have access to submit this Daily Docket." },
         { status: 403 },
       );
+    }
+
+    if (isSubmittedDailyDocketStatus(docket.approval_status)) {
+      return NextResponse.json({
+        success: true,
+        docketId: docket.id,
+        status: docket.approval_status,
+        submittedAt: docket.bc_submitted_at ?? new Date().toISOString(),
+        revision: Math.max(0, Number(docket.approval_revision ?? 0) || 0),
+        reviewers: 0,
+        reviewerRecipients: [],
+        warning: null,
+        alreadySubmitted: true,
+      });
+    }
+
+    const allowedStatuses = new Set([
+      "draft",
+      "legacy",
+      "bc_changes_requested",
+      "client_changes_requested",
+    ]);
+    if (!allowedStatuses.has(String(docket.approval_status || "legacy"))) {
+      return NextResponse.json(
+        { error: "This Daily Docket cannot be submitted from its current approval status." },
+        { status: 409 },
+      );
+    }
+
+    const materialIssueSnapshot = Array.isArray(docket.material_issue_snapshot)
+      ? docket.material_issue_snapshot
+      : await loadOutstandingMobileMaterialIssues(service, docket.tower_id, docket.docket_date || undefined);
+    if (docket.docket_date && isFutureDocketDate(docket.docket_date, new Date(), _request.headers.get("X-TTTracker-Timezone"))) {
+      return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
     }
 
     const signerIdentity = await resolveSystemUserIdentity(service, user);
@@ -704,6 +727,7 @@ export async function POST(
         { status: 400 },
       );
     }
+    logSubmitPhase("validate_authorize_and_resolve_reviewers");
 
     const submittedAt = new Date().toISOString();
     const previousRevision = Math.max(
@@ -769,6 +793,25 @@ export async function POST(
     }
 
     if (!updatedDocket) {
+      const { data: currentDocket, error: currentError } = await service
+        .from("tower_daily_dockets")
+        .select("id,approval_status,approval_revision,bc_submitted_at")
+        .eq("id", docket.id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (!currentError && currentDocket && isSubmittedDailyDocketStatus(currentDocket.approval_status)) {
+        return NextResponse.json({
+          success: true,
+          docketId: currentDocket.id,
+          status: currentDocket.approval_status,
+          submittedAt: currentDocket.bc_submitted_at ?? new Date().toISOString(),
+          revision: Math.max(0, Number(currentDocket.approval_revision ?? 0) || 0),
+          reviewers: 0,
+          reviewerRecipients: [],
+          warning: null,
+          alreadySubmitted: true,
+        });
+      }
       return NextResponse.json(
         {
           error:
@@ -777,6 +820,7 @@ export async function POST(
         { status: 409 },
       );
     }
+    logSubmitPhase("persist_submission_state");
 
     await service.from("tower_docket_approvals").insert({
       docket_id: docket.id,
@@ -805,161 +849,177 @@ export async function POST(
         reviewer_emails: reviewers.map((reviewer) => reviewer.email),
       },
     });
+    logSubmitPhase("approval_and_workflow_records");
 
-    const [
-      { data: projectData },
-      { data: towerData },
-      { data: projectTowersData },
-      labourResult,
-      plantResult,
-      delayResult,
-      materialResult,
-      allocationResult,
-    ] = await Promise.all([
-      service
-        .from("projects")
-        .select("id, name, project_number")
-        .eq("id", docket.project_id)
-        .maybeSingle(),
-      service
-        .from("towers")
-        .select("id, name, extra_data")
-        .eq("id", docket.tower_id)
-        .maybeSingle(),
-      service
-        .from("towers")
-        .select("id,name,extra_data")
-        .eq("project_id", docket.project_id)
-        .order("name"),
-      service
-        .from("tower_docket_labour")
-        .select("*")
-        .eq("docket_id", docket.id)
-        .order("worker_name"),
-      service
-        .from("tower_docket_plant")
-        .select("*")
-        .eq("docket_id", docket.id),
-      service
-        .from("tower_docket_delays")
-        .select("*")
-        .eq("docket_id", docket.id)
-        .order("created_at"),
-      service
-        .from("tower_material_events")
-        .select(`
-          *,
-          tower_material_event_items(*),
-          tower_material_event_people(*),
-          tower_material_event_plant(*)
-        `)
-        .eq("docket_id", docket.id)
-        .order("occurred_at"),
-      service
-        .from("tower_docket_hour_allocations")
-        .select("*")
-        .eq("docket_id", docket.id)
-        .order("created_at"),
-    ]);
+    after(async () => {
+      const notificationStartedAt = Date.now();
+      const postCommitDataStartedAt = Date.now();
+      try {
+      const [
+        { data: projectData },
+        { data: towerData },
+        { data: projectTowersData },
+        labourResult,
+        plantResult,
+        delayResult,
+        materialResult,
+        allocationResult,
+      ] = await Promise.all([
+        service
+          .from("projects")
+          .select("id, name, project_number")
+          .eq("id", docket.project_id)
+          .maybeSingle(),
+        service
+          .from("towers")
+          .select("id, name, extra_data")
+          .eq("id", docket.tower_id)
+          .maybeSingle(),
+        service
+          .from("towers")
+          .select("id,name,extra_data")
+          .eq("project_id", docket.project_id)
+          .order("name"),
+        service
+          .from("tower_docket_labour")
+          .select("*")
+          .eq("docket_id", docket.id)
+          .order("worker_name"),
+        service
+          .from("tower_docket_plant")
+          .select("*")
+          .eq("docket_id", docket.id),
+        service
+          .from("tower_docket_delays")
+          .select("*")
+          .eq("docket_id", docket.id)
+          .order("created_at"),
+        service
+          .from("tower_material_events")
+          .select(`
+            *,
+            tower_material_event_items(*),
+            tower_material_event_people(*),
+            tower_material_event_plant(*)
+          `)
+          .eq("docket_id", docket.id)
+          .order("occurred_at"),
+        service
+          .from("tower_docket_hour_allocations")
+          .select("*")
+          .eq("docket_id", docket.id)
+          .order("created_at"),
+      ]);
+      if (process.env.NODE_ENV !== "production") {
+        console.info("Daily Docket submit timing", { phase: "post_commit_data_load", durationMs: Date.now() - postCommitDataStartedAt });
+      }
 
-    const project = (projectData as ProjectRow | null) || null;
-    const tower = (towerData as TowerRow | null) || null;
+      const project = (projectData as ProjectRow | null) || null;
+      const tower = (towerData as TowerRow | null) || null;
 
-    let emailWarning: string | null = null;
+      try {
+        const reviewUrl = buildReviewUrl({
+          projectId: docket.project_id,
+          towerId: docket.tower_id,
+          docketId: docket.id,
+        });
 
-    try {
-      const reviewUrl = buildReviewUrl({
-        projectId: docket.project_id,
-        towerId: docket.tower_id,
-        docketId: docket.id,
-      });
+        const projectName =
+          project?.name ||
+          project?.project_number ||
+          "TTTracker Project";
 
-      const projectName =
-        project?.name ||
-        project?.project_number ||
-        "TTTracker Project";
+        const towerName = getTowerName(tower);
+        const docketDate = formatDate(docket.docket_date);
 
-      const towerName = getTowerName(tower);
-      const docketDate = formatDate(docket.docket_date);
+        const recipientNames = reviewers
+          .map((reviewer) => reviewer.name)
+          .filter(Boolean);
 
-      const recipientNames = reviewers
-        .map((reviewer) => reviewer.name)
-        .filter(Boolean);
+        const operationalSummary = buildOperationalSummaryHtml({
+          docket,
+          labour: (labourResult.data ?? []) as Array<Record<string, unknown>>,
+          plant: (plantResult.data ?? []) as Array<Record<string, unknown>>,
+          delays: (delayResult.data ?? []) as Array<Record<string, unknown>>,
+          materialEvents: (materialResult.data ?? []) as Array<Record<string, unknown>>,
+          towers: (projectTowersData ?? []) as Array<Record<string, unknown>>,
+          hourAllocations: (allocationResult.data ?? []) as Array<Record<string, unknown>>,
+        });
 
-      const operationalSummary = buildOperationalSummaryHtml({
-        docket,
-        labour: (labourResult.data ?? []) as Array<Record<string, unknown>>,
-        plant: (plantResult.data ?? []) as Array<Record<string, unknown>>,
-        delays: (delayResult.data ?? []) as Array<Record<string, unknown>>,
-        materialEvents: (materialResult.data ?? []) as Array<Record<string, unknown>>,
-        towers: (projectTowersData ?? []) as Array<Record<string, unknown>>,
-        hourAllocations: (allocationResult.data ?? []) as Array<Record<string, unknown>>,
-      });
+        const html = docketEmailShell(
+          "Daily Docket awaiting BC approval",
+          `
+            <p>A Daily Docket has been submitted for BC approval.</p>
 
-      const html = docketEmailShell(
-        "Daily Docket awaiting BC approval",
-        `
-          <p>A Daily Docket has been submitted for BC approval.</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:20px 0;border-collapse:collapse;">
+              <tr>
+                <td style="padding:8px 0;color:#64748b;width:150px;">Project</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">${projectName}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;color:#64748b;">Tower</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">${towerName}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;color:#64748b;">Docket Date</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docketDate}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;color:#64748b;">Revision</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">R${String(revision).padStart(2, "0")}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;color:#64748b;">Leading Hand</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.leading_hand || "—"}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;color:#64748b;">BC Representative</td>
+                <td style="padding:8px 0;color:#0f172a;font-weight:600;">${escapeHtml(signerIdentity.name)} · ${escapeHtml(signerIdentity.email)}</td>
+              </tr>
+            </table>
 
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:20px 0;border-collapse:collapse;">
-            <tr>
-              <td style="padding:8px 0;color:#64748b;width:150px;">Project</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${projectName}</td>
-            </tr>
-            <tr>
-              <td style="padding:8px 0;color:#64748b;">Tower</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${towerName}</td>
-            </tr>
-            <tr>
-              <td style="padding:8px 0;color:#64748b;">Docket Date</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docketDate}</td>
-            </tr>
-            <tr>
-              <td style="padding:8px 0;color:#64748b;">Revision</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">R${String(revision).padStart(2, "0")}</td>
-            </tr>
-            <tr>
-              <td style="padding:8px 0;color:#64748b;">Leading Hand</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${docket.leading_hand || "—"}</td>
-            </tr>
-            <tr>
-              <td style="padding:8px 0;color:#64748b;">BC Representative</td>
-              <td style="padding:8px 0;color:#0f172a;font-weight:600;">${escapeHtml(signerIdentity.name)} · ${escapeHtml(signerIdentity.email)}</td>
-            </tr>
-          </table>
+            ${operationalSummary}
 
-          ${operationalSummary}
+            <p style="margin-top:20px;">
+              Review the Daily Docket in TTTracker and either approve it for client review or request changes.
+            </p>
 
-          <p style="margin-top:20px;">
-            Review the Daily Docket in TTTracker and either approve it for client review or request changes.
-          </p>
+            <p style="margin:24px 0;">
+              <a href="${reviewUrl}" style="display:inline-block;background:#047857;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px;">
+                Review Daily Docket
+              </a>
+            </p>
 
-          <p style="margin:24px 0;">
-            <a href="${reviewUrl}" style="display:inline-block;background:#047857;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px;">
-              Review Daily Docket
-            </a>
-          </p>
+            <p style="font-size:13px;color:#64748b;">
+              This approval request was sent to ${recipientNames.length} individually configured BC reviewer${recipientNames.length === 1 ? "" : "s"}${recipientNames.length ? `: ${escapeHtml(recipientNames.join(", "))}` : ""}.
+            </p>
+          `,
+        );
 
-          <p style="font-size:13px;color:#64748b;">
-            This approval request was sent to ${recipientNames.length} individually configured BC reviewer${recipientNames.length === 1 ? "" : "s"}${recipientNames.length ? `: ${escapeHtml(recipientNames.join(", "))}` : ""}.
-          </p>
-        `,
-      );
+        const emailStartedAt = Date.now();
+        await sendDailyDocketEmail({
+          to: reviewers.map((reviewer) => reviewer.email),
+          subject: `Daily Docket approval required · ${towerName} · ${docketDate}`,
+          html,
+        });
+        if (process.env.NODE_ENV !== "production") {
+          console.info("Daily Docket submit timing", { phase: "reviewer_email", durationMs: Date.now() - emailStartedAt });
+        }
+      } catch (emailError) {
+        console.error(
+          "Daily Docket submitted but BC reviewer email could not be sent",
+          emailError,
+        );
 
-      await sendDailyDocketEmail({
-        to: reviewers.map((reviewer) => reviewer.email),
-        subject: `Daily Docket approval required · ${towerName} · ${docketDate}`,
-        html,
-      });
-    } catch (emailError) {
-      console.error(
-        "Daily Docket submitted but BC reviewer email could not be sent",
-        emailError,
-      );
+      }
 
-      emailWarning =
-        "The Daily Docket was submitted successfully, but the reviewer email could not be sent.";
-    }
+      } catch (postCommitError) {
+        console.error("Daily Docket submitted; post-commit reviewer notification preparation failed", postCommitError);
+      } finally {
+        if (process.env.NODE_ENV !== "production") console.info("Daily Docket submit timing", { phase: "post_commit_notification_work", durationMs: Date.now() - notificationStartedAt });
+      }
+    });
+    logSubmitPhase("schedule_post_commit_notification");
 
     return NextResponse.json({
       success: true,
@@ -972,7 +1032,7 @@ export async function POST(
         name: reviewer.name,
         email: reviewer.email,
       })),
-      warning: emailWarning,
+      warning: null,
     });
   } catch (error) {
     console.error("Daily Docket submit-bc route failed", error);

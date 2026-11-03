@@ -542,9 +542,10 @@ export type SaveDailyDocketResult = {
 export type SubmitDailyDocketResult = {
   success: true;
   docketId: string;
-  status: "submitted_bc";
+  status: string;
   submittedAt: string;
   revision: number;
   reviewers: number;
   warning?: string | null;
+  alreadySubmitted?: boolean;
 };

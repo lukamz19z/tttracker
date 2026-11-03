@@ -1,6 +1,7 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getTowerProgress } from "@/lib/api/tower-progress";
+import { towerWeightTonnes } from "@/lib/dockets/productivity";
 import type { ResolvedMobileTowerProgress } from "@/types/daily-dockets";
 import { Ionicons } from "@expo/vector-icons";
 import { router, type Href } from "expo-router";
@@ -55,26 +56,6 @@ type DefectRow = {
   status?: string | null;
 };
 
-type BundleRow = {
-  bundle_no?: string | null;
-  qty_required?: number | null;
-  required_qty?: number | null;
-  section?: string | null;
-};
-
-type DeliveryRow = {
-  id: string;
-};
-
-type DeliveryItemRow = {
-  delivery_id?: string | null;
-  bundle_no?: string | null;
-  qty_delivered?: number | null;
-  quantity_delivered?: number | null;
-  delivered_qty?: number | null;
-  qty?: number | null;
-};
-
 type StatusFilter =
   | "All"
   | "Not Started"
@@ -87,32 +68,12 @@ type SelectorOption = {
   subtitle?: string;
 };
 
-type OutstandingBundle = {
-  bundleNo: string;
-  section: string;
-  required: number;
-  delivered: number;
-  outstanding: number;
-};
 const progressCacheKey = (projectId: string) => `tttracker:tower-progress:${projectId}`;
 
 function safeString(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
   if (value === null || value === undefined) return fallback;
   return String(value);
-}
-
-function safeNumber(value: unknown, fallback = 0): number {
-  if (value === null || value === undefined || value === "") {
-    return fallback;
-  }
-
-  const parsed =
-    typeof value === "number"
-      ? value
-      : Number(String(value).replace(/,/g, ""));
-
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function clampPercent(value: number): number {
@@ -202,20 +163,6 @@ function getProgressStatus(
   return "Not Started";
 }
 
-function getRequiredQty(row: BundleRow): number {
-  return safeNumber(row.qty_required ?? row.required_qty, 0);
-}
-
-function getDeliveredQty(row: DeliveryItemRow): number {
-  return safeNumber(
-    row.qty_delivered ??
-      row.quantity_delivered ??
-      row.delivered_qty ??
-      row.qty,
-    0,
-  );
-}
-
 function isOpenDefect(defect: DefectRow): boolean {
   const status = safeString(defect.status).trim().toLowerCase();
 
@@ -251,6 +198,16 @@ function formatExtraValue(value: unknown): string {
   return String(value);
 }
 
+function formatMetric(value: number | null, decimals: number): string {
+  return value !== null && Number.isFinite(value)
+    ? value.toFixed(decimals)
+    : "—";
+}
+
+function formatPercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${value}%`;
+}
+
 function findExtraValue(
   extra: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -276,7 +233,7 @@ async function safeSelect<T>(
   table: string,
   select: string,
   filters?: { column: string; value: string }[],
-): Promise<T[]> {
+): Promise<T[] | null> {
   try {
     let query = supabase.from(table).select(select);
 
@@ -286,30 +243,12 @@ async function safeSelect<T>(
 
     const { data, error } = await query;
 
-    if (error) return [];
+    if (error) return null;
 
     return (data as T[] | null) ?? [];
   } catch {
-    return [];
+    return null;
   }
-}
-
-async function safeSelectFirstExisting<T>(
-  tables: string[],
-  select: string,
-  filters?: { column: string; value: string }[],
-): Promise<T[]> {
-  for (const table of tables) {
-    const rows = await safeSelect<T>(
-      table,
-      select,
-      filters,
-    );
-
-    if (rows.length > 0) return rows;
-  }
-
-  return [];
 }
 
 export default function TowerProgressScreen() {
@@ -350,21 +289,21 @@ export default function TowerProgressScreen() {
   const [towerDockets, setTowerDockets] = useState<
     DocketRow[]
   >([]);
-  const [defects, setDefects] = useState<DefectRow[]>([]);
-  const [requiredBundles, setRequiredBundles] =
-    useState<BundleRow[]>([]);
-  const [deliveries, setDeliveries] = useState<
-    DeliveryRow[]
-  >([]);
-  const [deliveryItems, setDeliveryItems] = useState<
-    DeliveryItemRow[]
-  >([]);
+  const [defects, setDefects] = useState<DefectRow[] | null>(null);
 
   const loadProject = useCallback(
     async (
       selectedProjectId: string,
       silent = false,
+      resetProjectView = false,
     ) => {
+      if (resetProjectView) {
+        setSearch("");
+        setStatusFilter("All");
+        setOverviewVisible(false);
+        setSelectedTower(null);
+      }
+
       if (!selectedProjectId) {
         setTowers([]);
         setDockets([]);
@@ -440,12 +379,10 @@ export default function TowerProgressScreen() {
   );
 
   useEffect(() => {
-    setSearch("");
-    setStatusFilter("All");
-    setOverviewVisible(false);
-    setSelectedTower(null);
-
-    void loadProject(projectId);
+    const frame = requestAnimationFrame(() => {
+      void loadProject(projectId, false, true);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [loadProject, projectId]);
 
   const refresh = useCallback(async () => {
@@ -471,19 +408,17 @@ export default function TowerProgressScreen() {
   }, [dockets]);
 
   const progressByTower = useMemo(() => {
-    const map: Record<string, number> = {};
+    const map: Record<string, number | undefined> = {};
 
     towers.forEach((tower) => {
-      map[tower.id] = resolvedProgress[tower.id]?.totalProgressPercent ?? 0;
+      map[tower.id] = resolvedProgress[tower.id]?.totalProgressPercent;
     });
 
     return map;
   }, [resolvedProgress, towers]);
 
   const summary = useMemo(() => {
-    const values = towers.map(
-      (tower) => progressByTower[tower.id] ?? 0,
-    );
+    const values = towers.map((tower) => progressByTower[tower.id]).filter((value): value is number => value !== undefined);
 
     const total = towers.length;
     const complete = values.filter(
@@ -493,14 +428,14 @@ export default function TowerProgressScreen() {
       (value) => value > 0 && value < 100,
     ).length;
     const average =
-      total > 0
+      values.length > 0
         ? Math.round(
             values.reduce(
               (sum, value) => sum + value,
               0,
-            ) / total,
+            ) / values.length,
           )
-        : 0;
+        : null;
 
     return {
       total,
@@ -516,10 +451,8 @@ export default function TowerProgressScreen() {
     return [...towers]
       .sort(naturalTowerSort)
       .filter((tower) => {
-        const progress =
-          progressByTower[tower.id] ?? 0;
-        const status =
-          getProgressStatus(progress);
+        const progress = progressByTower[tower.id];
+        const status = progress === undefined ? null : getProgressStatus(progress);
 
         if (
           statusFilter !== "All" &&
@@ -535,7 +468,7 @@ export default function TowerProgressScreen() {
           tower.name,
           tower.line,
           getTowerType(tower),
-          status,
+          status ?? "Progress unavailable",
           progress,
         ).includes(query);
       });
@@ -596,31 +529,11 @@ export default function TowerProgressScreen() {
     setOverviewLoading(true);
 
     setTowerDockets([]);
-    setDefects([]);
-    setRequiredBundles([]);
-    setDeliveries([]);
-    setDeliveryItems([]);
+    setDefects(null);
 
     const towerId = tower.id;
 
-    const [
-      docketRows,
-      defectRows,
-      bundleRows,
-      deliveryRows,
-    ] = await Promise.all([
-      safeSelect<DocketRow>(
-        "tower_daily_dockets",
-        "id, project_id, tower_id, docket_date, crew, leading_hand, assembly_percent, erection_percent, approval_status, deleted_at",
-        [
-          {
-            column: "tower_id",
-            value: towerId,
-          },
-        ],
-      ),
-
-      safeSelect<DefectRow>(
+    const defectRows = await safeSelect<DefectRow>(
         "tower_defects",
         "id, status",
         [
@@ -629,199 +542,48 @@ export default function TowerProgressScreen() {
             value: towerId,
           },
         ],
-      ),
-
-      safeSelect<BundleRow>(
-        "tower_required_bundles",
-        "bundle_no, qty_required, required_qty, section",
-        [
-          {
-            column: "tower_id",
-            value: towerId,
-          },
-        ],
-      ),
-
-      safeSelectFirstExisting<DeliveryRow>(
-        [
-          "tower_bundle_deliveries",
-          "tower_deliveries",
-        ],
-        "id",
-        [
-          {
-            column: "tower_id",
-            value: towerId,
-          },
-        ],
-      ),
-    ]);
-
-    const sortedDockets = docketRows.filter(row => row.approval_status !== "deleted" && !row.deleted_at).sort(
-      (a, b) => {
-        const first = a.docket_date
-          ? new Date(a.docket_date).getTime()
-          : 0;
-        const second = b.docket_date
-          ? new Date(b.docket_date).getTime()
-          : 0;
-
-        return second - first;
-      },
-    );
-
-    const deliveryIds = deliveryRows.map(
-      (delivery) => delivery.id,
-    );
-
-    let items: DeliveryItemRow[] = [];
-
-    if (deliveryIds.length > 0) {
-      const allItems =
-        await safeSelectFirstExisting<DeliveryItemRow>(
-          [
-            "tower_bundle_delivery_items",
-            "tower_delivery_items",
-            "tower_delivered_items",
-          ],
-          "delivery_id, bundle_no, qty_delivered, quantity_delivered, delivered_qty, qty",
-        );
-
-      items = allItems.filter((item) =>
-        deliveryIds.includes(
-          safeString(item.delivery_id),
-        ),
       );
-    }
+
+    const sortedDockets = [...(docketsByTower[towerId] ?? [])].sort(
+      (a, b) => new Date(b.docket_date ?? 0).getTime() - new Date(a.docket_date ?? 0).getTime(),
+    );
 
     setTowerDockets(sortedDockets);
     setDefects(defectRows);
-    setRequiredBundles(bundleRows);
-    setDeliveries(deliveryRows);
-    setDeliveryItems(items);
     setOverviewLoading(false);
   }
 
   const overviewStats = useMemo(() => {
     const resolved = selectedTower ? resolvedProgress[selectedTower.id] : undefined;
-    const progress = resolved?.totalProgressPercent ?? 0;
-    const assembly = resolved?.assemblyPercent ?? 0;
-    const erection = resolved?.erectionPercent ?? 0;
+    const progress = resolved?.totalProgressPercent ?? null;
+    const assembly = resolved?.assemblyPercent ?? null;
+    const erection = resolved?.erectionPercent ?? null;
 
     const latestDocket =
       towerDockets[0] ?? null;
 
-    const requiredQty =
-      requiredBundles.reduce(
-        (sum, bundle) =>
-          sum + getRequiredQty(bundle),
-        0,
-      );
-
-    const deliveredQty =
-      deliveryItems.reduce(
-        (sum, item) =>
-          sum + getDeliveredQty(item),
-        0,
-      );
-
-    const deliveredByBundle =
-      new Map<string, number>();
-
-    deliveryItems.forEach((item) => {
-      const bundleNo =
-        safeString(item.bundle_no).trim();
-
-      if (!bundleNo) return;
-
-      deliveredByBundle.set(
-        bundleNo,
-        (deliveredByBundle.get(bundleNo) ??
-          0) + getDeliveredQty(item),
-      );
-    });
-
-    const outstandingBundles:
-      OutstandingBundle[] =
-      requiredBundles
-        .map((bundle) => {
-          const bundleNo =
-            safeString(
-              bundle.bundle_no,
-            ).trim();
-
-          const required =
-            getRequiredQty(bundle);
-
-          const delivered =
-            deliveredByBundle.get(
-              bundleNo,
-            ) ?? 0;
-
-          return {
-            bundleNo,
-            section: safeString(
-              bundle.section,
-              "General",
-            ),
-            required,
-            delivered,
-            outstanding: Math.max(
-              required - delivered,
-              0,
-            ),
-          };
-        })
-        .filter(
-          (bundle) =>
-            bundle.outstanding > 0,
-        )
-        .sort(
-          (a, b) =>
-            b.outstanding -
-            a.outstanding,
-        );
-
     const openDefects =
-      defects.filter(isOpenDefect).length;
+      defects?.filter(isOpenDefect).length ?? null;
 
     return {
       progress,
       assembly,
       erection,
-      status:
-        getProgressStatus(progress),
+      status: progress === null ? null : (resolved?.status ?? getProgressStatus(progress)),
       latestDate: resolved?.latestDocketDate ?? null,
+      totalHours: resolved?.totalHours ?? null,
+      productionHours: resolved?.productionHours ?? null,
       rawMhPerTonne: resolved?.rawMhPerTonne ?? null,
       productionMhPerTonne: resolved?.productionMhPerTonne ?? null,
       latestCrew:
         latestDocket?.crew ||
         latestDocket?.leading_hand ||
         "—",
-      docketCount:
-        towerDockets.length,
+      docketCount: selectedTower ? (docketsByTower[selectedTower.id]?.length ?? 0) : 0,
       openDefects,
-      requiredQty,
-      deliveredQty,
-      outstandingQty: Math.max(
-        requiredQty - deliveredQty,
-        0,
-      ),
-      deliveryProgress:
-        requiredQty > 0
-          ? clampPercent(
-              (deliveredQty /
-                requiredQty) *
-                100,
-            )
-          : 0,
-      outstandingBundles,
     };
   }, [
-    defects,
-    deliveryItems,
-    requiredBundles,
-    towerDockets, resolvedProgress, selectedTower,
+    defects, docketsByTower, towerDockets, resolvedProgress, selectedTower,
   ]);
 
   const bodyExtension =
@@ -865,17 +627,8 @@ export default function TowerProgressScreen() {
       ],
     );
 
-  const towerWeight =
-    findExtraValue(
-      selectedTower?.extra_data,
-      [
-        "Tower Weight",
-        "Tower Weight (t)",
-        "tower_weight",
-        "Structure Total Weight",
-        "Structure Total Weights",
-      ],
-    );
+  const towerWeightValue = towerWeightTonnes(selectedTower?.extra_data);
+  const towerWeight = towerWeightValue === null ? "—" : `${towerWeightValue.toFixed(2)} t`;
 
   const extraFields = useMemo(
     () =>
@@ -890,6 +643,13 @@ export default function TowerProgressScreen() {
             "type",
             "tower type",
             "tower_type",
+            "tower no",
+            "tower number",
+            "tower_number",
+            "structure number",
+            "structure no",
+            "status",
+            "line",
             "tower height",
             "tower_height",
             "height",
@@ -943,11 +703,8 @@ export default function TowerProgressScreen() {
   }: {
     item: Tower;
   }) {
-    const progress =
-      progressByTower[item.id] ?? 0;
-
-    const status =
-      getProgressStatus(progress);
+    const progress = progressByTower[item.id];
+    const status = progress === undefined ? "Progress unavailable" : getProgressStatus(progress);
 
     return (
       <Pressable
@@ -1003,14 +760,13 @@ export default function TowerProgressScreen() {
               styles.progressHeaderValue
             }
           >
-            {progress}%
+            {progress === undefined ? "—" : `${progress}%`}
           </Text>
         </View>
 
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, paddingVertical: 8 }}>
-          <Text>Assembly {resolvedProgress[item.id]?.assemblyPercent ?? 0}%</Text>
-          <Text>Erection {resolvedProgress[item.id]?.erectionPercent ?? 0}%</Text>
-          <Text>Overall {progress}%</Text>
+          <Text>Assembly {formatPercent(resolvedProgress[item.id]?.assemblyPercent)}</Text>
+          <Text>Erection {formatPercent(resolvedProgress[item.id]?.erectionPercent)}</Text>
           {resolvedProgress[item.id]?.rawMhPerTonne != null ? <Text>MH/t {Number(resolvedProgress[item.id]?.rawMhPerTonne).toFixed(1)}</Text> : null}
         </View>
         <View style={styles.progressTrack}>
@@ -1018,11 +774,11 @@ export default function TowerProgressScreen() {
             style={[
               styles.progressFill,
               {
-                width: `${progress}%`,
+                width: `${progress ?? 0}%`,
                 backgroundColor:
-                  progress >= 100
+                  progress !== undefined && progress >= 100
                     ? "#16A34A"
-                    : progress > 0
+                    : progress !== undefined && progress > 0
                       ? "#2563EB"
                       : "#CBD5E1",
               },
@@ -1258,7 +1014,7 @@ export default function TowerProgressScreen() {
 
                   <SummaryCard
                     label="Average"
-                    value={`${summary.average}%`}
+                    value={summary.average === null ? "—" : `${summary.average}%`}
                     tone="slate"
                   />
                 </View>
@@ -1298,6 +1054,7 @@ export default function TowerProgressScreen() {
         )}
 
         <OptionSelector
+          key={`${selectorTitle}:${selectorVisible ? "open" : "closed"}`}
           visible={selectorVisible}
           title={selectorTitle}
           options={selectorOptions}
@@ -1342,13 +1099,8 @@ export default function TowerProgressScreen() {
                   styles.overviewHeaderText
                 }
               >
-                <Text
-                  numberOfLines={1}
-                  style={styles.overviewTitle}
-                >
-                  {getTowerLabel(
-                    selectedTower,
-                  )}
+                <Text numberOfLines={1} style={styles.overviewTitle}>
+                  Tower Overview
                 </Text>
 
                 <Text
@@ -1393,16 +1145,7 @@ export default function TowerProgressScreen() {
                     )}
                   </Text>
 
-                  <Text
-                    style={styles.heroSubtitle}
-                  >
-                    {getTowerType(
-                      selectedTower,
-                    )}{" "}
-                    ·{" "}
-                    {selectedTower?.line ||
-                      "No line"}
-                  </Text>
+                  <Text style={styles.heroSubtitle}>{[getTowerType(selectedTower), selectedTower?.line].filter((value) => value && value !== "—").join(" · ") || "Tower progress"}</Text>
 
                   <View
                     style={
@@ -1414,26 +1157,9 @@ export default function TowerProgressScreen() {
                         styles.heroProgressText
                       }
                     >
-                      <Text
-                        style={
-                          styles.heroProgressValue
-                        }
-                      >
-                        {
-                          overviewStats.progress
-                        }
-                        %
-                      </Text>
+                      <Text style={styles.heroProgressValue}>{overviewStats.progress === null ? "—" : `${overviewStats.progress}%`}</Text>
 
-                      <Text
-                        style={
-                          styles.heroProgressLabel
-                        }
-                      >
-                        {
-                          overviewStats.status
-                        }
-                      </Text>
+                      <Text style={styles.heroProgressLabel}>{overviewStats.status ?? "Progress unavailable"}</Text>
                     </View>
 
                     <View
@@ -1445,386 +1171,75 @@ export default function TowerProgressScreen() {
                         style={[
                           styles.heroProgressFill,
                           {
-                            width: `${overviewStats.progress}%`,
+                            width: `${overviewStats.progress ?? 0}%`,
                           },
                         ]}
                       />
                     </View>
                   </View>
-                </View>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, paddingVertical: 10 }}>
-                  <Text style={{ color: "#334155", fontWeight: "700" }}>MH/t {overviewStats.rawMhPerTonne == null ? "—" : Number(overviewStats.rawMhPerTonne).toFixed(1)}</Text>
-                  <Text style={{ color: "#64748b" }}>Prod MH/t {overviewStats.productionMhPerTonne == null ? "—" : Number(overviewStats.productionMhPerTonne).toFixed(1)}</Text>
-                </View>
-                <SectionCard title="Quick Actions">
-                  <View
-                    style={
-                      styles.quickActionGrid
-                    }
-                  >
-                    <QuickAction
-                      title="Deliveries"
-                      subtitle="View or add tower deliveries"
-                      icon="car-outline"
-                      tone="green"
-                      onPress={() =>
-                        navigateToTowerRoute(
-                          "truck-delivery",
-                        )
-                      }
-                    />
-
-                    <QuickAction
-                      title="Materials"
-                      subtitle="Search bundles and members"
-                      icon="search-outline"
-                      tone="purple"
-                      onPress={() =>
-                        navigateToTowerRoute(
-                          "materials",
-                        )
-                      }
-                    />
-
-                    {canOpenDockets && (
-                      <QuickAction
-                        title="Daily Dockets"
-                        subtitle="Open or create a docket"
-                        icon="clipboard-outline"
-                        tone="blue"
-                        onPress={() =>
-                          navigateToTowerRoute(
-                            "daily-dockets",
-                          )
-                        }
-                      />
-                    )}
+                  <View style={styles.heroSubProgress}>
+                    <ProgressLine label="Assembly" value={overviewStats.assembly} colour="#A78BFA" />
+                    <ProgressLine label="Erection" value={overviewStats.erection} colour="#4ADE80" />
                   </View>
+                </View>
+                <SectionCard title="Key Metrics">
+                  <View style={styles.keyMetricGrid}>
+                    <KeyMetric label="Raw MH/t" value={formatMetric(overviewStats.rawMhPerTonne, 1)} />
+                    <KeyMetric label="Production MH/t" value={formatMetric(overviewStats.productionMhPerTonne, 1)} />
+                    <KeyMetric label="Total Manhours" value={formatMetric(overviewStats.totalHours, 1)} />
+                    <KeyMetric label="Tower Weight" value={towerWeight} />
+                    <KeyMetric label="Latest Work" value={formatDate(overviewStats.latestDate)} />
+                    <KeyMetric label="Dockets" value={String(overviewStats.docketCount)} />
+                    {overviewStats.latestCrew !== "—" && <KeyMetric label="Latest Crew" value={overviewStats.latestCrew} />}
+                  </View>
+                </SectionCard>
 
-                  {!canOpenDockets && (
-                    <View
-                      style={
-                        styles.roleNotice
-                      }
-                    >
-                      <Ionicons
-                        name="information-circle-outline"
-                        size={18}
-                        color="#64748B"
-                      />
-
-                      <Text
-                        style={
-                          styles.roleNoticeText
-                        }
-                      >
-                        Daily Dockets are available
-                        to leading hands and
-                        administrators.
-                      </Text>
+                {(towerHeight !== "—" || bodyExtension !== "—" || commonBody !== "—" || legExtension !== "—" || extraFields.length > 0) && (
+                  <SectionCard title="Tower Details">
+                    <View style={styles.detailGrid}>
+                      {towerHeight !== "—" && <DetailMetric label="Tower Height" value={towerHeight} />}
+                      {bodyExtension !== "—" && <DetailMetric label="Body Extension" value={bodyExtension} />}
+                      {commonBody !== "—" && <DetailMetric label="Common Body" value={commonBody} />}
+                      {legExtension !== "—" && <DetailMetric label="Leg Extension" value={legExtension} />}
                     </View>
-                  )}
-                </SectionCard>
-
-                <SectionCard title="Progress">
-                  <ProgressLine
-                    label="Overall"
-                    value={
-                      overviewStats.progress
-                    }
-                    colour="#2563EB"
-                  />
-
-                  <ProgressLine
-                    label="Assembly"
-                    value={
-                      overviewStats.assembly
-                    }
-                    colour="#7C3AED"
-                  />
-
-                  <ProgressLine
-                    label="Erection"
-                    value={
-                      overviewStats.erection
-                    }
-                    colour="#16A34A"
-                  />
-                </SectionCard>
-
-                <SectionCard title="Tower Information">
-                  <View
-                    style={styles.detailGrid}
-                  >
-                    <DetailMetric
-                      label="Tower Number"
-                      value={getTowerLabel(
-                        selectedTower,
-                      )}
-                    />
-
-                    <DetailMetric
-                      label="Tower Type"
-                      value={getTowerType(
-                        selectedTower,
-                      )}
-                    />
-
-                    <DetailMetric
-                      label="Line"
-                      value={
-                        selectedTower?.line ||
-                        "—"
-                      }
-                    />
-
-                    <DetailMetric
-                      label="Status"
-                      value={
-                        overviewStats.status
-                      }
-                    />
-
-                    <DetailMetric
-                      label="Tower Height"
-                      value={towerHeight}
-                    />
-
-                    <DetailMetric
-                      label="Tower Weight"
-                      value={towerWeight}
-                    />
-
-                    <DetailMetric
-                      label="Body Extension"
-                      value={bodyExtension}
-                    />
-
-                    <DetailMetric
-                      label="Common Body"
-                      value={commonBody}
-                    />
-
-                    <DetailMetric
-                      label="Leg Extension"
-                      value={legExtension}
-                    />
-
-                    <DetailMetric
-                      label="Latest Work"
-                      value={formatDate(
-                        overviewStats.latestDate,
-                      )}
-                    />
-
-                    <DetailMetric
-                      label="Latest Crew"
-                      value={
-                        overviewStats.latestCrew
-                      }
-                    />
-
-                    <DetailMetric
-                      label="Dockets"
-                      value={String(
-                        overviewStats.docketCount,
-                      )}
-                    />
-                  </View>
-                </SectionCard>
-
-                <SectionCard title="Delivery Status">
-                  <View
-                    style={styles.detailGrid}
-                  >
-                    <DetailMetric
-                      label="Required Qty"
-                      value={String(
-                        overviewStats.requiredQty,
-                      )}
-                    />
-
-                    <DetailMetric
-                      label="Delivered Qty"
-                      value={String(
-                        overviewStats.deliveredQty,
-                      )}
-                    />
-
-                    <DetailMetric
-                      label="Outstanding"
-                      value={String(
-                        overviewStats.outstandingQty,
-                      )}
-                      warning={
-                        overviewStats.outstandingQty >
-                        0
-                      }
-                    />
-
-                    <DetailMetric
-                      label="Delivery Progress"
-                      value={`${overviewStats.deliveryProgress.toFixed(
-                        0,
-                      )}%`}
-                    />
-                  </View>
-
-                  {overviewStats
-                    .outstandingBundles.length >
-                  0 ? (
-                    <View
-                      style={
-                        styles.outstandingList
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.subsectionTitle
-                        }
-                      >
-                        Outstanding bundles
-                      </Text>
-
-                      {overviewStats.outstandingBundles
-                        .slice(0, 10)
-                        .map((bundle) => (
-                          <View
-                            key={
-                              bundle.bundleNo
-                            }
-                            style={
-                              styles.outstandingRow
-                            }
-                          >
-                            <View
-                              style={
-                                styles.outstandingRowText
-                              }
-                            >
-                              <Text
-                                style={
-                                  styles.outstandingBundle
-                                }
-                              >
-                                {bundle.bundleNo ||
-                                  "Unnamed bundle"}
-                              </Text>
-
-                              <Text
-                                style={
-                                  styles.outstandingSection
-                                }
-                              >
-                                {
-                                  bundle.section
-                                }
-                              </Text>
-                            </View>
-
-                            <Text
-                              style={
-                                styles.outstandingQty
-                              }
-                            >
-                              {
-                                bundle.delivered
-                              }
-                              /
-                              {
-                                bundle.required
-                              }
-                            </Text>
+                    {extraFields.length > 0 && (
+                      <View style={styles.extraFields}>
+                        {extraFields.map(([key, value]) => (
+                          <View key={key} style={styles.extraFieldRow}>
+                            <Text style={styles.extraFieldLabel}>{formatExtraLabel(key)}</Text>
+                            <Text style={styles.extraFieldValue}>{formatExtraValue(value)}</Text>
                           </View>
                         ))}
-                    </View>
-                  ) : (
-                    <View
-                      style={
-                        styles.allClearBox
-                      }
-                    >
-                      <Ionicons
-                        name="checkmark-circle-outline"
-                        size={20}
-                        color="#15803D"
+                      </View>
+                    )}
+                  </SectionCard>
+                )}
+
+                {overviewStats.openDefects !== null && (
+                  <SectionCard title="Site Summary">
+                    <View style={styles.detailGrid}>
+                      <DetailMetric
+                        label="Open Defects"
+                        value={String(overviewStats.openDefects)}
+                        warning={overviewStats.openDefects > 0}
                       />
-
-                      <Text
-                        style={
-                          styles.allClearText
-                        }
-                      >
-                        No outstanding bundles.
-                      </Text>
-                    </View>
-                  )}
-                </SectionCard>
-
-                <SectionCard title="Site Status">
-                  <View
-                    style={styles.detailGrid}
-                  >
-                    <DetailMetric
-                      label="Open Defects"
-                      value={String(
-                        overviewStats.openDefects,
-                      )}
-                      warning={
-                        overviewStats.openDefects >
-                        0
-                      }
-                    />
-
-                    <DetailMetric
-                      label="Delivery Records"
-                      value={String(
-                        deliveries.length,
-                      )}
-                    />
-                  </View>
-                </SectionCard>
-
-                {extraFields.length > 0 && (
-                  <SectionCard title="Additional Tower Details">
-                    <View
-                      style={
-                        styles.extraFields
-                      }
-                    >
-                      {extraFields.map(
-                        ([key, value]) => (
-                          <View
-                            key={key}
-                            style={
-                              styles.extraFieldRow
-                            }
-                          >
-                            <Text
-                              style={
-                                styles.extraFieldLabel
-                              }
-                            >
-                              {formatExtraLabel(
-                                key,
-                              )}
-                            </Text>
-
-                            <Text
-                              style={
-                                styles.extraFieldValue
-                              }
-                            >
-                              {formatExtraValue(
-                                value,
-                              )}
-                            </Text>
-                          </View>
-                        ),
-                      )}
                     </View>
                   </SectionCard>
                 )}
+
+                <SectionCard title="Quick Actions">
+                  <View style={styles.quickActionGrid}>
+                    <QuickAction title="Deliveries" subtitle="View or add tower deliveries" icon="car-outline" tone="green" onPress={() => navigateToTowerRoute("truck-delivery")} />
+                    <QuickAction title="Materials" subtitle="Search bundles and members" icon="search-outline" tone="purple" onPress={() => navigateToTowerRoute("materials")} />
+                    {canOpenDockets && <QuickAction title="Daily Dockets" subtitle="Open or create a docket" icon="clipboard-outline" tone="blue" onPress={() => navigateToTowerRoute("daily-dockets")} />}
+                  </View>
+                  {!canOpenDockets && (
+                    <View style={styles.roleNotice}>
+                      <Ionicons name="information-circle-outline" size={18} color="#64748B" />
+                      <Text style={styles.roleNoticeText}>Daily Dockets are available to leading hands and administrators.</Text>
+                    </View>
+                  )}
+                </SectionCard>
               </ScrollView>
             )}
           </SafeAreaView>
@@ -1856,10 +1271,7 @@ function Loading({
 function StatusBadge({
   status,
 }: {
-  status: Exclude<
-    StatusFilter,
-    "All"
-  >;
+  status: string;
 }) {
   const tone =
     status === "Complete"
@@ -2083,11 +1495,10 @@ function ProgressLine({
   colour,
 }: {
   label: string;
-  value: number;
+  value: number | null;
   colour: string;
 }) {
-  const safeValue =
-    clampPercent(value);
+  const safeValue = value === null ? null : clampPercent(value);
 
   return (
     <View style={styles.progressLine}>
@@ -2109,7 +1520,7 @@ function ProgressLine({
             styles.progressLineValue
           }
         >
-          {safeValue.toFixed(0)}%
+          {safeValue === null ? "—" : `${safeValue.toFixed(0)}%`}
         </Text>
       </View>
 
@@ -2122,12 +1533,21 @@ function ProgressLine({
           style={[
             styles.progressLineFill,
             {
-              width: `${safeValue}%`,
+              width: `${safeValue ?? 0}%`,
               backgroundColor: colour,
             },
           ]}
         />
       </View>
+    </View>
+  );
+}
+
+function KeyMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.keyMetric}>
+      <Text style={styles.keyMetricLabel}>{label}</Text>
+      <Text numberOfLines={2} style={styles.keyMetricValue}>{value}</Text>
     </View>
   );
 }
@@ -2213,10 +1633,6 @@ function OptionSelector({
 }) {
   const [query, setQuery] =
     useState("");
-
-  useEffect(() => {
-    if (visible) setQuery("");
-  }, [visible]);
 
   const filteredOptions =
     useMemo(() => {
@@ -2717,6 +2133,37 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 999,
     backgroundColor: "#3B82F6",
+  },
+  heroSubProgress: {
+    marginTop: 12,
+    gap: 5,
+  },
+  keyMetricGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  keyMetric: {
+    width: "48.5%",
+    minHeight: 82,
+    borderRadius: 13,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 11,
+    justifyContent: "center",
+  },
+  keyMetricLabel: {
+    color: "#64748B",
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  keyMetricValue: {
+    color: "#0F172A",
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 5,
   },
   sectionCard: {
     borderRadius: 17,

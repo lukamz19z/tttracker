@@ -17,6 +17,7 @@ import {
 } from "@/components/materials/MaterialsShell";
 import { TowerPicker } from "@/components/materials/TowerPicker";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import { matchesMaterialTower } from "@/lib/materials/tower-filter";
 import {
   type MaterialMemberSearchField,
   type MaterialSearchKind,
@@ -90,8 +91,8 @@ function localResults(
   if (q.length < 2) return [];
 
   const results: MaterialSearchResult[] = [];
-  const towerMatches = (towerId: unknown) =>
-    !towerIdFilter || clean(towerId) === towerIdFilter;
+  const towerMatches = (rowTowerId: unknown) =>
+    matchesMaterialTower(rowTowerId, towerIdFilter, data.towers ?? []);
 
   if (kind === "all" || kind === "member") {
     for (const row of data.members ?? []) {

@@ -8,6 +8,7 @@
 // Batch 1 does not change the existing app behaviour.
 
 import { apiFetch } from "@/lib/api/client";
+import { classifyBackendFailure } from "../../../lib/backend-resilience";
 import type {
   DailyDocketDraft,
   DailyDocketEditorPayload,
@@ -118,6 +119,7 @@ export async function saveDailyDocket(
     "/api/mobile/daily-dockets/save",
     {
       method: "POST",
+      timeoutMs: 60_000,
       headers: {
         "Content-Type":
           "application/json",
@@ -151,6 +153,7 @@ export async function submitDailyDocketForBc(
     )}/submit-bc`,
     {
       method: "POST",
+      timeoutMs: 60_000,
     },
   );
 
@@ -158,6 +161,35 @@ export async function submitDailyDocketForBc(
     response,
     "Daily Docket could not be submitted for BC approval.",
   );
+}
+
+export type DailyDocketSubmissionStatus = {
+  docketId: string;
+  status: string;
+  revision: number;
+  submittedAt: string | null;
+  submitted: boolean;
+};
+
+export async function getDailyDocketSubmissionStatus(
+  projectId: string,
+  docketId: string,
+): Promise<DailyDocketSubmissionStatus | { docketId: string; status: "not_found"; revision: number; submittedAt: null; submitted: false }> {
+  const id = clean(docketId);
+  const project = clean(projectId);
+  const response = await apiFetch(
+    `/api/mobile/daily-dockets/${encodeURIComponent(id)}/status?projectId=${encodeURIComponent(project)}`,
+    { method: "GET", dedupe: false },
+  );
+  if (response.status === 404) {
+    await response.text();
+    return { docketId: id, status: "not_found", revision: 0, submittedAt: null, submitted: false };
+  }
+  return readJson<DailyDocketSubmissionStatus>(response, "Daily Docket submission status could not be checked.");
+}
+
+export function isAmbiguousDailyDocketMutationFailure(error: unknown) {
+  return classifyBackendFailure(error).transient;
 }
 
 export async function runDailyDocketLifecycleAction(docketId: string, action: "retract" | "delete") {

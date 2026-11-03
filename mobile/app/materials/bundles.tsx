@@ -13,6 +13,7 @@ import {
 import { MaterialsShell } from "@/components/materials/MaterialsShell";
 import { MaterialRegisterFilters } from "@/components/materials/MaterialRegisterFilters";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import { filterMaterialBundles, resolveMaterialTowerId } from "@/lib/materials/tower-filter";
 import {
   cachedBundleMembers,
   loadBundleMembers,
@@ -91,6 +92,11 @@ export default function Bundles() {
   >({});
   const [packLoadingId, setPackLoadingId] = useState<string | null>(null);
   const [packErrors, setPackErrors] = useState<Record<string, string>>({});
+  const towers = useMemo(() => data?.towers ?? [], [data?.towers]);
+  const selectedTowerId = useMemo(
+    () => resolveMaterialTowerId(towerId, towers),
+    [towerId, towers],
+  );
 
   useEffect(() => {
     const nextTowerId = clean(params.towerId);
@@ -185,24 +191,19 @@ export default function Bundles() {
     return (data?.bundles ?? []).map((bundle) => {
       const bundleTowerId = clean(bundle.tower_id);
       const bundleSection = clean(bundle.section) || "General";
-      const displayTower = towerName(bundle.tower_id);
 
       return {
         bundle,
-        towerId: bundleTowerId,
+        towerId: resolveMaterialTowerId(bundleTowerId, towers),
         section: bundleSection,
-        search: [bundle.bundle_no, bundleSection, displayTower]
-          .map(clean)
-          .join(" ")
-          .toLowerCase(),
       };
     });
-  }, [data?.bundles, towerName]);
+  }, [data?.bundles, towers]);
 
   const sectionOptions = useMemo(() => {
     const counts = new Map<string, number>();
     for (const row of indexedBundles) {
-      if (towerId && row.towerId !== towerId) continue;
+      if (selectedTowerId && row.towerId !== selectedTowerId) continue;
       counts.set(row.section, (counts.get(row.section) ?? 0) + 1);
     }
 
@@ -218,7 +219,7 @@ export default function Bundles() {
       },
       ...options,
     ];
-  }, [indexedBundles, towerId]);
+  }, [indexedBundles, selectedTowerId]);
 
   useEffect(() => {
     if (!section) return;
@@ -227,16 +228,15 @@ export default function Bundles() {
   }, [section, sectionOptions]);
 
   const rows = useMemo(() => {
-    const search = deferredQuery.trim().toLowerCase();
-    return indexedBundles
-      .filter((row) => {
-        if (towerId && row.towerId !== towerId) return false;
-        if (section && row.section !== section) return false;
-        if (search && !row.search.includes(search)) return false;
-        return true;
-      })
-      .map((row) => row.bundle);
-  }, [deferredQuery, indexedBundles, section, towerId]);
+    return filterMaterialBundles({
+      bundles: data?.bundles ?? [],
+      selectedTowerId,
+      towers,
+      section,
+      query: deferredQuery,
+      towerName,
+    });
+  }, [data?.bundles, deferredQuery, section, selectedTowerId, towerName, towers]);
 
   const outstandingRows = rows.filter((bundle) => deriveBundleStatus(bundle) !== "arrived");
   const arrivedRows = rows.filter((bundle) => deriveBundleStatus(bundle) === "arrived");
@@ -605,7 +605,7 @@ export default function Bundles() {
     >
       <MaterialRegisterFilters
         towers={data?.towers ?? []}
-        towerId={towerId}
+        towerId={selectedTowerId}
         onTowerChange={setTowerId}
         towerName={towerName}
         query={query}

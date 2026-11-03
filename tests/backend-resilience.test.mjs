@@ -245,6 +245,52 @@ test("unsafe mutations are never automatically retried", async () => {
   const response = await policy.fetch("https://example.test/write", { method: "POST", body: "{}" });
   assert.equal(response.status, 503);
   assert.equal(calls, 1);
+  assert.equal(policy.circuitOpen, false, "a failed mutation must not open a read circuit");
+});
+
+test("a mutation is sent once while its read endpoint circuit is open", async () => {
+  let calls = 0;
+  const policy = new BackendResilience({
+    fetchImpl: async (_input, init) => {
+      calls++;
+      assert.equal(init.resilienceTimeoutMs, undefined, "internal resilience metadata must not reach native fetch");
+      return new Response("accepted", { status: 200 });
+    },
+    sleep: async () => {},
+    log: () => {},
+  });
+  policy["fetchImpl"] = async () => new Response("unavailable", { status: 503 });
+  for (let attempt = 0; attempt < 3; attempt++) await policy.fetch("https://example.test/api/daily-dockets/abc/status");
+  assert.equal(policy.circuitOpen, true);
+
+  policy["fetchImpl"] = async (_input, init) => {
+    calls++;
+    assert.equal(init.resilienceTimeoutMs, undefined);
+    return new Response("submitted", { status: 200 });
+  };
+  const response = await policy.fetch("https://example.test/api/daily-dockets/abc/submit-bc", { method: "POST", body: "{}" });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+  assert.equal(policy.circuitOpen, true, "a mutation neither opens nor closes the read circuit");
+});
+
+test("mutations use their explicit bounded timeout without the read attempt cap", async () => {
+  let observedTimeout = 0;
+  const policy = new BackendResilience({
+    fetchImpl: (_input, init) => new Promise((_, reject) => {
+      observedTimeout = Date.now();
+      init.signal.addEventListener("abort", () => reject(new TypeError("fetch failed")), { once: true });
+    }),
+    timeoutMs: 100,
+    log: () => {},
+  });
+  const startedAt = Date.now();
+  await assert.rejects(
+    policy.fetch("https://example.test/api/daily-dockets/abc/submit-bc", { method: "POST", resilienceTimeoutMs: 25 } ),
+    (error) => error instanceof BackendRequestTimeoutError && error.timeoutMs === 25,
+  );
+  assert.ok(Date.now() - startedAt >= 20);
+  assert.ok(observedTimeout > 0);
 });
 
 test("twenty overlapping identical bootstrap reads share one bounded request", async () => {

@@ -113,11 +113,12 @@ async function performFetch(
   try {
     const url = apiUrl(input);
     const startedAt = Date.now();
-    const options: RequestInit = {
+    const options: RequestInit & { resilienceTimeoutMs: number } = {
       ...requestInit,
       headers,
       cache: "no-store",
       signal: controller.signal,
+      resilienceTimeoutMs: timeoutMs,
     };
     let response = await resilientFetch(url, options);
     // Safety only: a redirected authenticated GET may lose its Authorization.

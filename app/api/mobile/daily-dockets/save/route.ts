@@ -840,6 +840,7 @@ export async function POST(request: Request) {
     }
 
     const docketId = clean(draft.docketId);
+    let docketExists = false;
 
     if (docketId) {
       const { data: existing, error } =
@@ -856,7 +857,7 @@ export async function POST(request: Request) {
 
       if (error) throw new Error(error.message);
 
-      if (!existing) {
+      if (!existing && draft.mode !== "create") {
         return NextResponse.json(
           {
             error:
@@ -866,7 +867,9 @@ export async function POST(request: Request) {
         );
       }
 
-      if (docketLocked(existing)) {
+      docketExists = Boolean(existing);
+
+      if (existing && docketLocked(existing)) {
         return NextResponse.json(
           {
             error:
@@ -938,11 +941,12 @@ export async function POST(request: Request) {
 
     let savedDocketId = docketId;
 
-    if (!savedDocketId) {
+    if (!savedDocketId || !docketExists) {
       const { data, error } = await service
         .from("tower_daily_dockets")
         .insert({
           ...headerWithMaterialSnapshot,
+          ...(savedDocketId ? { id: savedDocketId } : {}),
           approval_status: "draft",
           created_by_user_id: identity.userId,
         })

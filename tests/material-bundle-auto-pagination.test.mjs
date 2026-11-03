@@ -18,13 +18,14 @@ test("bootstrap returns all paged bundle rows and caches the complete response",
   assert.match(context, /compareBundles/);
 });
 
-test("Bundles renders the complete filtered list in a virtualized FlatList without Load More", async () => {
+test("Bundles renders all tower-filtered rows in a virtualized FlatList without Load More", async () => {
   const [screen, shell] = await Promise.all([
     readFile(new URL("mobile/app/materials/bundles.tsx", root), "utf8"),
     readFile(new URL("mobile/components/materials/MaterialsShell.tsx", root), "utf8"),
   ]);
   assert.doesNotMatch(screen, /Load More|Load 6 more|visibleCount|hasMore|nextOffset|bundlePages|onNearEnd/);
-  assert.match(screen, /const rows = useMemo\(\(\) => \{[\s\S]*?return indexedBundles[\s\S]*?\.map\(\(row\) => row\.bundle\)/);
+  assert.match(screen, /filterMaterialBundles\(/);
+  assert.match(screen, /towerId=\{selectedTowerId\}/);
   assert.match(screen, /group\.rows\.map\(\(bundle, index\)/);
   assert.match(screen, /ensureBundleMembers\(bundle\)/);
   assert.match(shell, /<FlatList data=\{items\}/);

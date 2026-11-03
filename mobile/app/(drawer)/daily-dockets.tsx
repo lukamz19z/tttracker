@@ -27,6 +27,8 @@ import { DailyDocketEditorFoundation } from "@/components/dockets/DailyDocketEdi
 import { useAuth } from "@/contexts/AuthContext";
 import {
   getDailyDocketEditor,
+  getDailyDocketSubmissionStatus,
+  isAmbiguousDailyDocketMutationFailure,
   saveDailyDocket,
   submitDailyDocketForBc,
   runDailyDocketLifecycleAction,
@@ -36,6 +38,7 @@ import {
   type DailyDocketStep,
 } from "@/lib/dockets/constants";
 import { formatDocketDate } from "@/lib/dockets/dates";
+import { reconcileDailyDocketSubmissionStatus } from "@/lib/dockets/submission-status";
 import {
   calculateLabourTotals,
   toNumber,
@@ -327,6 +330,8 @@ export default function DailyDocketScreen() {
   const [editorLoading, setEditorLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const submissionInFlight = useRef(false);
+  const submissionUncertainDocketId = useRef<string | null>(null);
   const [copyingPrevious, setCopyingPrevious] = useState(false);
 
   const [editorPayload, setEditorPayload] =
@@ -665,21 +670,84 @@ export default function DailyDocketScreen() {
           text: "Submit",
           onPress: () => {
             void (async () => {
+              if (submissionInFlight.current) return;
+              submissionInFlight.current = true;
               setSubmitting(true);
 
               try {
-                const saveResult = await saveDailyDocket({
+                const submissionDraft = {
                   ...draft,
+                  docketId: draft.docketId || crypto.randomUUID(),
                   bcRepName: editorPayload.identity.name,
                   bcRepEmail: editorPayload.identity.email,
                   bcRepUserId: editorPayload.identity.userId,
                   bcSignedAt:
                     clean(draft.bcSignedAt) || new Date().toISOString(),
+                };
+                setDraft(submissionDraft);
+                const docketId = submissionDraft.docketId;
+                const unknownSubmissionMessage = "We couldn't confirm whether this docket was submitted. The docket remains open on this device. Check its status when the connection returns before submitting again.";
+                const checkServerStatus = async () => {
+                  Alert.alert("Checking submission status", "TTTracker is checking whether this Daily Docket reached the approval workflow.");
+                  return reconcileDailyDocketSubmissionStatus(
+                    () => getDailyDocketSubmissionStatus(projectId, docketId),
+                  );
+                };
+                const makeAlreadySubmittedResult = (status: { status: string; revision: number; submittedAt: string | null }) => ({
+                  success: true as const,
+                  docketId,
+                  status: status.status,
+                  submittedAt: status.submittedAt || new Date().toISOString(),
+                  revision: status.revision,
+                  reviewers: 0,
+                  alreadySubmitted: true,
                 });
 
-                const submitted = await submitDailyDocketForBc(
-                  saveResult.docketId,
-                );
+                const reconcile = async (originalError: unknown) => {
+                  if (!isAmbiguousDailyDocketMutationFailure(originalError)) throw originalError;
+                  const reconciliation = await checkServerStatus();
+                  if (reconciliation.state === "submitted") {
+                    submissionUncertainDocketId.current = null;
+                    return makeAlreadySubmittedResult(reconciliation.result);
+                  }
+                  if (reconciliation.state === "not_submitted") {
+                    throw new Error("TTTracker confirmed this docket has not been submitted. Its draft remains open on this device; you can retry manually when ready.");
+                  }
+                  submissionUncertainDocketId.current = docketId;
+                  throw new Error(unknownSubmissionMessage);
+                };
+
+                let reconciledSubmission: Awaited<ReturnType<typeof submitDailyDocketForBc>> | null = null;
+                if (submissionUncertainDocketId.current === docketId) {
+                  const reconciliation = await checkServerStatus();
+                  if (reconciliation.state === "submitted") {
+                    submissionUncertainDocketId.current = null;
+                    reconciledSubmission = makeAlreadySubmittedResult(reconciliation.result);
+                  } else if (reconciliation.state === "not_submitted") {
+                    submissionUncertainDocketId.current = null;
+                  } else {
+                    throw new Error(unknownSubmissionMessage);
+                  }
+                }
+
+                if (!reconciledSubmission) {
+                  try {
+                    const saveResult = await saveDailyDocket(submissionDraft);
+                    if (saveResult.docketId !== docketId) {
+                      throw new Error("The saved Daily Docket ID did not match the local submission ID.");
+                    }
+                  } catch (error) {
+                    reconciledSubmission = await reconcile(error);
+                  }
+                }
+
+                if (!reconciledSubmission) {
+                  reconciledSubmission = await submitDailyDocketForBc(docketId).catch(reconcile);
+                }
+                const submitted = reconciledSubmission;
+                if (submissionUncertainDocketId.current === docketId) {
+                  submissionUncertainDocketId.current = null;
+                }
 
                 await loadList(true);
                 setEditorPayload(null);
@@ -688,22 +756,25 @@ export default function DailyDocketScreen() {
 
                 Alert.alert(
                   "Daily Docket submitted",
-                  [
-                    `Revision R${String(submitted.revision).padStart(2, "0")} submitted for BC approval.`,
-                    submitted.reviewers
-                      ? `${submitted.reviewers} reviewer${submitted.reviewers === 1 ? "" : "s"} notified.`
-                      : "",
-                    submitted.warning || "",
-                  ]
-                    .filter(Boolean)
-                    .join("\n\n"),
+                  submitted.alreadySubmitted
+                    ? `This docket was already submitted (R${String(submitted.revision).padStart(2, "0")}, ${submitted.status}). No second submission was created.`
+                    : [
+                        `Revision R${String(submitted.revision).padStart(2, "0")} submitted for BC approval.`,
+                        submitted.reviewers
+                          ? `${submitted.reviewers} reviewer${submitted.reviewers === 1 ? "" : "s"} will be notified.`
+                          : "",
+                        submitted.warning || "",
+                      ].filter(Boolean).join("\n\n"),
                 );
               } catch (error) {
+                const message = errorMessage(error);
+                const ambiguous = message.includes("couldn't confirm whether this docket was submitted");
                 Alert.alert(
-                  "Daily Docket could not be submitted",
-                  errorMessage(error),
+                  ambiguous ? "Submission status unclear" : "Daily Docket could not be submitted",
+                  message,
                 );
               } finally {
+                submissionInFlight.current = false;
                 setSubmitting(false);
               }
             })();

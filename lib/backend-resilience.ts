@@ -71,6 +71,8 @@ type ResilienceOptions = {
   circuitBreaker?: boolean;
 };
 
+type ResilientRequestInit = RequestInit & { resilienceTimeoutMs?: number };
+
 type CircuitState = { consecutiveFailures: number; openedUntil: number; probeInFlight: boolean };
 
 function defaultSleep(ms: number, signal?: AbortSignal) {
@@ -115,7 +117,7 @@ export class BackendResilience {
     return () => this.listeners.delete(listener);
   }
 
-  fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  fetch(input: RequestInfo | URL, init: ResilientRequestInit = {}): Promise<Response> {
     const method = String(init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const signal = init.signal ?? (input instanceof Request ? input.signal : undefined);
     const url = input instanceof Request ? input.url : String(input);
@@ -126,7 +128,7 @@ export class BackendResilience {
     const identity = headers.get("authorization") ?? "";
     let identityHash = 2166136261;
     for (let index = 0; index < identity.length; index++) identityHash = Math.imul(identityHash ^ identity.charCodeAt(index), 16777619);
-    const key = `${url}|${identityHash >>> 0}|${headers.get("accept") ?? ""}`;
+    const key = `${url}|${identityHash >>> 0}|${headers.get("accept") ?? ""}|${init.resilienceTimeoutMs ?? this.timeoutMs}`;
     const active = this.inFlightReads.get(key);
     if (active) {
       this.log?.("backend_request_deduped", { method });
@@ -140,12 +142,16 @@ export class BackendResilience {
     }).then((response) => response.clone());
   }
 
-  private async fetchWithPolicy(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  private async fetchWithPolicy(input: RequestInfo | URL, init: ResilientRequestInit = {}): Promise<Response> {
     const method = String(init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     const url = input instanceof Request ? input.url : String(input);
     const safeRead = method === "GET" || method === "HEAD";
     const authRequest = /\/auth\/v1\//i.test(url);
-    const circuitProtected = this.circuitBreaker && !authRequest;
+    const circuitProtected = this.circuitBreaker && safeRead && !authRequest;
+    const { resilienceTimeoutMs, ...nativeInit } = init;
+    const requestTimeoutMs = Number.isFinite(resilienceTimeoutMs) && Number(resilienceTimeoutMs) > 0
+      ? Number(resilienceTimeoutMs)
+      : this.timeoutMs;
     const path = safeRequestPath(url);
     const circuitKey = `${safeOrigin(url)}${path}`;
     const circuit = circuitProtected
@@ -169,20 +175,21 @@ export class BackendResilience {
 
     const retries = safeRead && !authRequest ? RETRY_DELAYS_MS.length : 0;
     let requestFailureRecorded = false;
-    const deadline = this.now() + this.timeoutMs;
+    const deadline = this.now() + requestTimeoutMs;
     try {
       for (let attempt = 0; attempt <= retries; attempt++) {
         const remainingMs = deadline - this.now();
-        if (remainingMs <= 0) throw new BackendRequestTimeoutError(this.timeoutMs);
+        if (remainingMs <= 0) throw new BackendRequestTimeoutError(requestTimeoutMs);
         let timedOut = false;
         const externalSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
         const controller = new AbortController();
         const onAbort = () => controller.abort();
         if (externalSignal?.aborted) throw new DOMException("Request aborted", "AbortError");
         externalSignal?.addEventListener("abort", onAbort, { once: true });
-        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs));
+        const attemptTimeoutMs = safeRead ? Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs) : remainingMs;
+        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, attemptTimeoutMs);
         try {
-          const response = await this.fetchImpl(input, { ...init, signal: controller.signal });
+          const response = await this.fetchImpl(input, { ...nativeInit, signal: controller.signal });
           let failure = classifyBackendFailure(response);
           if (!failure.transient && response.status >= 500) {
             const body = await response.clone().text().catch(() => "");
@@ -191,7 +198,7 @@ export class BackendResilience {
           if (failure.transient) {
             if (attempt < retries) {
               const delayMs = retryDelayMs(attempt, this.random);
-              if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(this.timeoutMs);
+              if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs);
               this.log?.("backend_request_retry", { method, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind, status: failure.status, code: failure.code });
               await this.sleep(delayMs, externalSignal ?? undefined);
               continue;
@@ -213,7 +220,7 @@ export class BackendResilience {
           if (!failure.transient || externalSignal?.aborted) throw error;
           if (attempt < retries) {
             const delayMs = retryDelayMs(attempt, this.random);
-            if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(this.timeoutMs, error);
+            if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs, error);
             this.log?.("backend_request_retry", { method, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind });
             await this.sleep(delayMs, externalSignal ?? undefined);
             continue;
@@ -223,7 +230,7 @@ export class BackendResilience {
             requestFailureRecorded = true;
           }
           this.log?.("backend_retry_exhausted", { method, path, attempts: attempt + 1, kind: failure.kind });
-          if (timedOut) throw new BackendRequestTimeoutError(this.timeoutMs, error);
+          if (timedOut) throw new BackendRequestTimeoutError(requestTimeoutMs, error);
           throw error;
         } finally {
           if (timer) clearTimeout(timer);

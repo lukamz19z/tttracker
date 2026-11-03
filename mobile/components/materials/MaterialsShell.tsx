@@ -1,5 +1,6 @@
 import { router } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
+import { isValidElement } from "react";
 import type { ReactNode } from "react";
 import {
   FlatList,
@@ -161,7 +162,7 @@ export function MaterialsShell({
       style={styles.safe}
       edges={["top", "left", "right"]}
     >
-      {items ? <FlatList data={items} keyExtractor={(_, index) => String(index)} renderItem={({ item }) => <>{item}</>} ListHeaderComponent={header} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5} /> : <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]}>{header}</ScrollView>}
+      {items ? <FlatList data={items} keyExtractor={(item, index) => isValidElement(item) && item.key != null ? String(item.key) : String(index)} extraData={items} renderItem={({ item }) => <>{item}</>} ListHeaderComponent={header} contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" initialNumToRender={10} windowSize={5} /> : <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />} keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 12) }]}>{header}</ScrollView>}
     </SafeAreaView>
   );
 }
