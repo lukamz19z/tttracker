@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import { createClientId } from "@/lib/client-id";
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -68,7 +69,7 @@ export type QueueRecord<T = unknown> = {
   updatedAt: string;
 };
 
-export async function enqueue<T>(kind: string, payload: T, id: string = crypto.randomUUID()) {
+export async function enqueue<T>(kind: string, payload: T, id: string = createClientId()) {
   const db = await database();
   const now = new Date().toISOString();
   await db.runAsync(
@@ -156,7 +157,7 @@ export async function cachedValuesWithPrefix<T>(prefix: string): Promise<T[]> {
   return rows.flatMap(row => JSON.parse(row.payload) as T[]);
 }
 
-export async function cacheEntriesWithPrefix<T>(prefix: string): Promise<Array<{ key:string; value:T; updatedAt:string }>> {
+export async function cacheEntriesWithPrefix<T>(prefix: string): Promise<{ key:string; value:T; updatedAt:string }[]> {
   const db=await database();
   const rows=await db.getAllAsync<{cache_key:string;payload:string;updated_at:string}>(
     "SELECT cache_key,payload,updated_at FROM cache_entries WHERE substr(cache_key,1,?) = ? ORDER BY updated_at DESC",

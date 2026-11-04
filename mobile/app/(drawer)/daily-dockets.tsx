@@ -39,6 +39,7 @@ import {
 } from "@/lib/dockets/constants";
 import { formatDocketDate } from "@/lib/dockets/dates";
 import { reconcileDailyDocketSubmissionStatus } from "@/lib/dockets/submission-status";
+import { createClientId } from "@/lib/client-id";
 import {
   calculateLabourTotals,
   toNumber,
@@ -677,7 +678,7 @@ export default function DailyDocketScreen() {
               try {
                 const submissionDraft = {
                   ...draft,
-                  docketId: draft.docketId || crypto.randomUUID(),
+                  docketId: draft.docketId || createClientId(),
                   bcRepName: editorPayload.identity.name,
                   bcRepEmail: editorPayload.identity.email,
                   bcRepUserId: editorPayload.identity.userId,

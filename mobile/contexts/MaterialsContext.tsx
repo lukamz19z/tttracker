@@ -16,6 +16,7 @@ import {
   cachedMaterials,
   cancelMaterialTransfer,
   createMissingMaterial as createMissingMaterialApi,
+  getMissingMaterialMutationStatus,
   resolveMissingMaterial as resolveMissingMaterialApi,
   clearBundleCheck as clearBundleCheckApi,
   clearMemberCheck as clearMemberCheckApi,
@@ -28,6 +29,7 @@ import {
   saveBundleCheck as saveBundleCheckApi,
   saveMemberCheck as saveMemberCheckApi,
 } from "@/lib/api/materials";
+import { classifyBackendFailure } from "../../lib/backend-resilience";
 import { setCache } from "@/lib/offline/db";
 import { removeOfflineFile } from "@/lib/offline/files";
 import {
@@ -210,6 +212,10 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       let blocked = false;
 
       for (const mutation of queue) {
+        if (mutation.kind === "report_missing" && mutation.status === "manual_retry") {
+          remaining.push(mutation);
+          continue;
+        }
         if (blocked) {
           remaining.push(mutation);
           continue;
@@ -225,7 +231,25 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
           } else if (mutation.kind === "clear_member") {
             await clearMemberCheckApi(mutation.memberId);
           } else if (mutation.kind === "report_missing") {
-            const result = await createMissingMaterialApi(mutation.input);
+            let result: Awaited<ReturnType<typeof createMissingMaterialApi>>;
+            try {
+              result = await createMissingMaterialApi(mutation.input);
+            } catch (submitError) {
+              if (!classifyBackendFailure(submitError).transient) throw submitError;
+              try {
+                const status = await getMissingMaterialMutationStatus({
+                  projectId: mutation.input.projectId,
+                  towerId: mutation.input.towerId,
+                  clientMutationId: mutation.input.clientMutationId,
+                });
+                if (!status.found) throw new Error("TTTracker confirmed this material report was not saved. It remains on this device; tap Report again to retry.");
+                const item = status.event.tower_material_event_items?.[0];
+                result = { ok: true, issue: { event_id: status.event.id, issue_key: item?.issue_key || "", duplicate: true } };
+              } catch (statusError) {
+                if (statusError instanceof Error && statusError.message.includes("confirmed this material report was not saved")) throw statusError;
+                throw new Error("We couldn't confirm whether this material report was saved. It remains on this device; check Materials when the connection returns before reporting again.");
+              }
+            }
             const temporaryKey = `pending:${mutation.input.clientMutationId}`;
             canonicalIssueKeys.set(temporaryKey, result.issue.issue_key);
             const current = dataRef.current;
@@ -276,7 +300,12 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
         } catch (syncError) {
           blocked = true;
           const message = syncError instanceof Error ? syncError.message : "Material change could not be synced.";
-          remaining.push({ ...mutation, attempts: (mutation.attempts || 0) + 1, lastError: message, status: "failed" });
+          const retryState = { attempts: (mutation.attempts || 0) + 1, lastError: message };
+          if (mutation.kind === "report_missing") {
+            remaining.push({ ...mutation, ...retryState, status: "manual_retry" });
+          } else {
+            remaining.push({ ...mutation, ...retryState, status: "failed" });
+          }
           setError(message);
         }
       }
@@ -1261,10 +1290,10 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
   const reportMissingMaterial = useCallback(async (input: Omit<CreateMissingMaterialInput,"projectId">) => {
     if(!projectId) throw new Error("Select a project before reporting missing material.");
     const queued=await enqueue(makeReportMissingMutation({...input,projectId}));
-    const mutation=queued.find(row=>row.id===queued[queued.length-1]?.id);
+    const mutation=queued.find(row=>row.id===input.clientMutationId);
     const local=mutation?.kind==="report_missing"?mutation.input:null;
     if(local&&dataRef.current){const isExcess=local.issueType==="excess";const pending:MaterialEventRecord={id:`pending:${local.clientMutationId}`,project_id:projectId,tower_id:local.towerId,event_type:isExcess?"excess":"missing",occurred_at:local.occurredAt||new Date().toISOString(),urgency:local.urgency||null,required_by:local.requiredBy||null,issue_status:isExcess?"available":"outstanding",current_effect:local.location||null,work_outcome:local.disposition||null,client_mutation_id:local.clientMutationId,notes:local.notes||null,tower_material_event_items:[{id:`pending:${local.clientMutationId}`,issue_key:`pending:${local.clientMutationId}`,item_reference:local.itemReference,item_description:local.description,quantity:local.quantity,unit:local.unit||"ea",material_type:local.materialType||"other",material_category:local.category,specification:local.specification,source_table:local.sourceTable,source_record_id:local.sourceRecordId,bundle_section:local.segment,segment:local.segment,member_number:local.memberNumber,drawing_number:local.drawingNumber,bolt_size:local.boltSize}]};const next={...dataRef.current,materialEvents:[pending,...dataRef.current.materialEvents]};dataRef.current=next;setData(next);persist(next);}
-    if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true);}
+    if(online){const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===mutation?.id);if(failed)throw new Error(failed.lastError||"Missing material is queued and needs retry.");await load(true);}
   },[dataRef,enqueue,flushQueue,load,online,persist,projectId]);
 
   const resolveMissingMaterial = useCallback(async (input: { towerId: string; issueKey: string }) => {

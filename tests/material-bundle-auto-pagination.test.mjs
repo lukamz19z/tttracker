@@ -10,7 +10,7 @@ test("bootstrap returns all paged bundle rows and caches the complete response",
     readFile(new URL("mobile/lib/api/materials.ts", root), "utf8"),
     readFile(new URL("mobile/contexts/MaterialsContext.tsx", root), "utf8"),
   ]);
-  assert.match(route, /paged\(\(from, to\) =>[\s\S]*?from\("tower_required_bundles"\)[\s\S]*?\.range\(from, to\)/);
+  assert.match(route, /paged\("required_bundles", \(from, to\) =>[\s\S]*?from\("tower_required_bundles"\)[\s\S]*?\.range\(from, to\)/);
   assert.doesNotMatch(route, /BUNDLE_BOOTSTRAP_LIMIT|bundlePage|\.limit\(20\)/);
   assert.match(route, /\bbundles,/);
   assert.match(api, /apiJson<MaterialPayload>\(`\/api\/mobile\/materials\/bootstrap\?projectId=/);

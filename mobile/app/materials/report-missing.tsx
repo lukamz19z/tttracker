@@ -9,6 +9,7 @@ import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput
 import { Camera, ChevronDown, ChevronLeft, ChevronRight, ImagePlus, Save, Trash2 } from "lucide-react-native";
 import * as ImagePicker from "expo-image-picker";
 import { persistOfflineFile, removeOfflineFile } from "@/lib/offline/files";
+import { createClientId } from "@/lib/client-id";
 
 const clean=(value:unknown)=>String(value??"").trim();
 type Kind="bundle"|"member"|"bolt"|"j_bolt"|"nut"|"washer"|"packer"|"mesh"|"grid_mesh"|"plate"|"other";
@@ -16,7 +17,6 @@ type ExcessPhoto={localPhotoId:string;clientEvidenceId:string;uri:string;name:st
 const TYPES:{id:Kind;label:string}[]=[{id:"bundle",label:"Bundle"},{id:"member",label:"Member"},{id:"bolt",label:"Bolt"},{id:"j_bolt",label:"J-Bolt"},{id:"nut",label:"Nut"},{id:"washer",label:"Washer"},{id:"packer",label:"Packer"},{id:"mesh",label:"Mesh"},{id:"grid_mesh",label:"Grid Mesh"},{id:"plate",label:"Plate"},{id:"other",label:"Other"}];
 const dateDisplay=(date:Date)=>`${String(date.getDate()).padStart(2,"0")}/${String(date.getMonth()+1).padStart(2,"0")}/${date.getFullYear()}`;
 const dateDb=(date:Date)=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
-function mutationId(){return `material-missing-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;}
 function dateFromDb(value:string){const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(value);return match?new Date(Number(match[1]),Number(match[2])-1,Number(match[3])):new Date();}
 
 export default function ReportMissingMaterialScreen(){
@@ -62,6 +62,8 @@ export default function ReportMissingMaterialScreen(){
   const [catalogueResults,setCatalogueResults]=useState<MaterialSearchResult[]>([]);
   const [catalogueLoading,setCatalogueLoading]=useState(false);
   const catalogueRequest=useRef(0);
+  const reportMutationId=useRef(createClientId());
+  const submitInFlight=useRef(false);
   async function chooseExcessPhotos(camera:boolean){const permission=camera?await ImagePicker.requestCameraPermissionsAsync():await ImagePicker.requestMediaLibraryPermissionsAsync();if(!permission.granted){Alert.alert("Photo permission required","Enable camera or photo access in Settings.");return;}const result=camera?await ImagePicker.launchCameraAsync({mediaTypes:["images"],quality:0.88}):await ImagePicker.launchImageLibraryAsync({mediaTypes:["images"],quality:0.88,allowsMultipleSelection:true,selectionLimit:8});if(result.canceled)return;const added:ExcessPhoto[]=[];for(const asset of result.assets){const uri=await persistOfflineFile(asset.uri,"excess-report");const id=`excess-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;added.push({localPhotoId:id,clientEvidenceId:id,uri,name:asset.fileName||`excess-${Date.now()}.jpg`,mimeType:asset.mimeType||"image/jpeg"});}setExcessPhotos(current=>[...current,...added]);}
   useEffect(()=>{let active=true;setPersonnelLoaded(false);setPersonnelLoadFailed(false);if(!data?.projectId){setPersonnelLoaded(true);return()=>{active=false;};}void (async()=>{const cached=await cachedMaterialProjectUsers(data.projectId).catch(()=>null);if(!active)return;if(cached){setMaterialUsers(cached.materialUsers);setPersonnelLoaded(true);}if(!online){if(!cached)setPersonnelLoaded(true);return;}try{const choices=await loadMaterialProjectUsers(data.projectId);if(active)setMaterialUsers(choices.materialUsers);}catch{if(active&&!cached){setMaterialUsers([]);setPersonnelLoadFailed(true);}}finally{if(active)setPersonnelLoaded(true);}})();return()=>{active=false;};},[data?.projectId,online]);
   useEffect(()=>{
@@ -143,18 +145,20 @@ export default function ReportMissingMaterialScreen(){
     if(table==="bundle")setQuantity("1");
   }
   async function submit(){
+    if(submitInFlight.current)return;
     const finalDescription=sourceMode==="existing"?itemLabel:description.trim()||category;
     if(!towerId||!finalDescription||Number(quantity)<=0){Alert.alert("Item details required","Choose a tower, material and positive quantity.");return;}
     if(sourceMode==="existing"&&!itemId){Alert.alert("Choose a material","Select an existing register item or switch to Manual.");return;}
+    submitInFlight.current=true;
     setSaving(true);
     try{
       const [sourceTable,sourceRecordId]=sourceMode==="existing"&&itemId?itemId.split(":",2):["",""];
       const selectedBolt=data?.bolts.find(item=>clean(item.id)===sourceRecordId);
       const sourceTableName=sourceTable?`tower_${sourceTable==="member"?"material_members":sourceTable==="bolt"||sourceTable==="packer"?"material_bolts":"required_bundles"}`:undefined;
       const materialType=normalizeMissingMaterialType({sourceTable:sourceTableName,sourceRecordId,linkedType:kind==="member"?"steel_member":kind==="packer"?"packer_spacer":kind==="j_bolt"?"bolt":kind==="plate"?"flat_plate":selectedBolt?.item_type||kind,category});
-      await reportMissingMaterial({issueType,towerId,clientMutationId:mutationId(),itemReference:sourceMode==="existing"?itemLabel:finalDescription,description:finalDescription,quantity:Number(quantity),unit:unit.trim()||"ea",category:category.trim()||"Other",specification:specification.trim()||undefined,sourceTable:sourceTableName,sourceRecordId:sourceRecordId||undefined,materialType,boltSize:kind==="bolt"||kind==="j_bolt"?specification:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency:issueType==="missing"?urgency:undefined,requiredBy:issueType==="missing"?(requiredBy||null):undefined,location:issueType==="excess"?location:undefined,disposition:issueType==="excess"?disposition:undefined,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds,initialEvidence:issueType==="excess"?excessPhotos:undefined});
+      await reportMissingMaterial({issueType,towerId,clientMutationId:reportMutationId.current,itemReference:sourceMode==="existing"?itemLabel:finalDescription,description:finalDescription,quantity:Number(quantity),unit:unit.trim()||"ea",category:category.trim()||"Other",specification:specification.trim()||undefined,sourceTable:sourceTableName,sourceRecordId:sourceRecordId||undefined,materialType,boltSize:kind==="bolt"||kind==="j_bolt"?specification:undefined,segment:segment.trim()||undefined,memberNumber:member.trim()||undefined,drawingNumber:drawing.trim()||undefined,urgency:issueType==="missing"?urgency:undefined,requiredBy:issueType==="missing"?(requiredBy||null):undefined,location:issueType==="excess"?location:undefined,disposition:issueType==="excess"?disposition:undefined,notes:notes.trim()||undefined,assignedToUserId:assignedToUserId||null,notifyUserIds,initialEvidence:issueType==="excess"?excessPhotos:undefined});
       Alert.alert(online?(issueType==="excess"?"Excess":"Missing material")+" reported":"Saved for sync",online?"It is linked to the tower and available in Materials and the Daily Docket.":"The report is safely queued and will sync when connected.");router.back();
-    }catch(error){const message=error instanceof Error?error.message:"Please retry.";Alert.alert(message.includes("photo needs retry")?"Excess reported, photo needs retry":"Could not report material",message);}finally{setSaving(false);}
+    }catch(error){const message=error instanceof Error?error.message:"Please retry.";Alert.alert(message.includes("photo needs retry")?"Excess reported, photo needs retry":"Could not report material",message);}finally{submitInFlight.current=false;setSaving(false);}
   }
   const monthFirst=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth(),1),calendarStart=new Date(monthFirst);calendarStart.setDate(1-monthFirst.getDay());
   const calendarDays=Array.from({length:42},(_,index)=>{const day=new Date(calendarStart);day.setDate(calendarStart.getDate()+index);return day;});

@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 1000;
 
 async function paged(
+  label: string,
   build: (
     from: number,
     to: number,
@@ -16,8 +17,10 @@ async function paged(
     error: { message: string } | null;
   }>,
 ) {
+  const started = performance.now();
   const rows: unknown[] = [];
   let from = 0;
+  let pages = 0;
 
   while (true) {
     const result = await build(from, from + PAGE_SIZE - 1);
@@ -25,9 +28,14 @@ async function paged(
 
     const page = result.data ?? [];
     rows.push(...page);
+    pages += 1;
 
     if (page.length < PAGE_SIZE) break;
     from += PAGE_SIZE;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    console.info("Materials bootstrap query timing", { query: label, durationMs: Number((performance.now() - started).toFixed(1)), rows: rows.length, pages });
   }
 
   return rows;
@@ -35,11 +43,14 @@ async function paged(
 
 export async function GET(request: NextRequest) {
   const started = performance.now();
+  let phaseStarted = started;
   try {
     const { service, identity } = await requireMobilePermission(
       request,
       "mobile.materials",
     );
+    const authMs = Number((performance.now() - phaseStarted).toFixed(1));
+    phaseStarted = performance.now();
 
     const projectId =
       request.nextUrl.searchParams.get("projectId")?.trim() ?? "";
@@ -74,6 +85,7 @@ export async function GET(request: NextRequest) {
       .order("name");
 
     if (towerError) throw new Error(towerError.message);
+    const setupMs = Number((performance.now() - phaseStarted).toFixed(1));
 
     const towerIds = (towers ?? []).map((tower) => tower.id);
 
@@ -121,7 +133,7 @@ export async function GET(request: NextRequest) {
       events,
       transfers,
     ] = await Promise.all([
-      paged((from, to) =>
+      paged("required_bundles", (from, to) =>
         service
           .from("tower_required_bundles")
           .select(
@@ -133,7 +145,7 @@ export async function GET(request: NextRequest) {
           .order("bundle_no")
           .range(from, to),
       ),
-      paged((from, to) =>
+      paged("bundle_checks", (from, to) =>
         service
           .from("tower_material_bundle_checks")
           .select(
@@ -142,7 +154,7 @@ export async function GET(request: NextRequest) {
           .in("tower_id", towerIds)
           .range(from, to),
       ),
-      paged((from, to) =>
+      paged("member_checks", (from, to) =>
         service
           .from("tower_material_member_checks")
           .select(
@@ -151,7 +163,7 @@ export async function GET(request: NextRequest) {
           .in("tower_id", towerIds)
           .range(from, to),
       ),
-      paged((from, to) =>
+      paged("deliveries", (from, to) =>
         service
           .from("tower_bundle_deliveries")
           .select("id,tower_id,created_at,tower_bundle_delivery_items(*)")
@@ -159,7 +171,7 @@ export async function GET(request: NextRequest) {
           .order("created_at", { ascending: false })
           .range(from, to),
       ),
-      paged((from, to) =>
+      paged("material_events", (from, to) =>
         service
           .from("tower_material_events")
           .select(
@@ -169,7 +181,7 @@ export async function GET(request: NextRequest) {
           .order("occurred_at", { ascending: false })
           .range(from, to),
       ),
-      paged((from, to) =>
+      paged("transfers", (from, to) =>
         service
           .from("tower_material_transfers")
           .select("id,project_id,source_tower_id,destination_tower_id,source_bundle_id,destination_bundle_id,bundle_no,bundle_section,quantity,status,transferred_by,transferred_by_name,transferred_at,received_by,received_by_name,received_at,cancelled_by,cancelled_by_name,cancelled_at,notes,source_issue_key,destination_issue_key,item_snapshot,create_client_mutation_id,receive_client_mutation_id")
@@ -179,6 +191,8 @@ export async function GET(request: NextRequest) {
       ),
     ]);
 
+    const totalMs = Number((performance.now() - started).toFixed(1));
+    if (process.env.NODE_ENV !== "production") console.info("Materials bootstrap timing", { authMs, accessAndTowersMs: setupMs, totalMs, towerCount: towers?.length ?? 0, bundleCount: bundles.length, eventCount: events.length });
     return NextResponse.json({
       cacheVersion: 2,
       snapshotMode: "summary",
@@ -196,7 +210,7 @@ export async function GET(request: NextRequest) {
       deliveries,
       materialEvents: events,
       transfers,
-    }, { headers: { "Server-Timing": `bootstrap;dur=${(performance.now() - started).toFixed(1)}` } });
+    }, { headers: { "Server-Timing": `auth;dur=${authMs}, setup;dur=${setupMs}, data;dur=${Math.max(0, totalMs - authMs - setupMs)}, total;dur=${totalMs}` } });
   } catch (error) {
     const apiError = mobileApiError(error);
     return NextResponse.json(

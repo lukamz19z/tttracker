@@ -33,7 +33,7 @@ assert.match(settingsUi,/Urgent \/ Critical/);
 assert.match(settingsUi,/In-app/);
 assert.match(settingsUi,/SharePoint drive ID/);
 assert.match(webPanel,/Additional recipients/);
-assert.match(webPanel,/Receipt history and evidence/);
+assert.match(webPanel,/Receipt \/ collection history and evidence/);
 assert.match(webPanel,/Cancel requirement/);
 assert.match(mobile,/Take Photo/);
 assert.match(mobile,/Choose Photo/);

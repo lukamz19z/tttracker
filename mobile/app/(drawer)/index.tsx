@@ -21,6 +21,7 @@ import {
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -453,12 +454,16 @@ export default function HomeScreen() {
 
   const [personal, setPersonal] = useState<PersonalDashboard>(EMPTY_PERSONAL);
   const [personalLoading, setPersonalLoading] = useState(false);
-  const [personalError, setPersonalError] = useState<string | null>(null);
+  const [trainingUnavailable, setTrainingUnavailable] = useState(false);
+  const [vehicleUnavailable, setVehicleUnavailable] = useState(false);
 
   const [projectDashboard, setProjectDashboard] =
     useState<ProjectDashboardData>(EMPTY_PROJECT);
   const [projectLoading, setProjectLoading] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const personalLoadActive = useRef(false);
+  const projectLoadActive = useRef(false);
+  const notificationLoadActive = useRef(false);
 
   const selectedProject =
     profile?.availableProjects.find(
@@ -505,9 +510,12 @@ export default function HomeScreen() {
   );
 
   const loadNotifications = useCallback(async () => {
+    if (notificationLoadActive.current) return;
+    notificationLoadActive.current = true;
     if (!canUseNotifications || !session?.user.id) {
       setNotifications(EMPTY_NOTIFICATIONS);
       setNotificationsError(null);
+      notificationLoadActive.current = false;
       return;
     }
 
@@ -549,90 +557,71 @@ export default function HomeScreen() {
       );
     } finally {
       setNotificationsLoading(false);
+      notificationLoadActive.current = false;
     }
   }, [canUseNotifications, session?.user.id]);
 
   const loadPersonalDashboard = useCallback(async () => {
+    if (personalLoadActive.current) return;
     if (!canSeeMyDay) {
       setPersonal(EMPTY_PERSONAL);
-      setPersonalError(null);
       return;
     }
 
+    personalLoadActive.current = true;
     setPersonalLoading(true);
-    setPersonalError(null);
+    setTrainingUnavailable(false);
+    setVehicleUnavailable(false);
 
-    const next: PersonalDashboard = { ...EMPTY_PERSONAL };
-    const errors: string[] = [];
-
-    if (canUseTraining) {
+    const tasks: Promise<void>[] = [];
+    if (canUseTraining) tasks.push((async () => {
       try {
         const training = await getMyTraining();
-        next.training = training.records ?? [];
-      } catch (error) {
-        errors.push(
-          error instanceof Error
-            ? error.message
-            : "Training could not be loaded.",
-        );
+        setPersonal(current => ({ ...current, training: training.records ?? [] }));
+      } catch {
+        setTrainingUnavailable(true);
       }
-    }
+    })());
 
-    if (canUseVehiclePrestarts) {
+    if (canUseVehiclePrestarts) tasks.push((async () => {
       try {
-        const assignedVehicleId =
-          (await AsyncStorage.getItem(ASSIGNED_VEHICLE_KEY)) ?? "";
-        next.assignedVehicleId = assignedVehicleId;
-
-        if (assignedVehicleId) {
-          const [vehicleResult, prestartResult] = await Promise.all([
-            supabase
-              .from("vehicle_assets")
-              .select(
-                "id,vehicle_id,vehicle_rego,rego,make,model,category,project,crew,status",
-              )
-              .eq("id", assignedVehicleId)
-              .maybeSingle(),
-            supabase
-              .from("vehicle_prestarts")
-              .select(
-                "id,vehicle_asset_id,asset_type,asset_label,vehicle_rego,inspected_by_name,prestart_date,created_at,severity,result,fleet_job_number",
-              )
-              .eq("asset_type", "Vehicle")
-              .eq("vehicle_asset_id", assignedVehicleId)
-              .order("prestart_date", { ascending: false })
-              .order("created_at", { ascending: false })
-              .limit(50),
-          ]);
-
-          if (vehicleResult.error) throw vehicleResult.error;
-          if (prestartResult.error) throw prestartResult.error;
-
-          next.vehicle = (vehicleResult.data as VehicleAsset | null) ?? null;
-
-          const identity = clean(fullName).toLowerCase();
-          const prestarts = (prestartResult.data ?? []) as VehiclePrestart[];
-          next.latestVehiclePrestart =
-            prestarts.find(
-              (row) =>
-                clean(row.inspected_by_name).toLowerCase() === identity,
-            ) ?? null;
+        const assignedVehicleId = (await AsyncStorage.getItem(ASSIGNED_VEHICLE_KEY)) ?? "";
+        setPersonal(current => ({ ...current, assignedVehicleId }));
+        if (!assignedVehicleId) {
+          setPersonal(current => ({ ...current, vehicle: null, latestVehiclePrestart: null }));
+          return;
         }
-      } catch (error) {
-        errors.push(
-          error instanceof Error
-            ? error.message
-            : "Vehicle prestart summary could not be loaded.",
-        );
-      }
-    }
 
-    setPersonal(next);
-    setPersonalError(errors.length ? errors.join(" · ") : null);
-    setPersonalLoading(false);
+        const [vehicleResult, prestartResult] = await Promise.all([
+          supabase.from("vehicle_assets")
+            .select("id,vehicle_id,vehicle_rego,rego,make,model,category,project,crew,status")
+            .eq("id", assignedVehicleId).maybeSingle(),
+          supabase.from("vehicle_prestarts")
+            .select("id,vehicle_asset_id,asset_type,asset_label,vehicle_rego,inspected_by_name,prestart_date,created_at,severity,result,fleet_job_number")
+            .eq("asset_type", "Vehicle").eq("vehicle_asset_id", assignedVehicleId)
+            .ilike("inspected_by_name", fullName)
+            .order("prestart_date", { ascending: false }).order("created_at", { ascending: false })
+            .limit(1).maybeSingle(),
+        ]);
+        if (vehicleResult.error) throw vehicleResult.error;
+        if (prestartResult.error) throw prestartResult.error;
+        setPersonal(current => ({ ...current, vehicle: (vehicleResult.data as VehicleAsset | null) ?? null, latestVehiclePrestart: (prestartResult.data as VehiclePrestart | null) ?? null }));
+      } catch (error) {
+        setVehicleUnavailable(true);
+        if (__DEV__) console.debug("Home vehicle summary unavailable", { error: error instanceof Error ? error.name : "unknown" });
+      }
+    })());
+
+    try {
+      await Promise.all(tasks);
+    } finally {
+      setPersonalLoading(false);
+      personalLoadActive.current = false;
+    }
   }, [canSeeMyDay, canUseTraining, canUseVehiclePrestarts, fullName]);
 
   const loadProjectDashboard = useCallback(async () => {
+    if (projectLoadActive.current) return;
     const projectId = profile?.projectId;
 
     if (!canSeeProjectSnapshot || !projectId) {
@@ -641,6 +630,7 @@ export default function HomeScreen() {
       return;
     }
 
+    projectLoadActive.current = true;
     setProjectLoading(true);
     setProjectError(null);
 
@@ -800,6 +790,7 @@ export default function HomeScreen() {
       );
     } finally {
       setProjectLoading(false);
+      projectLoadActive.current = false;
     }
   }, [
     canSeeProjectSnapshot,
@@ -902,14 +893,7 @@ export default function HomeScreen() {
               subtitle="The things that matter to you personally."
             />
 
-            {personalError ? (
-              <ErrorCard title="Personal summary partly unavailable" message={personalError} />
-            ) : null}
-
-            {personalLoading ? (
-              <LoadingCard text="Updating your records..." />
-            ) : (
-              <View style={styles.stack}>
+            <View style={styles.stack}>
                 {canUseTraining ? (
                   <View style={styles.panel}>
                     <View style={styles.panelHeader}>
@@ -934,7 +918,11 @@ export default function HomeScreen() {
                       </Pressable>
                     </View>
 
-                    {expiringTraining.length === 0 ? (
+                    {personalLoading && personal.training.length === 0 ? (
+                      <Text style={styles.goodRowText}>Loading your training summary…</Text>
+                    ) : trainingUnavailable ? (
+                      <Text style={styles.goodRowText}>Training summary unavailable. Open Training to refresh.</Text>
+                    ) : expiringTraining.length === 0 ? (
                       <View style={styles.goodRow}>
                         <CheckCircle2 size={18} color="#047857" />
                         <Text style={styles.goodRowText}>
@@ -1003,14 +991,13 @@ export default function HomeScreen() {
                     </View>
 
                     <StatusStrip
-                      tone={vehicleState.tone}
-                      title={vehicleState.title}
-                      detail={vehicleState.detail}
+                      tone={vehicleUnavailable ? "amber" : vehicleState.tone}
+                      title={vehicleUnavailable ? "Vehicle summary unavailable" : personalLoading && !personal.assignedVehicleId ? "Loading vehicle summary…" : vehicleState.title}
+                      detail={vehicleUnavailable ? "Open Vehicle Prestart to check the latest status." : vehicleState.detail}
                     />
                   </Pressable>
                 ) : null}
-              </View>
-            )}
+            </View>
           </>
         ) : null}
 

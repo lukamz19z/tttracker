@@ -505,7 +505,8 @@ export async function POST(
   _request: Request,
   context: RouteContext,
 ) {
-  let phaseStartedAt = Date.now();
+  const requestStartedAt = Date.now();
+  let phaseStartedAt = requestStartedAt;
   const logSubmitPhase = (phase: string) => {
     if (process.env.NODE_ENV !== "production") {
       console.info("Daily Docket submit timing", { phase, durationMs: Date.now() - phaseStartedAt });
@@ -628,6 +629,7 @@ export async function POST(
         { status: 500 },
       );
     }
+    logSubmitPhase("project_access_lookup");
 
     const submitterIsReviewer = await isConfiguredBcReviewer(
       service,
@@ -672,11 +674,13 @@ export async function POST(
     const materialIssueSnapshot = Array.isArray(docket.material_issue_snapshot)
       ? docket.material_issue_snapshot
       : await loadOutstandingMobileMaterialIssues(service, docket.tower_id, docket.docket_date || undefined);
+    logSubmitPhase("material_snapshot");
     if (docket.docket_date && isFutureDocketDate(docket.docket_date, new Date(), _request.headers.get("X-TTTracker-Timezone"))) {
       return NextResponse.json({ error: "Daily Docket date cannot be in the future." }, { status: 400 });
     }
 
     const signerIdentity = await resolveSystemUserIdentity(service, user);
+    logSubmitPhase("signature_identity");
 
     // A signature is permanently associated with the user account that made it.
     // Do not silently relabel another person's saved signature as the current user.
@@ -727,7 +731,7 @@ export async function POST(
         { status: 400 },
       );
     }
-    logSubmitPhase("validate_authorize_and_resolve_reviewers");
+    logSubmitPhase("reviewer_recipient_lookup");
 
     const submittedAt = new Date().toISOString();
     const previousRevision = Math.max(
@@ -760,6 +764,7 @@ export async function POST(
           { status: 503 },
         );
       }
+      logSubmitPhase("supersede_old_client_approvals");
     }
 
     const { data: updatedDocket, error: updateError } = await service
@@ -822,7 +827,7 @@ export async function POST(
     }
     logSubmitPhase("persist_submission_state");
 
-    await service.from("tower_docket_approvals").insert({
+    const approvalInsert = await service.from("tower_docket_approvals").insert({
       docket_id: docket.id,
       project_id: docket.project_id,
       stage: "bc",
@@ -832,6 +837,8 @@ export async function POST(
       submitted_at: submittedAt,
       created_at: submittedAt,
     });
+    if (approvalInsert.error) console.error("Daily Docket submitted but BC approval row creation failed", { docketId: docket.id, code: approvalInsert.error.code, message: approvalInsert.error.message });
+    logSubmitPhase("approval_row");
 
     await recordWorkflowEvent(service, {
       docketId: docket.id,
@@ -1021,6 +1028,7 @@ export async function POST(
     });
     logSubmitPhase("schedule_post_commit_notification");
 
+    const totalMs = Number((Date.now() - requestStartedAt).toFixed(1));
     return NextResponse.json({
       success: true,
       status: "submitted_bc",
@@ -1033,7 +1041,7 @@ export async function POST(
         email: reviewer.email,
       })),
       warning: null,
-    });
+    }, { headers: { "Server-Timing": `total;dur=${totalMs}` } });
   } catch (error) {
     console.error("Daily Docket submit-bc route failed", error);
 

@@ -4,11 +4,11 @@ import type {
   SaveMemberCheckInput,
   CreateMissingMaterialInput,
   RecordMissingReceiptInput,
+  MaterialReceiptEvidenceInput,
 } from "@/types/materials";
-import type { MaterialReceiptEvidenceInput } from "@/types/materials";
 
 export type PendingMaterialMutation =
-  | { clientMutationId?: string; projectId?: string; targetLocalId?: string; attempts?: number; lastError?: string | null; status?: "pending" | "failed"; } & (
+  | { clientMutationId?: string; projectId?: string; targetLocalId?: string; attempts?: number; lastError?: string | null; status?: "pending" | "failed" | "manual_retry"; } & (
   | {
       id: string;
       kind: "save_bundle";
@@ -116,8 +116,8 @@ export function makeClearMemberMutation(
   };
 }
 
-export function makeReportMissingMutation(input: Omit<CreateMissingMaterialInput,"clientMutationId">): PendingMaterialMutation {
-  const id=mutationId();
+export function makeReportMissingMutation(input: CreateMissingMaterialInput): PendingMaterialMutation {
+  const id=input.clientMutationId || mutationId();
   return {id,clientMutationId:id,projectId:input.projectId,targetLocalId:`pending:${id}`,attempts:0,lastError:null,status:"pending",kind:"report_missing",input:{...input,clientMutationId:id},createdAt:new Date().toISOString()};
 }
 
@@ -148,7 +148,12 @@ export function mergeMaterialMutation(
     if(current.some(item=>item.kind==="receipt_evidence"&&item.id===next.id))return current;
     return [...current,next];
   }
-  if(next.kind==="report_missing"||next.kind==="resolve_missing") return [...current,next];
+  if(next.kind==="report_missing") {
+    const existing=current.findIndex(item=>item.kind==="report_missing"&&item.id===next.id);
+    if(existing<0)return [...current,next];
+    const copy=[...current];copy[existing]={...next,createdAt:current[existing].createdAt,attempts:current[existing].attempts||0,lastError:null,status:"pending"};return copy;
+  }
+  if(next.kind==="resolve_missing") return [...current,next];
   if (next.kind === "save_bundle" || next.kind === "clear_bundle") {
     const filtered = current.filter((item) => {
       if (

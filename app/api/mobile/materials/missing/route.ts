@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
 import { normalizeMissingMaterialType } from "@/mobile/lib/materials/canonical-material-type";
@@ -10,8 +10,17 @@ const clean = (value: unknown) => String(value ?? "").trim();
 const positive = (value: unknown) => { const parsed = Number(value); return Number.isFinite(parsed) && parsed > 0 ? parsed : 0; };
 
 export async function POST(request: NextRequest) {
+  const started = performance.now();
+  const marks: Record<string, number> = {};
+  let phase = started;
+  const mark = (name: string) => {
+    const now = performance.now();
+    marks[name] = Number((now - phase).toFixed(1));
+    phase = now;
+  };
   try {
     const { service, identity } = await requireMobilePermission(request, "mobile.materials");
+    mark("auth");
     const body = await request.json() as Record<string, unknown>;
     const projectId = clean(body.projectId);
     const towerId = clean(body.towerId);
@@ -37,6 +46,7 @@ export async function POST(request: NextRequest) {
       if (assignedToUserId && !eligibleIds.has(assignedToUserId)) return NextResponse.json({ error: "Assign To must be selected from this project's configured Materials users." }, { status: 400 });
       if (notifyUserIds.some(id => !eligibleIds.has(id))) return NextResponse.json({ error: "Additional recipients must be selected from this project's configured Materials users." }, { status: 400 });
     }
+    mark("validation_and_recipients");
     if (requestedUsers.length) {
       const { data: userAccess, error: userAccessError } = await service.from("project_access").select("user_id").eq("project_id", projectId).in("user_id", requestedUsers);
       if (userAccessError) throw new Error(userAccessError.message);
@@ -73,12 +83,29 @@ export async function POST(request: NextRequest) {
     });
     if (result.error) throw new Error(result.error.message);
     const issue = result.data as { event_id: string; issue_key: string; duplicate: boolean };
+    mark("issue_rpc");
+    const { error: assignmentError } = await service.from("tower_material_events").update({ assigned_to_user_id: assignedToUserId, notify_user_ids: notifyUserIds }).eq("id", issue.event_id).eq("project_id", projectId);
+    if (assignmentError) throw new Error(`Material report was saved but assignment could not be applied: ${assignmentError.message}`);
+    mark("assignment_persist");
     if (!issue.duplicate) {
-      const { error: assignmentError } = await service.from("tower_material_events").update({ assigned_to_user_id: assignedToUserId, notify_user_ids: notifyUserIds }).eq("id", issue.event_id).eq("project_id", projectId);
-      if (assignmentError) throw new Error(`Missing material was saved but assignment could not be applied: ${assignmentError.message}`);
+      after(async () => {
+        const notificationStarted = performance.now();
+        try {
+          await notifyMissingMaterialEvent({ service, projectId, sourceEventId: issue.event_id, kind: issueType === "excess" ? "excess_raised" : "raised", actorUserId: identity.userId });
+        } catch (notificationError) {
+          console.error("Material issue committed; notification dispatch failed", {
+            issueId: issue.event_id,
+            error: notificationError instanceof Error ? notificationError.message : "unknown",
+          });
+        } finally {
+          if (process.env.NODE_ENV !== "production") console.info("Materials report timing", { phase: "post_commit_notifications", durationMs: Number((performance.now() - notificationStarted).toFixed(1)), issueId: issue.event_id });
+        }
+      });
     }
-    if (!issue.duplicate) await notifyMissingMaterialEvent({ service, projectId, sourceEventId: issue.event_id, kind: issueType === "excess" ? "excess_raised" : "raised", actorUserId: identity.userId });
-    return NextResponse.json({ ok: true, issue });
+    mark("schedule_notifications");
+    const duration = Number((performance.now() - started).toFixed(1));
+    if (process.env.NODE_ENV !== "production") console.info("Materials report timing", { ...marks, totalMs: duration, issueId: issue.event_id, duplicate: issue.duplicate });
+    return NextResponse.json({ ok: true, issue }, { headers: { "Server-Timing": `auth;dur=${marks.auth ?? 0}, validation;dur=${marks.validation_and_recipients ?? 0}, issue_rpc;dur=${marks.issue_rpc ?? 0}, assignment;dur=${marks.assignment_persist ?? 0}, total;dur=${duration}` } });
   } catch (error) {
     if (error instanceof Error && /tower_material_event_items_material_type_check/.test(error.message)) {
       return NextResponse.json({ error: "This material category could not be saved. The report is still available to retry; refresh Materials and try again." }, { status: 400 });

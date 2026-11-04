@@ -27,10 +27,10 @@ assert.match(context, /await recordMissingReceiptApi\(\{ \.\.\.mutation\.input, 
 assert.match(context, /mutation\.kind === "resolve_missing"/);
 assert.match(context, /const remaining = await flushQueue\(queued\)/);
 assert.match(docket, /asOfDate[\s\S]*occurred_at/);
-assert.match(catalogue, /item_type,tower_segment,drawing_number,bolt_diameter,dn_sn,length,packer_no,packer_mark,qty/);
+assert.match(catalogue, /item_type,bolt_type,tower_segment,drawing_number,bolt_diameter,dn_sn,length,packer_no,packer_mark,qty/);
 assert.match(search, /packer_no\.ilike/);
 assert.match(search, /packer_mark\.ilike/);
-assert.match(report, /clean\(row\.item_type\)==="packer"/);
+assert.match(report, /const type=clean\(row\.item_type\)\.toLowerCase\(\)/);
 assert.match(report, /normalizeMissingMaterialType/);
 assert.match(report, /selectedBolt\?\.item_type/);
 assert.match(missingScreen, /Quantity Received/);

@@ -35,9 +35,9 @@ test("retry policy is bounded to three jittered retries", async () => {
   const response = await policy.fetch("https://example.test/data");
   assert.equal(response.status, 503);
   assert.equal(calls, 4);
-  assert.deepEqual(delays, [1_000, 2_000, 5_000]);
-  assert.equal(retryDelayMs(0, () => 0), 800);
-  assert.equal(retryDelayMs(2, () => 1), 6_000);
+  assert.deepEqual(delays, [300, 700, 1_500]);
+  assert.equal(retryDelayMs(0, () => 0), 240);
+  assert.equal(retryDelayMs(2, () => 1), 1_800);
 });
 
 test("browser-like native fetch is invoked with its required global receiver through retries", async () => {

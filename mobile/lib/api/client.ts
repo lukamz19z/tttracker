@@ -1,6 +1,6 @@
 import { manuallyOffline } from "@/lib/offline/connectivity";
 import type { Session } from "@supabase/supabase-js";
-import { resilientFetch } from "../../../lib/backend-resilience";
+import { classifyBackendFailure, resilientFetch } from "../../../lib/backend-resilience";
 
 import { supabase } from "@/lib/supabase";
 
@@ -69,8 +69,10 @@ async function performFetch(
   init: ApiRequestInit,
   session: Session | null,
 ): Promise<Response> {
+  const method = String(init.method ?? "GET").toUpperCase();
+  const isRead = method === "GET" || method === "HEAD";
   const {
-    timeoutMs = 30_000,
+    timeoutMs = isRead ? 15_000 : 30_000,
     qualityDiagnostic,
     dedupe: _dedupe,
     signal: externalSignal,
@@ -94,32 +96,16 @@ async function performFetch(
     headers.set("Content-Type", "application/json");
   }
 
-  const controller = new AbortController();
-
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      controller.abort();
-    } else {
-      externalSignal.addEventListener(
-        "abort",
-        () => controller.abort(),
-        { once: true },
-      );
-    }
-  }
-
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+  const url = apiUrl(input);
+  const startedAt = Date.now();
+  const options: RequestInit & { resilienceTimeoutMs: number } = {
+    ...requestInit,
+    headers,
+    cache: "no-store",
+    ...(externalSignal ? { signal: externalSignal } : {}),
+    resilienceTimeoutMs: timeoutMs,
+  };
   try {
-    const url = apiUrl(input);
-    const startedAt = Date.now();
-    const options: RequestInit & { resilienceTimeoutMs: number } = {
-      ...requestInit,
-      headers,
-      cache: "no-store",
-      signal: controller.signal,
-      resilienceTimeoutMs: timeoutMs,
-    };
     let response = await resilientFetch(url, options);
     // Safety only: a redirected authenticated GET may lose its Authorization.
     // Never forward credentials to an arbitrary redirect host or retry writes.
@@ -148,17 +134,31 @@ async function performFetch(
       }
       console.debug("TTTracker API response", { operation, method, path, serverRevisionId: ids?.[1], serverItemId: ids?.[2], clientMutationId: mutationId, ...qualityDiagnostic, status: response.status, allow: response.headers.get("allow"), errorPreview, durationMs: Date.now() - startedAt });
     }
+    if (__DEV__) {
+      console.debug("TTTracker mobile request", {
+        path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        method,
+        requestType: isRead ? "read" : "mutation",
+        durationMs: Date.now() - startedAt,
+        status: response.status,
+        serverTiming: response.headers.get("server-timing"),
+        timeoutMs,
+      });
+    }
     return response;
   } catch (error) {
-    if (controller.signal.aborted && !externalSignal?.aborted) {
-      throw new Error(
-        `TTTracker request timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`,
-      );
+    if (__DEV__) {
+      console.debug("TTTracker mobile request failed", {
+        path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        method,
+        requestType: isRead ? "read" : "mutation",
+        durationMs: Date.now() - startedAt,
+        timeoutMs,
+        error: error instanceof Error ? error.name : "unknown",
+        failure: classifyBackendFailure(error),
+      });
     }
-
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -298,7 +298,7 @@ export async function apiJson<T>(
     tokenTail,
     method,
     apiUrl(input),
-    String(init.timeoutMs ?? 30_000),
+    String(init.timeoutMs ?? (method === "GET" || method === "HEAD" ? 15_000 : 30_000)),
   ].join("|");
 
   const existing = inFlightJson.get(key);

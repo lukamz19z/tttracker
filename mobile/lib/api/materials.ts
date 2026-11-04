@@ -26,7 +26,7 @@ async function readJson<T>(response: Response, fallback: string) { return jsonBo
 
 export async function refreshMaterials(projectId: string, onSnapshot?: (data: MaterialPayload) => void) {
   const started = Date.now();
-  const raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 45_000 });
+  const raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 20_000 });
   const cached = await getCache<MaterialPayload>(materialCacheKey(projectId));
   const snapshot = { ...raw, members: cached?.value.members || [], bolts: cached?.value.bolts || [] };
   await setCache(materialCacheKey(projectId), snapshot);
@@ -45,7 +45,7 @@ export type MaterialSearchResult={kind:"member"|"bundle"|"bolt";id:string;towerI
 export async function searchMaterialRegister(projectId:string,kind:"member"|"bundle"|"bolt",towerId:string,query:string){
   const value=query.trim();if(value.length<2)return [];
   const started=Date.now(),params=new URLSearchParams({projectId,kind,towerId,q:value,limit:"60"});
-  const response=await apiJson<{results:MaterialSearchResult[]}>(`/api/mobile/materials/search?${params.toString()}`,{timeoutMs:30_000});
+  const response=await apiJson<{results:MaterialSearchResult[]}>(`/api/mobile/materials/search?${params.toString()}`,{timeoutMs:15_000});
   if(__DEV__)console.debug("Materials type search",{kind,durationMs:Date.now()-started,resultCount:response.results.length});
   return response.results;
 }
@@ -192,6 +192,16 @@ export async function createMissingMaterial(input: CreateMissingMaterialInput) {
   return readJson<{ ok: boolean; issue: { event_id: string; issue_key: string; duplicate: boolean } }>(response, "Material issue could not be reported.");
 }
 
+export async function getMissingMaterialMutationStatus(input: { projectId: string; towerId: string; clientMutationId: string }) {
+  const params = new URLSearchParams(input);
+  const response = await apiFetch(`/api/mobile/materials/missing/status?${params.toString()}`, { method: "GET", dedupe: false });
+  if (response.status === 404) {
+    await response.text();
+    return { found: false as const };
+  }
+  return readJson<{ found: true; event: { id: string; project_id: string; tower_id: string; event_type: string; issue_status: string | null; assigned_to_user_id: string | null; notify_user_ids: string[] | null; client_mutation_id: string; tower_material_event_items: { issue_key: string | null }[] } }>(response, "Material report status could not be checked.");
+}
+
 export async function collectExcessMaterial(input:{projectId:string;towerId:string;issueKey:string;quantity:number;clientMutationId:string;location?:string;reference?:string;notes?:string}){
   const response=await apiFetch("/api/mobile/materials/missing/collect-excess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input),timeoutMs:30_000});
   return readJson<{ok:boolean;collection:{event_id:string;duplicate:boolean;remaining_quantity:number;total_quantity:number;collected_quantity:number}}>(response,"Excess material could not be collected.");
@@ -231,7 +241,7 @@ export async function cachedMaterialProjectUsers(projectId: string) {
 export async function loadMaterialProjectUsers(projectId: string) {
   const key = materialUsersCacheKey(projectId);
   try {
-    const choices = await apiJson<MaterialUserChoices>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 30_000 });
+    const choices = await apiJson<MaterialUserChoices>(`/api/mobile/materials/users?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 15_000 });
     await setCache(key, choices);
     return choices;
   } catch (error) {
@@ -245,7 +255,7 @@ export async function loadMissingMaterialDetails(projectId:string,issueKey?:stri
   const params=new URLSearchParams({projectId});
   if(issueKey)params.set("issueKey",issueKey);
   if(eventId)params.set("eventId",eventId);
-  return apiJson<{event:Record<string,unknown>;issueKey:string;actions:Record<string,unknown>[];files:Record<string,unknown>[];receipts:Record<string,unknown>[]}>(`/api/mobile/materials/missing/actions?${params.toString()}`,{timeoutMs:30_000});
+  return apiJson<{event:Record<string,unknown>;issueKey:string;actions:Record<string,unknown>[];files:Record<string,unknown>[];receipts:Record<string,unknown>[]}>(`/api/mobile/materials/missing/actions?${params.toString()}`,{timeoutMs:15_000});
 }
 
 export async function saveMissingMaterialAction(input:{projectId:string;towerId:string;issueKey:string;clientMutationId:string;actionType:"update"|"assignment"|"cancel";text?:string;assignedToUserId?:string|null;notifyUserIds?:string[]}){

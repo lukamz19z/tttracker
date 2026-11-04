@@ -766,6 +766,14 @@ function allocationPayload(
 }
 
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  let phaseStartedAt = startedAt;
+  const phaseTimes: Record<string, number> = {};
+  const logPhase = (phase: string) => {
+    const now = performance.now();
+    phaseTimes[phase] = Number((now - phaseStartedAt).toFixed(1));
+    phaseStartedAt = now;
+  };
   try {
     const body = (await request.json()) as SaveBody;
     const draft = body?.draft;
@@ -816,6 +824,7 @@ export async function POST(request: Request) {
         request,
         projectId,
       );
+    logPhase("auth");
 
     const { data: tower, error: towerError } =
       await service
@@ -879,6 +888,7 @@ export async function POST(request: Request) {
         );
       }
     }
+    logPhase("docket_and_tower_validation");
 
     const delays =
       calculationDelays(draft);
@@ -921,6 +931,7 @@ export async function POST(request: Request) {
     });
 
     const issueSnapshot = await loadOutstandingMobileMaterialIssues(service,towerId,clean(draft.docketDate));
+    logPhase("calculations_progress_context_and_material_snapshot");
     const header = docketPayload({
       draft: {
         ...draft,
@@ -970,6 +981,7 @@ export async function POST(request: Request) {
 
       if (error) throw new Error(error.message);
     }
+    logPhase("header_persist");
 
     const [
       deleteLabour,
@@ -1081,51 +1093,41 @@ export async function POST(request: Request) {
           "Daily Docket detail could not be saved.",
       );
     }
+    logPhase("labour_plant_delay_progress_allocation_persist");
 
-    await syncMobileDocketMaterialEvents({
-      service,
-      docketId: savedDocketId,
-      projectId,
-      towerId,
-      docketDate: clean(draft.docketDate),
-      materialEvents: draft.materialEvents ?? [],
-    });
-
-    await syncMobileBundleTransfers({
-      service,
-      docketId: savedDocketId,
-      projectId,
-      towerId,
-      docketDate: clean(draft.docketDate),
-      leadingHand: clean(draft.leadingHand),
-      bundleTransferDrafts: draft.bundleTransfers ?? [],
-      activeBundleTransfers:
-        draft.activeBundleTransfers ?? [],
-      replacementDrafts:
-        draft.bundleReplacementDrafts ?? {},
-    });
-
-    await syncMobileDocketDelayDayworks({
-      service,
-      docketId: savedDocketId,
-      projectId,
-      towerId,
-      docketDate: clean(draft.docketDate),
-      leadingHand: clean(draft.leadingHand),
-      dailySiteSummary: clean(draft.dailySiteSummary),
-      delayRows: draft.delayRows ?? [],
-      labourRows: labourTotals.rows,
-      plantRows: draft.plantRows ?? [],
-    });
-
-    await syncMobileDocketDefectLinks({
-      service,
-      projectId,
-      towerId,
-      docketId: savedDocketId,
-      linkedDefects: draft.linkedDefects ?? [],
-      newDefects: draft.newDefects ?? [],
-    });
+    const timedSync = async (name: string, operation: () => Promise<void>) => {
+      const syncStarted = performance.now();
+      await operation();
+      return { name, durationMs: Number((performance.now() - syncStarted).toFixed(1)) };
+    };
+    const syncTimings = await Promise.all([
+      timedSync("material_event_sync", () => syncMobileDocketMaterialEvents({
+        service, docketId: savedDocketId, projectId, towerId,
+        docketDate: clean(draft.docketDate), materialEvents: draft.materialEvents ?? [],
+      })),
+      timedSync("bundle_transfer_sync", () => syncMobileBundleTransfers({
+        service, projectId, towerId, docketId: savedDocketId,
+        docketDate: clean(draft.docketDate), leadingHand: clean(draft.leadingHand),
+        bundleTransferDrafts: draft.bundleTransfers ?? [],
+        activeBundleTransfers: draft.activeBundleTransfers ?? [],
+        replacementDrafts: draft.bundleReplacementDrafts ?? {},
+      })),
+      timedSync("delay_dayworks_sync", () => syncMobileDocketDelayDayworks({
+        service, docketId: savedDocketId, projectId, towerId,
+        docketDate: clean(draft.docketDate), leadingHand: clean(draft.leadingHand),
+        dailySiteSummary: clean(draft.dailySiteSummary), delayRows: draft.delayRows ?? [],
+        labourRows: labourTotals.rows, plantRows: draft.plantRows ?? [],
+      })),
+      timedSync("defect_link_sync", () => syncMobileDocketDefectLinks({
+        service, projectId, towerId, docketId: savedDocketId,
+        linkedDefects: draft.linkedDefects ?? [], newDefects: draft.newDefects ?? [],
+      })),
+    ]);
+    for (const timing of syncTimings) {
+      phaseTimes[timing.name] = timing.durationMs;
+      if (process.env.NODE_ENV !== "production") console.info("Daily Docket save timing", { phase: timing.name, durationMs: timing.durationMs, docketId: savedDocketId });
+    }
+    phaseStartedAt = performance.now();
 
     const current = await mobileProgressContext(service, projectId, workedTowers);
     for (const tower of workedTowers) {
@@ -1133,6 +1135,9 @@ export async function POST(request: Request) {
       const { error } = await service.from("towers").update({ progress: Math.round(next), status: next >= 100 ? "Complete" : next > 0 ? "In Progress" : "Not Started", updated_at: new Date().toISOString() }).eq("id", tower.id).eq("project_id", projectId);
       if (error) throw new Error(`Daily docket saved, but tower progress could not be recalculated: ${error.message}`);
     }
+    logPhase("tower_progress_recalculation");
+    const totalMs = Number((performance.now() - startedAt).toFixed(1));
+    if (process.env.NODE_ENV !== "production") console.info("Daily Docket save timing", { ...phaseTimes, totalMs, docketId: savedDocketId });
 
     return NextResponse.json({
       success: true,
@@ -1151,7 +1156,7 @@ export async function POST(request: Request) {
         progress.totalProgressPercent,
       productivity,
       warnings: [],
-    });
+    }, { headers: { "Server-Timing": `auth;dur=${phaseTimes.auth ?? 0}, snapshot;dur=${phaseTimes.calculations_progress_context_and_material_snapshot ?? 0}, persist;dur=${phaseTimes.header_persist ?? 0}, details;dur=${phaseTimes.labour_plant_delay_progress_allocation_persist ?? 0}, sync;dur=${(phaseTimes.material_event_sync ?? 0) + (phaseTimes.bundle_transfer_sync ?? 0) + (phaseTimes.delay_dayworks_sync ?? 0) + (phaseTimes.defect_link_sync ?? 0)}, total;dur=${totalMs}` } });
   } catch (error) {
     const apiError = mobileDocketApiError(error);
 

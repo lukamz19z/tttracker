@@ -1,11 +1,15 @@
 export type BackendFailureKind = "http" | "postgrest" | "network" | "timeout";
 export type BackendFailure = { transient: boolean; kind?: BackendFailureKind; status?: number; code?: string };
 
-const RETRY_DELAYS_MS = [1_000, 2_000, 5_000] as const;
+const RETRY_DELAYS_MS = [300, 700, 1_500] as const;
 const CIRCUIT_FAILURE_THRESHOLD = 3;
 const CIRCUIT_COOLDOWN_MS = 20_000;
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_ATTEMPT_TIMEOUT_MS = 10_000;
+// A safe read has one 15s end-to-end budget (including retries and jitter).
+// Mutations receive their own explicit budget from the caller and are never
+// retried, deduplicated, or blocked by the read circuit.
+const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_MUTATION_TIMEOUT_MS = 30_000;
+const MAX_ATTEMPT_TIMEOUT_MS = 6_000;
 
 function errorFields(value: unknown): { status?: number; code?: string; message: string } {
   if (value instanceof Response) return { status: value.status, message: "" };
@@ -151,7 +155,7 @@ export class BackendResilience {
     const { resilienceTimeoutMs, ...nativeInit } = init;
     const requestTimeoutMs = Number.isFinite(resilienceTimeoutMs) && Number(resilienceTimeoutMs) > 0
       ? Number(resilienceTimeoutMs)
-      : this.timeoutMs;
+      : safeRead ? this.timeoutMs : DEFAULT_MUTATION_TIMEOUT_MS;
     const path = safeRequestPath(url);
     const circuitKey = `${safeOrigin(url)}${path}`;
     const circuit = circuitProtected
@@ -189,7 +193,11 @@ export class BackendResilience {
         const attemptTimeoutMs = safeRead ? Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs) : remainingMs;
         const timer = setTimeout(() => { timedOut = true; controller.abort(); }, attemptTimeoutMs);
         try {
+          const attemptStartedAt = this.now();
           const response = await this.fetchImpl(input, { ...nativeInit, signal: controller.signal });
+          if (response.status >= 400 || this.now() - attemptStartedAt >= 750) {
+            this.log?.("backend_request_completed", { method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
+          }
           let failure = classifyBackendFailure(response);
           if (!failure.transient && response.status >= 500) {
             const body = await response.clone().text().catch(() => "");
@@ -217,6 +225,7 @@ export class BackendResilience {
           return response;
         } catch (error) {
           const failure = timedOut ? { transient: true, kind: "timeout" as const } : classifyBackendFailure(error);
+          if (timedOut) this.log?.("backend_request_timeout", { method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, timeoutMs: attemptTimeoutMs, requestSent: true });
           if (!failure.transient || externalSignal?.aborted) throw error;
           if (attempt < retries) {
             const delayMs = retryDelayMs(attempt, this.random);

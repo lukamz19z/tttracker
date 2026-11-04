@@ -1,5 +1,6 @@
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
 import { persistOfflineFile, removeOfflineFile } from "@/lib/offline/files";
+import { createClientId } from "@/lib/client-id";
 import { syncQualityQueueRecord } from "./quality-sync";
 
 export type OfflinePhoto = {
@@ -31,7 +32,7 @@ export type OfflineRevisionDraft = {
 };
 
 export async function queueOfflineRevision(input: Omit<OfflineRevisionDraft, "localId" | "photos"> & { photos: OfflinePhoto[] }) {
-  const localId = crypto.randomUUID();
+  const localId = createClientId();
   const persisted: OfflinePhoto[] = [];
 
   for (const photo of input.photos) {

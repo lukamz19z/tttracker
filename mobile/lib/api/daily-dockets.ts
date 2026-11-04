@@ -119,7 +119,6 @@ export async function saveDailyDocket(
     "/api/mobile/daily-dockets/save",
     {
       method: "POST",
-      timeoutMs: 60_000,
       headers: {
         "Content-Type":
           "application/json",
@@ -153,7 +152,6 @@ export async function submitDailyDocketForBc(
     )}/submit-bc`,
     {
       method: "POST",
-      timeoutMs: 60_000,
     },
   );
 
