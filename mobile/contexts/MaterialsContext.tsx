@@ -104,6 +104,7 @@ type Value = {
   recordMissingReceipt: (input: RecordMissingReceiptInput, photos?: {id:string;uri:string;name:string;mimeType:string}[]) => Promise<void>;
   reportMissingMaterial: (input: Omit<CreateMissingMaterialInput,"projectId">) => Promise<void>;
   resolveMissingMaterial: (input: { towerId: string; issueKey: string }) => Promise<void>;
+  markMissingMaterialCancelled: (issueKey: string, reason?: string) => void;
 };
 
 const Ctx = createContext<Value | undefined>(undefined);
@@ -1304,6 +1305,24 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
     if (online) { const remaining=await flushQueue(queued);const failed=remaining.find(row=>row.id===queued[queued.length-1]?.id);if(failed)throw new Error(failed.lastError||"Resolution is queued and needs retry.");await load(true); }
   }, [dataRef, enqueue, flushQueue, load, online, persist, projectId]);
 
+  const markMissingMaterialCancelled = useCallback((issueKey: string, reason = "") => {
+    const key = clean(issueKey);
+    const current = dataRef.current;
+    if (!key || !current) return;
+    const cancelledAt = new Date().toISOString();
+    const next = {
+      ...current,
+      materialEvents: current.materialEvents.map((event) =>
+        event.tower_material_event_items?.some((item) => clean(item.issue_key) === key)
+          ? { ...event, issue_status: "cancelled", cancelled_at: cancelledAt, cancellation_reason: reason || null }
+          : event,
+      ),
+    };
+    dataRef.current = next;
+    setData(next);
+    persist(next);
+  }, [dataRef, persist]);
+
   const isBundlePending = useCallback(
     (bundleId: unknown) => {
       const id = clean(bundleId);
@@ -1369,6 +1388,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       recordMissingReceipt,
       reportMissingMaterial,
       resolveMissingMaterial,
+      markMissingMaterialCancelled,
     }),
     [
       sortedData,
@@ -1406,6 +1426,7 @@ export function MaterialsProvider({ children }: PropsWithChildren) {
       recordMissingReceipt,
       reportMissingMaterial,
       resolveMissingMaterial,
+      markMissingMaterialCancelled,
     ],
   );
 

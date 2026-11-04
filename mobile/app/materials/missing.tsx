@@ -16,6 +16,7 @@ import { useMaterials } from "@/contexts/MaterialsContext";
 import { QualityMultiSelect } from "@/components/quality/QualityMultiSelect";
 import { persistOfflineFile, removeOfflineFile } from "@/lib/offline/files";
 import { createClientId } from "@/lib/client-id";
+import { remainingMaterialIssueQuantity } from "../../../lib/materials/issue-quantity";
 import { collectExcessMaterial, createExcessTransfer, loadMaterialProjectUsers, loadMissingMaterialDetails, saveMissingMaterialAction, uploadMaterialReceiptEvidence, type MaterialProjectUser } from "@/lib/api/materials";
 
 const clean = (value: unknown) => String(value ?? "").trim();
@@ -90,7 +91,7 @@ function itemTitle(item: MaterialItemRow) {
 
 export default function MissingMaterials() {
   const params = useLocalSearchParams<{ issue_key?: string; material_issue_key?: string; material_event_id?: string; project_id?: string; tower_id?: string; action?: string; search?: string }>();
-  const { data, towerName,recordMissingReceipt,resolveMissingMaterial,refresh,online } = useMaterials();
+  const { data, towerName,recordMissingReceipt,resolveMissingMaterial,refresh,online,markMissingMaterialCancelled } = useMaterials();
 
   const [query, setQuery] = useState(clean(params.search));
   const deferredQuery = useDeferredValue(query);
@@ -134,6 +135,7 @@ export default function MissingMaterials() {
   const [selectedNotify,setSelectedNotify]=useState<string[]>([]);
   const [updateText,setUpdateText]=useState("");
   const [actionSaving,setActionSaving]=useState(false);
+  const actionInFlight=useRef(false);
   const [cancelReason,setCancelReason]=useState("");
   const [userPicker,setUserPicker]=useState<"assignment"|"notify"|"receipt_notify"|null>(null);
   const [deepLinkLoading,setDeepLinkLoading]=useState(false);
@@ -192,7 +194,47 @@ export default function MissingMaterials() {
     }).finally(()=>{if(active)setDeepLinkLoading(false);});
     return()=>{active=false;};
   },[deepAction,deepEventId,deepIssueKey,deepProjectId,deepTowerId]);
-  async function submitAction(actionType:"update"|"assignment"|"cancel",text=""){if(!detailIssue||!data?.projectId)return;setActionSaving(true);setDetailError("");try{await saveMissingMaterialAction({projectId:data.projectId,towerId:detailIssue.towerId,issueKey:detailIssue.id,clientMutationId:makeClientMutationId(),actionType,text,assignedToUserId:actionType==="assignment"?selectedAssignee||null:undefined,notifyUserIds:selectedNotify});setUpdateText("");setCancelReason("");await refresh();const payload=await loadMissingMaterialDetails(data.projectId,detailIssue.id);setDetailData(payload);if(actionType==="cancel")setDetailIssue({...detailIssue,status:"cancelled"});setSelectedAssignee(clean(payload.event.assigned_to_user_id));}catch(error){setDetailError(error instanceof Error?error.message:"Material update could not be saved.");}finally{setActionSaving(false);}}
+  async function submitAction(actionType:"update"|"assignment"|"cancel",text=""){
+    if(!detailIssue||!data?.projectId||actionInFlight.current)return;
+    actionInFlight.current=true;setActionSaving(true);setDetailError("");
+    const issue=detailIssue,project=data.projectId,mutationId=makeClientMutationId();
+    const applyCancelled=()=>{
+      setDetailIssue(current=>current?{...current,status:"cancelled"}:current);
+      setDetailData(current=>current?{...current,event:{...current.event,issue_status:"cancelled",cancelled_at:new Date().toISOString(),cancellation_reason:text||null}}:current);
+      markMissingMaterialCancelled(issue.id,text);
+    };
+    try{
+      await saveMissingMaterialAction({projectId:project,towerId:issue.towerId,issueKey:issue.id,clientMutationId:mutationId,actionType,text,assignedToUserId:actionType==="assignment"?selectedAssignee||null:undefined,notifyUserIds:selectedNotify});
+      setUpdateText("");setCancelReason("");
+      if(actionType==="cancel")applyCancelled();
+      await refresh();
+      try{
+        const payload=await loadMissingMaterialDetails(project,issue.id);setDetailData(payload);setSelectedAssignee(clean(payload.event.assigned_to_user_id));
+        if(actionType==="cancel"&&clean(payload.event.issue_status)==="cancelled")setDetailIssue(current=>current?{...current,status:"cancelled"}:current);
+      }catch(refreshError){
+        if(actionType!=="cancel")throw refreshError;
+        if(__DEV__)console.info("Material cancellation confirmed; detail refresh unavailable",{issueKey:issue.id});
+      }
+    }catch(error){
+      if(actionType==="cancel"){
+        try{
+          const current=await loadMissingMaterialDetails(project,issue.id);
+          if(clean(current.event.issue_status)==="cancelled"){
+            setDetailData(current);setDetailIssue(value=>value?{...value,status:"cancelled"}:value);markMissingMaterialCancelled(issue.id,text);await refresh().catch(()=>undefined);return;
+          }
+          setDetailData(current);
+          const currentStatus=clean(current.event.issue_status);
+          setDetailIssue(value=>value?{...value,status:currentStatus==="resolved"?"resolved":value.receivedQty>0?"partially_received":"outstanding"}:value);
+          setDetailError(`${error instanceof Error?error.message:"Cancellation failed."} The issue is still active.`);
+          return;
+        }catch{
+          setDetailError("Cancellation could not be confirmed. Check the issue status when the connection returns before trying again.");
+          return;
+        }
+      }
+      setDetailError(error instanceof Error?error.message:"Material update could not be saved.");
+    }finally{actionInFlight.current=false;setActionSaving(false);}
+  }
 
   async function chooseReceiptPhotos(camera:boolean){
     const permission=camera?await ImagePicker.requestCameraPermissionsAsync():await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -228,7 +270,7 @@ export default function MissingMaterials() {
         const occurredAt = clean(event.occurred_at);
 
         if (type !== "missing") {
-          if(type==="excess")return items.filter(item=>Boolean(clean(item.issue_key))).map(item=>{const issueKey=clean(item.issue_key),originalQty=Math.max(numberValue(item.quantity),0),receivedQty=collections.get(issueKey)||0,remainingQty=Math.max(originalQty-receivedQty-(reserved.get(issueKey)||0),0),status:IndexedIssue["status"]=clean(event.issue_status)==="cancelled"?"cancelled":remainingQty<=0?"resolved":receivedQty>0?"partially_received":"outstanding";return {event,id:issueKey,towerId:issueTowerId,type,section:clean(item.segment||item.bundle_section)||section,occurredAt,items:[item],originalQty,receivedQty,remainingQty,status,search:[eventLabel(type),towerName(issueTowerId),section,event.notes,event.current_effect,event.work_outcome,item.item_reference,item.item_description,item.specification].map(clean).join(" ").toLowerCase()};});
+          if(type==="excess")return items.filter(item=>Boolean(clean(item.issue_key))).map(item=>{const issueKey=clean(item.issue_key),originalQty=Math.max(numberValue(item.quantity),0),receivedQty=collections.get(issueKey)||0,remainingQty=remainingMaterialIssueQuantity(event.issue_status,originalQty,receivedQty,reserved.get(issueKey)||0),status:IndexedIssue["status"]=clean(event.issue_status)==="cancelled"?"cancelled":remainingQty<=0?"resolved":receivedQty>0?"partially_received":"outstanding";return {event,id:issueKey,towerId:issueTowerId,type,section:clean(item.segment||item.bundle_section)||section,occurredAt,items:[item],originalQty,receivedQty,remainingQty,status,search:[eventLabel(type),towerName(issueTowerId),section,event.notes,event.current_effect,event.work_outcome,item.item_reference,item.item_description,item.specification].map(clean).join(" ").toLowerCase()};});
           const quantity = items.reduce((sum, item) => sum + Math.max(numberValue(item.quantity), 0), 0);
           const itemSearch = items.flatMap((item) => [item.item_reference, item.item_description, item.material_type, item.bolt_size, item.bundle_no]).map(clean).join(" ");
           return [{ event, id: clean(event.id) || `event-${index}`, towerId: issueTowerId, type, section, occurredAt, items, originalQty: quantity, receivedQty: 0, remainingQty: 0, status: "received" as const, search: [eventLabel(type), towerName(issueTowerId), section, event.notes, itemSearch].map(clean).join(" ").toLowerCase() }];
@@ -239,7 +281,7 @@ export default function MissingMaterials() {
         const issueKey=clean(item.issue_key);
         const originalQty=Math.max(numberValue(item.quantity),0);
         const receivedQty=receipts.get(issueKey)||0;
-        const remainingQty=Math.max(originalQty-receivedQty,0);
+        const remainingQty=remainingMaterialIssueQuantity(event.issue_status,originalQty,receivedQty);
         const status: IndexedIssue["status"] = clean(event.issue_status)==="cancelled"?"cancelled":remainingQty<=0?(clean(event.issue_status)==="resolved"?"resolved":"received"):receivedQty>0?"partially_received":"outstanding";
         const itemSearch = itemsForIssue
           .flatMap((item) => [
@@ -451,7 +493,7 @@ export default function MissingMaterials() {
           <Text style={styles.sectionHeading}>Receipt / collection history</Text>{detailData.receipts.map(receipt=>{const receiptItem=(receipt.tower_material_event_items as Record<string,unknown>[]|undefined)?.[0];const excessCollection=clean(receipt.event_type)==="excess_collected";return <View key={String(receipt.id)} style={styles.actionRow}><Text style={styles.actionBody}>{numberValue(receiptItem?.quantity)} {clean(receiptItem?.unit)||"ea"} {excessCollection?"collected":"received"} · {formatDate(receipt.occurred_at)}</Text><Text style={styles.actionMeta}>{clean(receipt.delivery_reference)||"No docket reference"} · {projectUsers.find(user=>user.id===receipt.created_by_user_id)?.name||"Project user"}</Text></View>;})}{detailData.receipts.length===0?<Text style={styles.fieldHelp}>No receipts or collections recorded.</Text>:null}
           <TextInput value={updateText} onChangeText={setUpdateText} placeholder="Supplier confirmed delivery tomorrow." multiline style={[styles.receiveInput,styles.notesInput]}/><Pressable disabled={actionSaving||!updateText.trim()} style={styles.detailActionButton} onPress={()=>void submitAction("update",updateText.trim())}><Text style={styles.detailActionText}>{actionSaving?"Saving…":"Add Update"}</Text></Pressable>
           <Text style={styles.sectionHeading}>Receipt Evidence</Text>{detailData.files.map(file=><View key={String(file.id)} style={styles.fileRow}>{String(file.mime_type).startsWith("image/")?<Image source={{uri:String(file.preview_url)}} alt={String(file.file_name)} style={styles.detailImage} contentFit="cover"/>:null}<Text numberOfLines={2} style={styles.photoName}>{String(file.file_name)}</Text><Pressable onPress={()=>{const url=String(file.preview_url||"");if(url)void import("react-native").then(module=>module.Linking.openURL(url));}}><Text style={styles.detailActionText}>View</Text></Pressable></View>)}{detailData.files.length===0?<Text style={styles.fieldHelp}>No receipt evidence attached.</Text>:null}
-          {detailIssue?.status!=="cancelled"&&detailIssue?.status!=="resolved"?<><Text style={styles.sectionHeading}>Cancel Requirement</Text><TextInput placeholder="Cancellation reason" value={cancelReason} onChangeText={setCancelReason} style={styles.receiveInput}/><Pressable disabled={actionSaving||!cancelReason.trim()} style={styles.cancelButton} onPress={()=>void submitAction("cancel",cancelReason.trim())}><Text style={styles.cancelButtonText}>Cancel Requirement</Text></Pressable></>:null}
+          {detailIssue?.status!=="cancelled"&&detailIssue?.status!=="resolved"?<><Text style={styles.sectionHeading}>Cancel Requirement</Text><TextInput placeholder="Cancellation reason" value={cancelReason} onChangeText={setCancelReason} style={styles.receiveInput}/><Pressable disabled={actionSaving||!online||!cancelReason.trim()} style={[styles.cancelButton,(actionSaving||!online||!cancelReason.trim())&&styles.disabled]} onPress={()=>Alert.alert("Cancel this material issue?","It will no longer appear as outstanding. The issue and its receipt and action history will be retained.",[{text:"Keep issue",style:"cancel"},{text:"Cancel issue",style:"destructive",onPress:()=>void submitAction("cancel",cancelReason.trim())}])}><Text style={styles.cancelButtonText}>{actionSaving?"Cancelling…":!online?"Connect to Cancel":"Cancel Requirement"}</Text></Pressable></>:null}
         </>:null}
         <Pressable style={styles.cancelReceive} onPress={()=>{setDetailIssue(null);setDetailData(null);}}><Text style={styles.cancelText}>Close</Text></Pressable>
       </ScrollView></SafeAreaView>
