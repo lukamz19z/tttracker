@@ -223,6 +223,7 @@ export type RecordMissingReceiptInput = {
   clientMutationId?: string;
   deliveryReference?: string;
   occurredAt?: string;
+  notifyUserIds?: string[];
 };
 
 export type MaterialReceiptEvidenceInput = {

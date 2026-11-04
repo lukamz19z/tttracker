@@ -2,6 +2,7 @@ import type { DetailValues } from "../../../lib/quality/operational-details";
 import { withoutDeletedPhotos } from "./quality-photo-tombstones";
 
 import { getCache, setCache } from "@/lib/offline/db";
+import { createClientId } from "@/lib/client-id";
 import type { RevisionWorkingLocation } from "./revision-location";
 import { revisionDeletion } from "./revision-deletions";
 import type {
@@ -230,9 +231,7 @@ export function createPendingFinding(input: {
   beforePhotos: LocalQualityPhoto[];
   afterPhotos: LocalQualityPhoto[];
 }) {
-  const clientMutationId = `revision-item-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  const clientMutationId = createClientId("revision-item");
 
   return {
     clientMutationId,

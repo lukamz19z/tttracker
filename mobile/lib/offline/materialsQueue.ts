@@ -1,4 +1,5 @@
 import { getCache, setCache } from "@/lib/offline/db";
+import { createClientId } from "@/lib/client-id";
 import type {
   SaveBundleCheckInput,
   SaveMemberCheckInput,
@@ -47,7 +48,7 @@ export const materialQueueKey = (projectId: string) =>
   `materials:pending:${projectId}`;
 
 function mutationId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return createClientId("material");
 }
 
 export async function loadMaterialQueue(projectId: string) {

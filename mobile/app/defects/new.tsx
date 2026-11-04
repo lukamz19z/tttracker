@@ -23,6 +23,7 @@ import {
 
 import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
 import { QualitySelector } from "@/components/quality/QualitySelector";
+import { QualityMultiSelect } from "@/components/quality/QualityMultiSelect";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
 import { useQuality } from "@/contexts/QualityContext";
@@ -487,10 +488,10 @@ function NewDefectContent() {
         </Text>
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
-      <Text style={styles.label}>Also notify (optional)</Text>
-      {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
+      <Text style={styles.label}>Notify (optional)</Text>
+      {assignees.length === 0 ? <Text style={styles.helper}>No notification users configured</Text> : null}
       {form.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setForm(current=>({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}))} style={styles.notifyChip}><Text style={{fontSize:12,fontWeight:"700",color:"#334155"}}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
-      <Pressable style={[styles.selector,{minHeight:40}]} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>Add person to notify</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+      <Pressable style={[styles.selector,{minHeight:40}]} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>{form.notifyUserIds.length?`${form.notifyUserIds.length} selected`:"Select people to notify"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 
       {form.towerId ? (
         <>
@@ -559,7 +560,7 @@ function NewDefectContent() {
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
 
-      <Text style={styles.label}>Assigned to</Text>
+      <Text style={styles.label}>Responsible person</Text>
       <Pressable
         style={styles.selector}
         onPress={() =>
@@ -571,7 +572,7 @@ function NewDefectContent() {
         </Text>
         <ChevronDown size={18} color="#64748b" />
       </Pressable>
-      {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
+      {assignees.length === 0 ? <Text style={styles.helper}>No notification users configured</Text> : null}
 
       <Text style={styles.label}>Responsibility</Text>
       <TextInput
@@ -682,7 +683,7 @@ function NewDefectContent() {
 
       <QualitySelector
         visible={assigneePickerOpen}
-        title="Assigned to"
+        title="Responsible person"
         options={assigneeOptions}
         onClose={() =>
           setAssigneePickerOpen(false)
@@ -698,7 +699,7 @@ function NewDefectContent() {
       />
       <QualitySelector visible={workImpactPickerOpen} title="Work impact" options={[{id:"",label:"Not specified"},...workflowOptions.workImpactOptions.map(value=>({id:value,label:value}))]} onClose={()=>setWorkImpactPickerOpen(false)} onSelect={option=>{setForm(current=>({...current,workImpact:option.id}));setWorkImpactPickerOpen(false);}}/>
       <QualitySelector visible={activityPickerOpen} title="Affected activity" options={[{id:"",label:"Not specified"},...workflowOptions.affectedActivityOptions.map(value=>({id:value,label:value})),{id:"__other__",label:"Other / enter a value"}]} onClose={()=>setActivityPickerOpen(false)} onSelect={option=>{setCustomActivity(option.id==="__other__");setForm(current=>({...current,affectedActivity:option.id==="__other__"?"":option.id}));setActivityPickerOpen(false);}}/>
-      <QualitySelector visible={notifyPickerOpen} title="Also notify" options={assignees.filter(person=>person.id!==form.assignedToUserId&&!form.notifyUserIds.includes(person.id)).map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} onClose={()=>setNotifyPickerOpen(false)} onSelect={option=>{setForm(current=>({...current,notifyUserIds:[...current.notifyUserIds,option.id]}));setNotifyPickerOpen(false);}}/>
+      <QualityMultiSelect visible={notifyPickerOpen} title="Notify" options={assignees.map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} selectedIds={form.notifyUserIds} onClose={()=>setNotifyPickerOpen(false)} onToggle={id=>setForm(current=>({...current,notifyUserIds:current.notifyUserIds.includes(id)?current.notifyUserIds.filter(value=>value!==id):[...current.notifyUserIds,id]}))} />
     </QualityShell>
   );
 }

@@ -1,4 +1,5 @@
 import { getCache, setCache } from "@/lib/offline/db";
+import { createClientId } from "@/lib/client-id";
 import type {
   InspectionStage,
   LocalQualityPhoto,
@@ -47,7 +48,7 @@ export function localToday() {
 
 export function blankRevisionFinding(index = 1): RevisionDraftFinding {
   return {
-    localId: `fli-local-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    localId: createClientId(`fli-local-${index}`),
     issueTypeId: null,
     otherIssueText: null,
     towerSegment: null,

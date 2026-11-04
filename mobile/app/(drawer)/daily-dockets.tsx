@@ -1,6 +1,7 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
+import * as Updates from "expo-updates";
 import {
   useCallback,
   useEffect,
@@ -39,7 +40,7 @@ import {
 } from "@/lib/dockets/constants";
 import { formatDocketDate } from "@/lib/dockets/dates";
 import { reconcileDailyDocketSubmissionStatus } from "@/lib/dockets/submission-status";
-import { createClientId } from "@/lib/client-id";
+import { createClientUuid } from "@/lib/client-id";
 import {
   calculateLabourTotals,
   toNumber,
@@ -329,6 +330,7 @@ export default function DailyDocketScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [editorLoading, setEditorLoading] = useState(false);
+  const [editorSupplementaryLoading, setEditorSupplementaryLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
@@ -341,6 +343,8 @@ export default function DailyDocketScreen() {
   const [step, setStep] = useState<DailyDocketStep>("setup");
 
   const directRouteHandled = useRef(false);
+  const editorOpenInFlight = useRef(false);
+  const editorOpenGeneration = useRef(0);
 
   const loadList = useCallback(
     async (silent = false) => {
@@ -409,6 +413,7 @@ export default function DailyDocketScreen() {
 
   useEffect(() => {
     directRouteHandled.current = false;
+    editorOpenGeneration.current += 1;
     setSearch("");
     setEditorPayload(null);
     setDraft(null);
@@ -427,16 +432,23 @@ export default function DailyDocketScreen() {
       docketId?: string;
       mode: "create" | "edit" | "view";
     }) => {
-      if (!projectId || !args.towerId || editorLoading) return;
+      if (!projectId || !args.towerId || editorOpenInFlight.current || editorLoading) return;
 
+      editorOpenInFlight.current = true;
+      const generation = ++editorOpenGeneration.current;
       setEditorLoading(true);
 
       try {
+        const startedAt = Date.now();
+        const isNewDraft = args.mode === "create" && !args.docketId;
         const payload = await getDailyDocketEditor({
           projectId,
           towerId: args.towerId,
           docketId: args.docketId || null,
+          ...(isNewDraft ? { bootstrap: "core" as const } : {}),
         });
+
+        if (generation !== editorOpenGeneration.current) return;
 
         const nextDraft: DailyDocketDraft = {
           ...payload.draft,
@@ -452,13 +464,70 @@ export default function DailyDocketScreen() {
         setEditorPayload(payload);
         setDraft(nextDraft);
         setStep("setup");
+
+        if (isNewDraft) {
+          if (__DEV__) {
+            console.info("[docket-open] bundle", {
+              runtimeVersion: Updates.runtimeVersion,
+              updateId: Updates.updateId,
+              createdAt: Updates.createdAt?.toISOString() ?? null,
+              elapsedMs: Date.now() - startedAt,
+            });
+          }
+
+          const initialDate = nextDraft.docketDate;
+          const initialProgressRows = JSON.stringify(nextDraft.sectionV2Rows);
+          setEditorSupplementaryLoading(true);
+          void getDailyDocketEditor({
+            projectId,
+            towerId: args.towerId,
+          }).then((enrichedPayload) => {
+            if (generation !== editorOpenGeneration.current) return;
+            if (__DEV__) {
+              console.info("[docket-open] supplementary", {
+                elapsedMs: Date.now() - startedAt,
+                crews: enrichedPayload.crews.length,
+                personnel: enrichedPayload.employees.length,
+                towers: enrichedPayload.towers.length,
+              });
+            }
+            setEditorPayload((current) => current ? { ...current, ...enrichedPayload } : current);
+            setDraft((current) => {
+              if (!current || current.docketId || current.towerId !== args.towerId) return current;
+              const patch: Partial<DailyDocketDraft> = {
+                outstandingMaterials: enrichedPayload.draft.outstandingMaterials,
+                activeBundleTransfers: enrichedPayload.draft.activeBundleTransfers,
+                bundleReplacementStatus: enrichedPayload.draft.bundleReplacementStatus,
+              };
+              if (current.docketDate === initialDate && enrichedPayload.draft.docketDate !== initialDate) {
+                patch.docketDate = enrichedPayload.draft.docketDate;
+              }
+              if (JSON.stringify(current.sectionV2Rows) === initialProgressRows) {
+                patch.sectionV2Rows = enrichedPayload.draft.sectionV2Rows;
+              }
+              return { ...current, ...patch };
+            });
+          }).catch((error) => {
+            if (__DEV__) {
+              console.info("[docket-open] supplementary-unavailable", {
+                elapsedMs: Date.now() - startedAt,
+                category: error instanceof Error ? error.name : "unknown",
+              });
+            }
+          }).finally(() => {
+            if (generation === editorOpenGeneration.current) setEditorSupplementaryLoading(false);
+          });
+        }
       } catch (error) {
-        Alert.alert(
-          "Daily Docket could not be opened",
-          errorMessage(error),
-        );
+        if (generation === editorOpenGeneration.current) {
+          Alert.alert(
+            "Daily Docket could not be opened",
+            errorMessage(error),
+          );
+        }
       } finally {
-        setEditorLoading(false);
+        if (generation === editorOpenGeneration.current) setEditorLoading(false);
+        editorOpenInFlight.current = false;
       }
     },
     [editorLoading, projectId],
@@ -678,7 +747,7 @@ export default function DailyDocketScreen() {
               try {
                 const submissionDraft = {
                   ...draft,
-                  docketId: draft.docketId || createClientId(),
+                  docketId: draft.docketId || createClientUuid(),
                   bcRepName: editorPayload.identity.name,
                   bcRepEmail: editorPayload.identity.email,
                   bcRepUserId: editorPayload.identity.userId,
@@ -788,6 +857,8 @@ export default function DailyDocketScreen() {
   const closeEditor = () => {
     if (saving || submitting) return;
 
+    editorOpenGeneration.current += 1;
+    setEditorSupplementaryLoading(false);
     setEditorPayload(null);
     setDraft(null);
     setStep("setup");
@@ -1159,6 +1230,13 @@ export default function DailyDocketScreen() {
               </View>
 
               {draft && editorPayload ? (
+                <>
+                {editorSupplementaryLoading ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 7 }}>
+                    <ActivityIndicator size="small" color="#2563eb" />
+                    <Text style={{ color: "#64748b", fontSize: 12 }}>Loading crew and project details…</Text>
+                  </View>
+                ) : null}
                 <DailyDocketEditorFoundation
                   payload={editorPayload}
                   draft={draft}
@@ -1173,6 +1251,7 @@ export default function DailyDocketScreen() {
                   submitting={submitting}
                   disabled={editorLocked}
                 />
+                </>
               ) : null}
             </SafeAreaView>
           </Modal>

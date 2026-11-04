@@ -5,6 +5,7 @@ import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/
 import { DependencyBlockedError } from "./sync-errors";
 import { withQualityOperation } from "./quality-operation-lock";
 import { revisionDeletion } from "./revision-deletions";
+import { createClientId } from "@/lib/client-id";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
 import { queueRows, getCache, setCache,removeCache } from "./db";
 import { apiJson } from "@/lib/api/client";
@@ -19,7 +20,7 @@ import type {
 } from "@/types/quality";
 
 function mutationId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+  return createClientId(prefix);
 }
 
 export type OfflineDefectCreate = {

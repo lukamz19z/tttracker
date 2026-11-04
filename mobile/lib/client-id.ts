@@ -1,7 +1,11 @@
-import * as Crypto from "expo-crypto";
-import { createPortableId } from "../../lib/portable-id";
+import { createPortableId, createPortableUuid } from "../../lib/portable-id";
 
-/** UUID source backed by Expo's native crypto module on iOS and Android. */
-export function createClientId() {
-  return createPortableId(Crypto.randomUUID);
+/** Pure JavaScript ID for operational local/mutation identities. */
+export function createClientId(prefix?: string) {
+  return createPortableId(Math.random, prefix);
+}
+
+/** UUID-shaped operational key where a canonical database UUID is required. */
+export function createClientUuid() {
+  return createPortableUuid();
 }

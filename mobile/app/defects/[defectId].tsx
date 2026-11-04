@@ -42,6 +42,7 @@ import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
 import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { formatQualityDateTime, qualityCaptureLabel } from "../../../lib/quality/date-time";
 import { QualitySelector } from "@/components/quality/QualitySelector";
+import { QualityMultiSelect } from "@/components/quality/QualityMultiSelect";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { RevisionMemberFields } from "@/components/quality/RevisionMemberFields";
@@ -1040,7 +1041,7 @@ function DefectDetailContent() {
                 />
               </Pressable>
 
-              <FieldLabel text="Assigned to" />
+              <FieldLabel text="Responsible person" />
               <Pressable
                 style={styles.selector}
                 onPress={() =>
@@ -1059,11 +1060,11 @@ function DefectDetailContent() {
                   color="#64748b"
                 />
               </Pressable>
-              {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
-              <FieldLabel text="Also notify (optional)" />
-              {assignees.length === 0 ? <Text style={styles.helper}>No Defect users configured</Text> : null}
+              {assignees.length === 0 ? <Text style={styles.helper}>No notification users configured</Text> : null}
+              <FieldLabel text="Notify (optional)" />
+              {assignees.length === 0 ? <Text style={styles.helper}>No notification users configured</Text> : null}
               {edit.notifyUserIds.map(id=>{const person=assignees.find(user=>user.id===id);return <Pressable key={id} onPress={()=>setEdit(current=>current?({...current,notifyUserIds:current.notifyUserIds.filter(value=>value!==id)}):null)} style={styles.recipientChip}><Text style={styles.recipientChipText}>{qualityDisplayName(person?.name)||"Project user"} ×</Text></Pressable>;})}
-              <Pressable style={styles.selector} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>{edit.notifyUserIds.length?`${edit.notifyUserIds.length} additional recipient${edit.notifyUserIds.length===1?"":"s"}`:"Choose people"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
+              <Pressable style={styles.selector} onPress={()=>setNotifyPickerOpen(true)}><Text style={styles.selectorText}>{edit.notifyUserIds.length?`${edit.notifyUserIds.length} selected`:"Choose people to notify"}</Text><ChevronDown size={18} color="#64748b"/></Pressable>
 
               <FieldLabel text="Responsibility" />
               <TextInput
@@ -1180,7 +1181,7 @@ function DefectDetailContent() {
 
             <QualitySelector visible={workImpactPickerOpen} title="Work impact" options={[{id:"",label:"Not specified"},...workflowOptions.workImpactOptions.map(value=>({id:value,label:value}))]} onClose={()=>setWorkImpactPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,workImpact:option.id}):null);setWorkImpactPickerOpen(false);}}/>
             <QualitySelector visible={activityPickerOpen} title="Affected activity" options={[{id:"",label:"Not specified"},...workflowOptions.affectedActivityOptions.map(value=>({id:value,label:value}))]} onClose={()=>setActivityPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,affectedActivity:option.id}):null);setActivityPickerOpen(false);}}/>
-            <QualitySelector visible={notifyPickerOpen} title="Also notify" options={assignees.filter(person=>person.id!==edit.assignedToUserId&&!edit.notifyUserIds.includes(person.id)).map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} onClose={()=>setNotifyPickerOpen(false)} onSelect={option=>{setEdit(current=>current?({...current,notifyUserIds:[...current.notifyUserIds,option.id]}):null);setNotifyPickerOpen(false);}}/>
+            <QualityMultiSelect visible={notifyPickerOpen} title="Notify" options={assignees.map(person=>({id:person.id,label:qualityDisplayName(person.name),subtitle:person.role}))} selectedIds={edit.notifyUserIds} onClose={()=>setNotifyPickerOpen(false)} onToggle={id=>setEdit(current=>current?({...current,notifyUserIds:current.notifyUserIds.includes(id)?current.notifyUserIds.filter(value=>value!==id):[...current.notifyUserIds,id]}):null)} />
 
             <QualitySelector
               visible={severityPickerOpen}
@@ -1205,7 +1206,7 @@ function DefectDetailContent() {
 
             <QualitySelector
               visible={assigneePickerOpen}
-              title="Assigned to"
+              title="Responsible person"
               options={assigneeOptions}
               onClose={() =>
                 setAssigneePickerOpen(false)

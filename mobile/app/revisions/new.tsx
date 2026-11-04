@@ -18,6 +18,7 @@ import { QualityShell } from "@/components/quality/QualityShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
+import { createClientId } from "@/lib/client-id";
 import { createQualityRevision } from "@/lib/api/quality";
 import {
   blankRevisionDraft,
@@ -195,9 +196,7 @@ export default function NewRevisionScreen() {
         if(conflicts.length){const existing=conflicts[0];Alert.alert("Existing Rectification",`Tower ${selectedTower?.name || ""} already has ${existing.revision_number} with ${existing.openCount} open FLIs.`,[{text:"Cancel",style:"cancel"},{text:`Open ${existing.revision_number}`,onPress:()=>router.push(`/revisions/${encodeURIComponent(existing.id)}`)},{text:"Create another anyway",onPress:()=>void createRevision(true)}]);return;}
       }
 
-      const clientMutationId = `revision-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 10)}`;
+      const clientMutationId = createClientId("revision");
 
       const payload = {
         additionalRectConfirmed,

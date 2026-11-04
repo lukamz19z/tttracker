@@ -89,6 +89,7 @@ export async function getDailyDocketEditor(
     docketId?: string | null;
     docketDate?: string | null;
     copyPrevious?: boolean;
+    bootstrap?: "core";
   },
 ) {
   const response = await apiFetch(
@@ -102,6 +103,7 @@ export async function getDailyDocketEditor(
           params.copyPrevious
             ? "1"
             : "",
+        bootstrap: params.bootstrap,
       },
     )}`,
   );
