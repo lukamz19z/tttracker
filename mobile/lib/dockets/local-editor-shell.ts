@@ -101,6 +101,13 @@ export function mergeNewDailyDocketHydration(args: {
       Object.assign(draft, { [field]: hydrated.draft[field] });
     }
   }
+  if (!editedFields.has("selectedCrewId") && !draft.selectedCrewId && draft.crewName) {
+    const name = draft.crewName.trim().toLowerCase();
+    const crew = hydrated.crews.find((row) => name === String(row.crew_name ?? "").trim().toLowerCase() ||
+      name === String(row.crew_number ?? "").trim().toLowerCase() ||
+      name === [row.crew_number, row.crew_name].map((value) => String(value ?? "").trim()).filter(Boolean).join(" - ").toLowerCase());
+    if (crew) draft.selectedCrewId = crew.id;
+  }
 
   // Keep the server's baseline date distinct if the operator already chose
   // another date, so the editor can request progress for that chosen date.

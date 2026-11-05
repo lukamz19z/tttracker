@@ -15,6 +15,7 @@ import type {
   SaveDailyDocketResult,
   SubmitDailyDocketResult,
 } from "@/types/daily-dockets";
+import type { CopyPreviousResponse } from "@/lib/dockets/copy-previous";
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -112,6 +113,16 @@ export async function getDailyDocketEditor(
     response,
     "Daily Docket editor data could not be loaded.",
   );
+}
+
+export async function getPreviousDailyDocketSnapshot(params: {
+  projectId: string;
+  towerId: string;
+  docketDate: string;
+  previousDocketId?: string;
+}) {
+  const response = await apiFetch(`/api/mobile/daily-dockets/copy-previous${queryString(params)}`);
+  return readJson<CopyPreviousResponse>(response, "Previous Daily Docket could not be loaded.");
 }
 
 export async function saveDailyDocket(

@@ -107,8 +107,10 @@ test("copy previous remains explicit and opening a blank docket does not request
   const screen = await read("mobile/app/(drawer)/daily-dockets.tsx");
   const createBranch = screen.slice(screen.indexOf('if (args.mode === "create"'), screen.indexOf("setEditorLoading(true);"));
   assert.doesNotMatch(createBranch, /copyPrevious/);
-  assert.match(screen, /copyPrevious:\s*true/);
-  assert.match(screen, /docketId:\s*draft\.docketId/);
+  const copyBranch = screen.slice(screen.indexOf("const copyPrevious = async"), screen.indexOf("const saveDraft = async"));
+  assert.match(copyBranch, /getPreviousDailyDocketSnapshot\(/);
+  assert.doesNotMatch(copyBranch, /getDailyDocketEditor\(/);
+  assert.match(copyBranch, /current\.docketId !== draftId/);
 });
 
 test("docket list paints cached project/tower rows before scoped server refresh and keeps stale list on failure", async () => {

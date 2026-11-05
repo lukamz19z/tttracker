@@ -30,6 +30,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import {
   getDailyDocketEditor,
+  getPreviousDailyDocketSnapshot,
   getDailyDocketSubmissionStatus,
   isAmbiguousDailyDocketMutationFailure,
   saveDailyDocket,
@@ -45,6 +46,8 @@ import { reconcileDailyDocketSubmissionStatus } from "@/lib/dockets/submission-s
 import { createClientUuid } from "@/lib/client-id";
 import { createBlankDailyDocketDraft } from "@/lib/dockets/constants";
 import { createLocalDailyDocketShell, mergeNewDailyDocketHydration } from "@/lib/dockets/local-editor-shell";
+import { applyPreviousDocketSnapshot, COPYABLE_DOCKET_FIELDS } from "@/lib/dockets/copy-previous";
+import type { CopyPreviousResponse } from "@/lib/dockets/copy-previous";
 import { MOBILE_DOCKET_DEFAULTS, recommendedDocketDate } from "../../../lib/dockets/mobile-defaults";
 import {
   calculateLabourTotals,
@@ -361,6 +364,8 @@ export default function DailyDocketScreen() {
   const directRouteHandled = useRef(false);
   const editorOpenInFlight = useRef(false);
   const editorOpenGeneration = useRef(0);
+  const copyPreviousInFlight = useRef(false);
+  const previousSnapshotCache = useRef(new Map<string, CopyPreviousResponse>());
   const listGeneration = useRef(0);
   const listRequest = useRef<{ projectId: string; promise: Promise<void> } | null>(null);
 
@@ -587,6 +592,7 @@ export default function DailyDocketScreen() {
 
           // State construction and navigation happen before any network call.
           editorEditedFields.current.clear();
+          previousSnapshotCache.current.clear();
           draftRef.current = localPayload.draft;
           editorPayloadRef.current = localPayload;
           setEditorHydrationError("");
@@ -801,48 +807,56 @@ export default function DailyDocketScreen() {
   }, [towerSearch, towers]);
 
   const copyPrevious = async () => {
-    if (!draft || !projectId || copyingPrevious) return;
-
+    const openingDraft = draftRef.current;
+    if (!openingDraft || !projectId || copyPreviousInFlight.current) return;
+    copyPreviousInFlight.current = true;
     setCopyingPrevious(true);
-
+    const generation = editorOpenGeneration.current;
+    const draftId = openingDraft.docketId;
+    const towerId = openingDraft.towerId;
+    const docketDate = openingDraft.docketDate;
+    const cacheKey = `${projectId}:${towerId}:${docketDate}`;
     try {
-      const payload = await getDailyDocketEditor({
-        projectId,
-        towerId: draft.towerId,
-        docketDate: draft.docketDate || localDate(),
-        copyPrevious: true,
+      const knownPrevious = dockets
+        .filter((row) => row.tower_id === towerId && clean(row.docket_date) < docketDate &&
+          ["", "legacy", "submitted_bc", "client_pending", "final", "legacy_final"].includes(clean(row.approval_status)))
+        .sort((a, b) => clean(b.docket_date).localeCompare(clean(a.docket_date)))[0];
+      const response = previousSnapshotCache.current.get(cacheKey) ?? await getPreviousDailyDocketSnapshot({
+        projectId, towerId, docketDate, previousDocketId: knownPrevious?.id,
       });
-
-      const nextDraft: DailyDocketDraft = {
-        ...payload.draft,
-        mode: "create",
-        docketId: draft.docketId,
-        bcRepName: payload.identity.name,
-        bcRepEmail: payload.identity.email,
-        bcRepUserId: payload.identity.userId,
-      };
-
-      editorOpenGeneration.current += 1;
-      setEditorSupplementaryLoading(false);
-      setEditorHydrationError("");
-      const nextPayload = { ...payload, draft: nextDraft };
-      editorPayloadRef.current = nextPayload;
+      if (generation !== editorOpenGeneration.current) return;
+      const current = draftRef.current;
+      if (!current || current.mode !== "create" || current.docketId !== draftId || current.projectId !== projectId ||
+          current.towerId !== towerId || current.docketDate !== docketDate) return;
+      if (!response.found) {
+        Alert.alert("No previous Daily Docket", "No previous Daily Docket was found for this tower.");
+        return;
+      }
+      const nextDraft = applyPreviousDocketSnapshot(current, response);
+      if (!nextDraft) return;
+      const crew = editorPayloadRef.current?.crews.find((row) => {
+        const value = nextDraft.crewName.toLowerCase();
+        return value === clean(row.crew_name).toLowerCase() || value === clean(row.crew_number).toLowerCase() ||
+          value === [clean(row.crew_number), clean(row.crew_name)].filter(Boolean).join(" - ").toLowerCase();
+      });
+      nextDraft.selectedCrewId = crew?.id || "";
+      previousSnapshotCache.current.set(cacheKey, response);
+      COPYABLE_DOCKET_FIELDS.forEach((field) => editorEditedFields.current.add(field));
+      if (crew) editorEditedFields.current.add("selectedCrewId");
       draftRef.current = nextDraft;
-      editorHydrationCache.current.set(projectId, nextPayload);
-      setEditorPayload(nextPayload);
       setDraft(nextDraft);
       setStep("setup");
-
       Alert.alert(
         "Previous Daily Docket loaded",
-        "Crew, production defaults, plant and tower progress were carried forward. Delays, site events, Defects and signatures were reset.",
+        "Crew, production defaults, plant and tower progress were carried forward. Your current date and draft ID were kept.",
       );
     } catch (error) {
-      Alert.alert(
+      if (generation === editorOpenGeneration.current) Alert.alert(
         "Could not copy previous Daily Docket",
-        errorMessage(error),
+        `Previous docket could not be loaded. Your current draft has not been changed. ${errorMessage(error)}`,
       );
     } finally {
+      copyPreviousInFlight.current = false;
       setCopyingPrevious(false);
     }
   };
