@@ -10,6 +10,8 @@ const CIRCUIT_COOLDOWN_MS = 20_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPT_TIMEOUT_MS = 6_000;
+let traceSequence = 0;
+function nextTraceId() { return `m${Date.now().toString(36)}${(++traceSequence).toString(36)}`; }
 
 function errorFields(value: unknown): { status?: number; code?: string; message: string } {
   if (value instanceof Response) return { status: value.status, message: "" };
@@ -157,6 +159,11 @@ export class BackendResilience {
       ? Number(resilienceTimeoutMs)
       : safeRead ? this.timeoutMs : DEFAULT_MUTATION_TIMEOUT_MS;
     const path = safeRequestPath(url);
+    const requestHeaders = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init.headers).forEach((value, key) => requestHeaders.set(key, value));
+    const trace = requestHeaders.get("x-tttracker-trace") || nextTraceId();
+    const requestStartedAt = this.now();
+    this.log?.("backend_request_started", { trace, method, path, timeoutMs: requestTimeoutMs, maxAttempts: safeRead && !authRequest ? 4 : 1 });
     const circuitKey = `${safeOrigin(url)}${path}`;
     const circuit = circuitProtected
       ? this.circuitFor(circuitKey)
@@ -166,10 +173,12 @@ export class BackendResilience {
     if (circuitProtected && circuit.openedUntil) {
       if (this.now() < circuit.openedUntil) {
         this.log?.("backend_request_blocked", { method, path, blockedBeforeRequest: true, circuitFailures: circuit.consecutiveFailures });
+        this.log?.("backend_request_finished", { trace, method, path, durationMs: this.now() - requestStartedAt, blockedBeforeRequest: true });
         return circuitOpenResponse("cooldown");
       }
       if (circuit.probeInFlight) {
         this.log?.("backend_request_blocked", { method, path, blockedBeforeRequest: true, reason: "recovery_probe_in_flight" });
+        this.log?.("backend_request_finished", { trace, method, path, durationMs: this.now() - requestStartedAt, blockedBeforeRequest: true });
         return circuitOpenResponse("probe_in_flight");
       }
       circuit.probeInFlight = true;
@@ -191,10 +200,12 @@ export class BackendResilience {
         if (externalSignal?.aborted) throw new DOMException("Request aborted", "AbortError");
         externalSignal?.addEventListener("abort", onAbort, { once: true });
         const attemptTimeoutMs = safeRead ? Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs) : remainingMs;
+        this.log?.("backend_attempt_started", { trace, method, path, attempt: attempt + 1, attemptTimeoutMs, remainingMs });
         const timer = setTimeout(() => { timedOut = true; controller.abort(); }, attemptTimeoutMs);
         try {
           const attemptStartedAt = this.now();
           const response = await this.fetchImpl(input, { ...nativeInit, signal: controller.signal });
+          this.log?.("backend_attempt_response", { trace, method, path, attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
           if (response.status >= 400 || this.now() - attemptStartedAt >= 750) {
             this.log?.("backend_request_completed", { method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
           }
@@ -207,7 +218,7 @@ export class BackendResilience {
             if (attempt < retries) {
               const delayMs = retryDelayMs(attempt, this.random);
               if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs);
-              this.log?.("backend_request_retry", { method, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind, status: failure.status, code: failure.code });
+              this.log?.("backend_request_retry", { trace, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind, status: failure.status, code: failure.code });
               await this.sleep(delayMs, externalSignal ?? undefined);
               continue;
             }
@@ -225,12 +236,12 @@ export class BackendResilience {
           return response;
         } catch (error) {
           const failure = timedOut ? { transient: true, kind: "timeout" as const } : classifyBackendFailure(error);
-          if (timedOut) this.log?.("backend_request_timeout", { method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, timeoutMs: attemptTimeoutMs, requestSent: true });
+          if (timedOut) this.log?.("backend_request_timeout", { trace, method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, timeoutMs: attemptTimeoutMs, requestSent: true });
           if (!failure.transient || externalSignal?.aborted) throw error;
           if (attempt < retries) {
             const delayMs = retryDelayMs(attempt, this.random);
             if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs, error);
-            this.log?.("backend_request_retry", { method, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind });
+            this.log?.("backend_request_retry", { trace, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind });
             await this.sleep(delayMs, externalSignal ?? undefined);
             continue;
           }
@@ -249,6 +260,7 @@ export class BackendResilience {
       throw new Error("Backend resilience completed without a response or failure.");
     } finally {
       if (probing) circuit.probeInFlight = false;
+      this.log?.("backend_request_finished", { trace, method, path, durationMs: this.now() - requestStartedAt });
     }
   }
 

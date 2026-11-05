@@ -321,57 +321,22 @@ export default function TowerProgressScreen() {
               setTowers(snapshot.towers);
               setDockets(snapshot.dockets);
               setResolvedProgress(snapshot.progress);
+              setLoading(false);
             }
           }
         } catch { /* A corrupt cache is ignored; server refresh remains authoritative. */ }
       }
 
-      const [towerResponse, docketResponse] =
-        await Promise.all([
-          supabase
-            .from("towers")
-            .select("*")
-            .eq("project_id", selectedProjectId),
-
-          supabase
-            .from("tower_daily_dockets")
-            .select(
-              "id, project_id, tower_id, docket_date, crew, leading_hand, assembly_percent, erection_percent",
-            )
-            .eq("project_id", selectedProjectId)
-            .is("deleted_at", null),
-        ]);
-
-      if (towerResponse.error) {
-        Alert.alert(
-          "Could not load towers",
-          towerResponse.error.message,
-        );
-
-        if (!silent) setLoading(false);
-        return;
-      }
-
       try {
         const result = await getTowerProgress(selectedProjectId);
         setResolvedProgress(result.progress);
-        void AsyncStorage.setItem(progressCacheKey(selectedProjectId), JSON.stringify({ towers: (towerResponse.data ?? []) as Tower[], dockets: (docketResponse.data ?? []) as DocketRow[], progress: result.progress })).catch(() => undefined);
+        setTowers((result.towers as Tower[]).sort(naturalTowerSort));
+        setDockets(result.dockets as DocketRow[]);
+        void AsyncStorage.setItem(progressCacheKey(selectedProjectId), JSON.stringify({ towers: result.towers, dockets: result.dockets, progress: result.progress })).catch(() => undefined);
       } catch (error) {
         Alert.alert("Could not load tower progress", error instanceof Error ? error.message : "Please try again.");
-        setTowers((current) => current.length ? current : ((towerResponse.data ?? []) as Tower[]));
-        setDockets((current) => current.length ? current : ((docketResponse.data ?? []) as DocketRow[]));
         setLoading(false); return;
       }
-
-      setTowers(
-        ((towerResponse.data ?? []) as Tower[]).sort(
-          naturalTowerSort,
-        ),
-      );
-
-      setDockets(
-        (docketResponse.data ?? []) as DocketRow[],
-      );
 
       if (!silent) setLoading(false);
     },

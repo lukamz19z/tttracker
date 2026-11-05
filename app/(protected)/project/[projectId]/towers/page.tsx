@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { getUserRole } from "@/lib/roles";
+import { useAccess } from "@/components/access/access-provider";
 import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
 type Tower = {
@@ -89,6 +89,7 @@ export default function TowersPage() {
   const projectId = params.projectId as string;
 
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const { websiteRole } = useAccess();
 
   const [towers, setTowers] = useState<Tower[]>([]);
   const [resolvedProgress, setResolvedProgress] = useState(new Map<string, ResolvedTowerProgress>());
@@ -96,27 +97,10 @@ export default function TowersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
-  const [role, setRole] = useState<UserRole>(null);
+  const role: UserRole = websiteRole;
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const canManageTowers = role === "admin" || role === "editor";
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadRole() {
-      const userRole = await getUserRole();
-      if (!cancelled) {
-        setRole(userRole);
-      }
-    }
-
-    loadRole();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!projectId) return;

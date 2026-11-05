@@ -155,11 +155,10 @@ export function Sidebar({
     if (!projectId) return;
 
     async function loadProject() {
-      const { data: projectData } = await supabase
-        .from("projects")
-        .select("name, project_number")
-        .eq("id", projectId)
-        .single();
+      const [{ data: projectData }, { data: towerData }] = await Promise.all([
+        supabase.from("projects").select("name, project_number").eq("id", projectId).single(),
+        supabase.from("towers").select("id,name,line,extra_data").eq("project_id", projectId),
+      ]);
 
       if (projectData) {
         setProjectInfo({
@@ -167,11 +166,6 @@ export function Sidebar({
           project_number: projectData.project_number,
         });
       }
-
-      const { data: towerData } = await supabase
-        .from("towers")
-        .select("id,name,line,extra_data")
-        .eq("project_id", projectId);
 
       if (towerData) {
         setTowers([...(towerData as Tower[])].sort(naturalTowerSort));

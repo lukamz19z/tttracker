@@ -26,13 +26,18 @@ function daysUntil(value: unknown) {
 }
 
 export async function GET(request: Request) {
+  const startedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
+  const mark = (phase: string, since: number) => { if (process.env.NODE_ENV === "development" && trace) console.info("[web-trace]", { trace, route: "assets_dashboard", phase, durationMs: Date.now() - since }); };
   try {
     const { service, identity } = await requireAssetUser(request);
+    mark("auth_identity", startedAt);
 
     if (!canViewAssets(identity.role)) {
       throw new Error("ASSET_VIEW_FORBIDDEN");
     }
 
+    const queriesStartedAt = Date.now();
     const [
       vehiclesResult,
       plantResult,
@@ -75,6 +80,7 @@ export async function GET(request: Request) {
         .select("id,document_category,expiry_date,active")
         .eq("active", true),
     ]);
+    mark("dashboard_queries", queriesStartedAt);
 
     if (vehiclesResult.error) throw new Error(vehiclesResult.error.message);
     if (plantResult.error) throw new Error(plantResult.error.message);
@@ -180,7 +186,8 @@ export async function GET(request: Request) {
       0,
     );
 
-    return NextResponse.json({
+    const serializeStartedAt = Date.now();
+    const response = NextResponse.json({
       counts: {
         vehicles: vehicles.length,
         plant: plant.length,
@@ -193,6 +200,9 @@ export async function GET(request: Request) {
       recentFleetJobs: jobs.slice(0, 10),
       canManage: canManageAssets(identity.role),
     });
+    mark("serialize", serializeStartedAt);
+    mark("total", startedAt);
+    return response;
   } catch (error) {
     const apiError = assetApiError(error);
     return NextResponse.json(

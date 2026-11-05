@@ -11,10 +11,17 @@ import { createRequestResilientFetch, isTransientBackendFailure } from "./lib/ba
  */
 
 export async function proxy(request: NextRequest) {
+  const startedAt = Date.now();
   const pathname = request.nextUrl.pathname;
+  const trace = request.headers.get("x-tttracker-web-trace") || `web-${crypto.randomUUID()}`;
+  const traceHeaders = new Headers(request.headers);
+  if (process.env.NODE_ENV === "development") traceHeaders.set("x-tttracker-web-trace", trace);
+  const mark = (phase: string, since: number) => {
+    if (process.env.NODE_ENV === "development") console.info("[web-trace]", { trace, path: pathname, prefetch: request.headers.has("next-router-prefetch"), phase, durationMs: Date.now() - since });
+  };
 
   let response = NextResponse.next({
-    request,
+    request: { headers: traceHeaders },
   });
 
   const supabaseUrl =
@@ -57,7 +64,7 @@ export async function proxy(request: NextRequest) {
           );
 
           response = NextResponse.next({
-            request,
+            request: { headers: traceHeaders },
           });
 
           cookiesToSet.forEach(
@@ -74,10 +81,12 @@ export async function proxy(request: NextRequest) {
     },
   );
 
+  const authStartedAt = Date.now();
   const {
     data: { user },
     error: userError,
   } = await supabase.auth.getUser();
+  mark("auth", authStartedAt);
 
   /*
    * Let the existing TTTracker protected layout handle
@@ -91,6 +100,7 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
+  const permissionStartedAt = Date.now();
   const {
     data: allowed,
     error: accessError,
@@ -101,6 +111,7 @@ export async function proxy(request: NextRequest) {
       p_path: pathname,
     },
   );
+  mark("path_permission", permissionStartedAt);
 
   if (accessError) {
     console.error(
@@ -127,9 +138,12 @@ export async function proxy(request: NextRequest) {
       pathname,
     );
 
+    mark("denied_total", startedAt);
     return NextResponse.redirect(url);
   }
 
+  mark("total", startedAt);
+  if (process.env.NODE_ENV === "development") response.headers.set("Server-Timing", `proxy;dur=${Date.now() - startedAt}`);
   return response;
 }
 

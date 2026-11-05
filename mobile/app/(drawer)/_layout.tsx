@@ -81,6 +81,8 @@ type NotificationBadgeState = {
 
 const NotificationBadgeContext = createContext<NotificationBadgeState | null>(null);
 const NOTIFICATION_BADGE_STALE_MS = 2 * 60_000;
+let notificationChannelsCreated = 0;
+let notificationChannelsRemoved = 0;
 
 function NotificationBadgeProvider({ children }: PropsWithChildren) {
   const { session } = useAuth();
@@ -152,7 +154,8 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
       .subscribe((status, error) => {
         if (__DEV__) console.debug("TTTracker notification Realtime", { status, error: error?.message });
       });
-    if (__DEV__) console.debug("TTTracker notification Realtime subscribe requested");
+    notificationChannelsCreated++;
+    if (__DEV__) console.debug("TTTracker notification Realtime subscribe requested", { created: notificationChannelsCreated, removed: notificationChannelsRemoved, active: notificationChannelsCreated - notificationChannelsRemoved });
 
     const appListener = AppState.addEventListener("change", (state) => {
       if (
@@ -165,7 +168,8 @@ function NotificationBadgeProvider({ children }: PropsWithChildren) {
 
     return () => {
       appListener.remove();
-      if (__DEV__) console.debug("TTTracker notification Realtime unsubscribe requested");
+      notificationChannelsRemoved++;
+      if (__DEV__) console.debug("TTTracker notification Realtime unsubscribe requested", { created: notificationChannelsCreated, removed: notificationChannelsRemoved, active: notificationChannelsCreated - notificationChannelsRemoved });
       void supabase.removeChannel(channel);
     };
   }, [refresh, userId]);

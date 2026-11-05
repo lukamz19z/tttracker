@@ -60,8 +60,13 @@ function applies(rule: FinanceRule, type: "expense_claim" | "invoice") {
 }
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
+  const mark = (phase: string, since: number) => { if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, route: "mobile_bootstrap", phase, durationMs: Date.now() - since }); };
   try {
     const { service, identity } = await requireMobileUser(request);
+    mark("auth_identity", startedAt);
+    const configStartedAt = Date.now();
 
     const [
       permissionRows,
@@ -104,6 +109,7 @@ export async function GET(request: NextRequest) {
         .eq("user_id", identity.userId)
         .eq("receives_bc_review", true),
     ]);
+    mark("configuration_queries", configStartedAt);
 
     for (const result of [roleRows, projectRows, navResult, settingsResult, financeResult, docketReviewerResult]) {
       if (result.error) throw new Error(result.error.message);
@@ -130,6 +136,7 @@ export async function GET(request: NextRequest) {
     };
 
     const docketProjects = capabilities.docketReviewerProjectIds;
+    const countsStartedAt = Date.now();
     const [docketCountResult, expenseCountResult, invoiceCountResult] = await Promise.all([
       docketProjects.length
         ? service
@@ -153,6 +160,7 @@ export async function GET(request: NextRequest) {
             .eq("status", "submitted")
         : Promise.resolve({ count: 0, error: null }),
     ]);
+    mark("approval_counts", countsStartedAt);
 
     if (docketCountResult.error) throw new Error(docketCountResult.error.message);
     if (expenseCountResult.error) throw new Error(expenseCountResult.error.message);
@@ -196,7 +204,8 @@ export async function GET(request: NextRequest) {
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
 
-    return NextResponse.json({
+    const serializeStartedAt = Date.now();
+    const response = NextResponse.json({
       user: {
         id: identity.userId,
         email: identity.email,
@@ -229,7 +238,11 @@ export async function GET(request: NextRequest) {
       },
       approvalCounts,
     });
+    mark("serialize", serializeStartedAt);
+    mark("total", startedAt);
+    return response;
   } catch (error) {
+    mark("failed_total", startedAt);
     const apiError = mobileApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
   }

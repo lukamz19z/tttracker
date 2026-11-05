@@ -192,6 +192,8 @@ export async function requireMobileDocketUser(
   request: Request,
   projectId: string,
 ): Promise<MobileDocketContext> {
+  const startedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
   const token = authorizationToken(request);
 
   if (!token) {
@@ -239,7 +241,9 @@ export async function requireMobileDocketUser(
   );
 
   await requirePermission(service, user.id);
+  if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, phase: "docket_auth_permission", durationMs: Date.now() - startedAt });
   await requireProjectAccess(service, user.id, projectId);
+  if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, phase: "docket_project_access", durationMs: Date.now() - startedAt });
 
   return {
     service,

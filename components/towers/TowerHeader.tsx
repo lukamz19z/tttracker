@@ -23,6 +23,13 @@ type Props = {
   tower: Tower;
   latestDate?: string | null;
   resolvedProgress?: ResolvedTowerProgress;
+  summary?: {
+    totalHours: number;
+    productionHours: number;
+    openDefects: number;
+    deliveryProgress: number;
+    latestDocketDate: string | null;
+  };
 };
 
 type DocketRow = {
@@ -170,19 +177,27 @@ function statusClass(status: string) {
   return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-export default function TowerHeader({ projectId, tower, resolvedProgress }: Props) {
+export default function TowerHeader({ projectId, tower, resolvedProgress, summary }: Props) {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const towerId = tower.id;
 
-  const [assemblyProgress, setAssemblyProgress] = useState(0);
-  const [erectionProgress, setErectionProgress] = useState(0);
-  const [overallProgress, setOverallProgress] = useState(0);
-  const [totalHours, setTotalHours] = useState(0);
-  const [productionHours, setProductionHours] = useState(0);
-  const [openDefects, setOpenDefects] = useState(0);
-  const [deliveryProgress, setDeliveryProgress] = useState(0);
+  const [fetchedAssemblyProgress, setAssemblyProgress] = useState(0);
+  const [fetchedErectionProgress, setErectionProgress] = useState(0);
+  const [fetchedOverallProgress, setOverallProgress] = useState(0);
+  const [fetchedTotalHours, setTotalHours] = useState(0);
+  const [fetchedProductionHours, setProductionHours] = useState(0);
+  const [fetchedOpenDefects, setOpenDefects] = useState(0);
+  const [fetchedDeliveryProgress, setDeliveryProgress] = useState(0);
   const [progressError, setProgressError] = useState("");
-  const [lastDocketDate, setLastDocketDate] = useState<string | null>(resolvedProgress?.latestDocketDate ?? null);
+  const [fetchedLastDocketDate, setLastDocketDate] = useState<string | null>(resolvedProgress?.latestDocketDate ?? null);
+  const assemblyProgress = summary ? resolvedProgress?.assemblyPercent ?? 0 : fetchedAssemblyProgress;
+  const erectionProgress = summary ? resolvedProgress?.erectionPercent ?? 0 : fetchedErectionProgress;
+  const overallProgress = summary ? resolvedProgress?.totalProgressPercent ?? 0 : fetchedOverallProgress;
+  const totalHours = summary?.totalHours ?? fetchedTotalHours;
+  const productionHours = summary?.productionHours ?? fetchedProductionHours;
+  const openDefects = summary?.openDefects ?? fetchedOpenDefects;
+  const deliveryProgress = summary?.deliveryProgress ?? fetchedDeliveryProgress;
+  const lastDocketDate = summary ? summary.latestDocketDate : fetchedLastDocketDate;
 
   const towerLabel =
     tower.tower_number ||
@@ -223,7 +238,7 @@ export default function TowerHeader({ projectId, tower, resolvedProgress }: Prop
     : null;
 
   useEffect(() => {
-    if (!towerId) return;
+    if (!towerId || summary) return;
 
     let cancelled = false;
 
@@ -358,7 +373,7 @@ export default function TowerHeader({ projectId, tower, resolvedProgress }: Prop
     return () => {
       cancelled = true;
     };
-  }, [supabase, towerId, tower.extra_data, resolvedProgress]);
+  }, [supabase, towerId, tower.extra_data, resolvedProgress, summary]);
 
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">

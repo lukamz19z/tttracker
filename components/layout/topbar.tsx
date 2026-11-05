@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { createSupabaseBrowser } from "@/lib/supabase";
+import { useAccess } from "@/components/access/access-provider";
 
 type WebsiteRole =
   | "admin"
@@ -51,55 +52,9 @@ export function Topbar() {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = useMemo(() => createSupabaseBrowser(), []);
-
-  const [role, setRole] = useState<WebsiteRole | null>(null);
-  const [roleLoaded, setRoleLoaded] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadRole() {
-      try {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
-
-        if (!active) return;
-
-        if (userError || !user) {
-          setRole(null);
-          setRoleLoaded(true);
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        if (!active) return;
-
-        if (error) {
-          console.error("Could not load website role for topbar:", error);
-          setRole("viewer");
-        } else {
-          setRole(normaliseWebsiteRole(data?.role));
-        }
-      } finally {
-        if (active) {
-          setRoleLoaded(true);
-        }
-      }
-    }
-
-    void loadRole();
-
-    return () => {
-      active = false;
-    };
-  }, [supabase]);
+  const { loading: accessLoading, websiteRole } = useAccess();
+  const role: WebsiteRole | null = accessLoading ? null : normaliseWebsiteRole(websiteRole);
+  const roleLoaded = !accessLoading;
 
   async function handleLogout() {
     await supabase.auth.signOut();

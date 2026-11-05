@@ -43,13 +43,18 @@ export function apiUrl(input: string) {
 
 let sessionPromise: Promise<Session | null> | null = null;
 const inFlightJson = new Map<string, Promise<unknown>>();
+const responseTrace = new WeakMap<Response, string>();
+export function apiRequestTrace(response: Response) { return responseTrace.get(response) ?? null; }
+let apiTraceSequence = 0;
 
 function currentSession(): Promise<Session | null> {
   if (sessionPromise) return sessionPromise;
+  const startedAt = Date.now();
 
   const task = supabase.auth
     .getSession()
     .then(({ data, error }) => {
+      if (__DEV__) console.debug("TTTracker API session", { durationMs: Date.now() - startedAt, authenticated: Boolean(data.session) });
       if (error) throw error;
       return data.session;
     });
@@ -82,6 +87,8 @@ async function performFetch(
 
   if (manuallyOffline()) throw new Error("This action requires a connection.");
   const headers = new Headers(requestInit.headers);
+  const trace = `a${Date.now().toString(36)}${(++apiTraceSequence).toString(36)}`;
+  if (__DEV__) headers.set("X-TTTracker-Trace", trace);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (timeZone) headers.set("X-TTTracker-Timezone", timeZone);
 
@@ -98,6 +105,7 @@ async function performFetch(
 
   const url = apiUrl(input);
   const startedAt = Date.now();
+  if (__DEV__) console.debug("TTTracker mobile request start", { trace, path: new URL(url).pathname, method });
   const options: RequestInit & { resilienceTimeoutMs: number } = {
     ...requestInit,
     headers,
@@ -137,6 +145,7 @@ async function performFetch(
     if (__DEV__) {
       console.debug("TTTracker mobile request", {
         path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        trace,
         method,
         requestType: isRead ? "read" : "mutation",
         durationMs: Date.now() - startedAt,
@@ -145,11 +154,13 @@ async function performFetch(
         timeoutMs,
       });
     }
+    responseTrace.set(response, trace);
     return response;
   } catch (error) {
     if (__DEV__) {
       console.debug("TTTracker mobile request failed", {
         path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        trace,
         method,
         requestType: isRead ? "read" : "mutation",
         durationMs: Date.now() - startedAt,
@@ -167,7 +178,9 @@ export async function apiFetch(
   init: ApiRequestInit = {},
 ): Promise<Response> {
   if (manuallyOffline()) throw new Error("This action requires a connection.");
+  const sessionStartedAt = Date.now();
   const session = await currentSession();
+  if (__DEV__) console.debug("TTTracker mobile API session ready", { path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt });
   return performFetch(input, init, session);
 }
 
@@ -223,6 +236,7 @@ export async function jsonBody<T>(
   const value = await Promise.resolve(responseOrPayload);
 
   if (isResponseLike(value)) {
+    const parseStartedAt = Date.now();
     const text = await value.text();
     let payload: unknown = {};
 
@@ -247,6 +261,7 @@ export async function jsonBody<T>(
       );
     }
 
+    if (__DEV__) console.debug("TTTracker mobile JSON parsed", { trace: responseTrace.get(value) ?? null, path: value.url ? new URL(value.url).pathname : null, durationMs: Date.now() - parseStartedAt });
     return payload as T;
   }
 
@@ -291,7 +306,9 @@ export async function apiJson<T>(
     );
   }
 
+  const sessionStartedAt = Date.now();
   const session = await currentSession();
+  if (__DEV__) console.debug("TTTracker mobile API session ready", { path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt });
   const tokenTail = session?.access_token.slice(-12) ?? "anon";
   const key = [
     session?.user.id ?? "anon",

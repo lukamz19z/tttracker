@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { getUserRole } from "@/lib/roles";
+import { useAccess } from "@/components/access/access-provider";
 import { qualityTimeZone } from "@/lib/quality/date-time";
 import { loadTowerProgressForTowers, type ResolvedTowerProgress } from "@/lib/dockets/tower-progress";
 
@@ -809,6 +809,7 @@ export default function ProjectDashboard() {
   const projectId = params.projectId as string;
 
   const supabase = createSupabaseBrowser();
+  const { websiteRole } = useAccess();
 
   const [project, setProject] = useState<Project | null>(null);
   const [towers, setTowers] = useState<Tower[]>([]);
@@ -839,7 +840,7 @@ export default function ProjectDashboard() {
   const [docketLookupDate, setDocketLookupDate] = useState("");
   const [docketLookupCrewFilter, setDocketLookupCrewFilter] = useState("all");
   const [docketLookupSearch, setDocketLookupSearch] = useState("");
-  const [role, setRole] = useState<UserRole>(null);
+  const role: UserRole = websiteRole;
 
   const [editingProject, setEditingProject] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
@@ -860,48 +861,55 @@ export default function ProjectDashboard() {
 
   useEffect(() => {
     void load().catch((error: unknown) => { console.error(error); setProgressError("Tower progress could not be loaded. Refresh to try again."); setLoading(false); });
-    void loadRole();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  async function loadRole() {
-    const userRole = await getUserRole();
-    setRole(userRole);
-  }
 
   async function load() {
     setLoading(true);
     setProgressError("");
 
-    const { data: projectData, error: projectError } = await supabase
-      .from("projects")
-      .select("id, name, status, client, client_code, project_year, project_sequence, project_number, location, timezone, total_towers, sharepoint_url, sharepoint_tender_url")
-      .eq("id", projectId)
-      .single();
+    const [
+      { data: projectData, error: projectError },
+      { data: towersData, error: towersError },
+      { data: docketsData, error: docketsError },
+    ] = await Promise.all([
+      supabase.from("projects")
+        .select("id, name, status, client, client_code, project_year, project_sequence, project_number, location, timezone, total_towers, sharepoint_url, sharepoint_tender_url")
+        .eq("id", projectId).single(),
+      supabase.from("towers").select("*").eq("project_id", projectId).order("name", { ascending: true }),
+      supabase.from("tower_daily_dockets")
+        .select("id, tower_id, project_id, docket_date, progress_model, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
+        .eq("project_id", projectId).is("deleted_at", null),
+    ]);
 
     if (projectError) console.error("project load error", projectError);
-
-    const { data: towersData, error: towersError } = await supabase
-      .from("towers")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("name", { ascending: true });
-
     if (towersError) console.error("towers load error", towersError);
+    if (docketsError) console.error("dockets load error", docketsError);
 
     const loadedTowers = [...((towersData as Tower[] | null) || [])].sort(naturalTowerSort);
     const towerIds = loadedTowers.map((t) => t.id);
 
-    const { data: docketsData, error: docketsError } = await supabase
-      .from("tower_daily_dockets")
-      .select("id, tower_id, project_id, docket_date, progress_model, assembly_percent, erection_percent, crew, leading_hand, raw_manhours, production_manhours")
-      .eq("project_id", projectId)
-      .is("deleted_at", null);
-
-    if (docketsError) console.error("dockets load error", docketsError);
-
     const loadedDockets = (docketsData as DocketRow[] | null) || [];
-    const docketIds = loadedDockets.map((d) => d.id);
+    const loadedProject = (projectData as Project | null) || null;
+    setProject(loadedProject);
+    setTowers(loadedTowers);
+    setDockets(loadedDockets);
+    setProjectForm({
+      name: loadedProject?.name || "",
+      client: loadedProject?.client || "",
+      clientCode: loadedProject?.client_code || "",
+      projectYear: loadedProject?.project_year ? String(loadedProject.project_year) : String(new Date().getFullYear()),
+      projectSequence: loadedProject?.project_sequence ? String(loadedProject.project_sequence) : "1",
+      location: loadedProject?.location || "",
+      timezone: loadedProject?.timezone || "",
+      totalTowers: loadedProject?.total_towers != null ? String(loadedProject.total_towers) : "",
+      status: loadedProject?.status || "ongoing",
+    });
+    setLoading(false);
+    const docketIds = loadedDockets
+      .filter((docket) => docket.raw_manhours == null || docket.production_manhours == null ||
+        !Number.isFinite(Number(docket.raw_manhours)) || !Number.isFinite(Number(docket.production_manhours)))
+      .map((docket) => docket.id);
 
     let loadedLabourRows: LabourRow[] = [];
     if (docketIds.length > 0) {
@@ -912,9 +920,10 @@ export default function ProjectDashboard() {
       ];
 
       for (const table of labourTableCandidates) {
-        const { data, error } = await supabase.from(table).select("docket_id, total_hours, production_hours");
-        if (!error && data) {
-          loadedLabourRows = (data as LabourRow[]).filter((row) => docketIds.includes(row.docket_id));
+        const chunks = Array.from({ length: Math.ceil(docketIds.length / 200) }, (_, index) => docketIds.slice(index * 200, index * 200 + 200));
+        const results = await Promise.all(chunks.map((ids) => supabase.from(table).select("docket_id, total_hours, production_hours").in("docket_id", ids)));
+        if (results.every((result) => !result.error)) {
+          loadedLabourRows = results.flatMap((result) => (result.data ?? []) as LabourRow[]);
           break;
         }
       }
@@ -976,31 +985,7 @@ export default function ProjectDashboard() {
       }
     }
 
-    const loadedProject = (projectData as Project | null) || null;
-
-    setProject(loadedProject);
-    setProjectForm({
-      name: loadedProject?.name || "",
-      client: loadedProject?.client || "",
-      clientCode: loadedProject?.client_code || "",
-      projectYear: loadedProject?.project_year
-        ? String(loadedProject.project_year)
-        : String(new Date().getFullYear()),
-      projectSequence: loadedProject?.project_sequence
-        ? String(loadedProject.project_sequence)
-        : "1",
-      location: loadedProject?.location || "",
-      timezone: loadedProject?.timezone || "",
-      totalTowers:
-        loadedProject?.total_towers !== null &&
-        loadedProject?.total_towers !== undefined
-          ? String(loadedProject.total_towers)
-          : "",
-      status: loadedProject?.status || "ongoing",
-    });
     setResolvedProgress(await loadTowerProgressForTowers(supabase, loadedTowers, loadedDockets));
-    setTowers(loadedTowers);
-    setDockets(loadedDockets);
     setLabourRows(loadedLabourRows);
     setDefects(loadedDefects);
     setDeliveries(loadedDeliveries);

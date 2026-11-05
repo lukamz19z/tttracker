@@ -61,6 +61,7 @@ import {
 
 
 import { AppShell } from "@/components/layout/app-shell";
+import { useAccess } from "@/components/access/access-provider";
 
 import { createSupabaseBrowser } from "@/lib/supabase";
 
@@ -470,6 +471,7 @@ function StatCard({
 export default function TrainingPage() {
 
   const supabase = useMemo(() => createSupabaseBrowser(), []);
+  const { loading: accessLoading, roles: accessRoles, webPermissions } = useAccess();
 
 
 
@@ -500,27 +502,8 @@ export default function TrainingPage() {
       setMessage(null);
 
       try {
-        const {
-          data: { session },
-          error: sessionError,
-        } = await supabase.auth.getSession();
-
-        if (sessionError) {
-          throw new Error(sessionError.message);
-        }
-
-        if (!session?.access_token) {
-          throw new Error("You must be logged in to view Training.");
-        }
-
-        const [accessResponse, employeeResult, recordResult] =
+        const [employeeResult, recordResult] =
           await Promise.all([
-            fetch("/api/access/me", {
-              headers: {
-                Authorization: `Bearer ${session.access_token}`,
-              },
-              cache: "no-store",
-            }),
             supabase
               .from("employees")
               .select("id,active,sharepoint_folder_id"),
@@ -531,15 +514,7 @@ export default function TrainingPage() {
               ),
           ]);
 
-        const accessPayload = (await accessResponse
-          .json()
-          .catch(() => null)) as AccessPayload | null;
-
-        if (!accessResponse.ok) {
-          throw new Error(
-            clean(accessPayload?.error) || "Unable to verify Training access.",
-          );
-        }
+        const accessPayload: AccessPayload = { roles: accessRoles, permissions: { web: [...webPermissions] } };
 
         if (employeeResult.error) {
           throw new Error(employeeResult.error.message);
@@ -619,14 +594,14 @@ export default function TrainingPage() {
         setRefreshing(false);
       }
     },
-    [supabase],
+    [accessRoles, webPermissions, supabase],
   );
 
   useEffect(() => {
 
-    void loadPage();
+    if (!accessLoading) void loadPage();
 
-  }, [loadPage]);
+  }, [accessLoading, loadPage]);
 
 
 

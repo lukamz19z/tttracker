@@ -729,7 +729,7 @@ export default function NotificationsScreen() {
     return <Redirect href="/login" />;
   }
 
-  if (loading || profileLoading || pageLoading) {
+  if (loading || profileLoading || (pageLoading && notifications.length === 0)) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingScreen}>

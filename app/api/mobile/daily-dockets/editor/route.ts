@@ -655,12 +655,13 @@ function blankDraft(args: {
 
 export async function GET(request: Request) {
   const requestStartedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
   let phaseStartedAt = requestStartedAt;
   let currentPhase = "request_validation";
   const logPhase = (phase: string) => {
     if (process.env.NODE_ENV === "development") {
       const durationMs = phase === "total" ? Date.now() - requestStartedAt : Date.now() - phaseStartedAt;
-      console.info(`[docket-open] phase=${phase} durationMs=${durationMs}`);
+      console.info("[docket-open]", { trace, phase, durationMs });
     }
     phaseStartedAt = Date.now();
   };
@@ -1042,6 +1043,7 @@ export async function GET(request: Request) {
   } catch (error) {
     if (process.env.NODE_ENV === "development") {
       console.info("[docket-open] failed", {
+        trace,
         phase: currentPhase,
         phaseDurationMs: Date.now() - phaseStartedAt,
         totalDurationMs: Date.now() - requestStartedAt,

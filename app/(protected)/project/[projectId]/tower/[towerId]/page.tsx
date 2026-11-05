@@ -319,11 +319,13 @@ async function safeSelect<T>(
   supabase: ReturnType<typeof createSupabaseBrowser>,
   table: string,
   select: string,
-  filters?: Array<{ column: string; value: string }>,
+  filters?: Array<{ column: string; value: string | string[] }>,
 ) {
   try {
     let query = supabase.from(table).select(select);
-    for (const filter of filters || []) query = query.eq(filter.column, filter.value);
+    for (const filter of filters || []) query = Array.isArray(filter.value)
+      ? query.in(filter.column, filter.value)
+      : query.eq(filter.column, filter.value);
     const { data, error } = await query;
     if (error) return [] as T[];
     return (data as T[] | null) ?? [];
@@ -336,7 +338,7 @@ async function safeSelectFirstExisting<T>(
   supabase: ReturnType<typeof createSupabaseBrowser>,
   tables: string[],
   select: string,
-  filters?: Array<{ column: string; value: string }>,
+  filters?: Array<{ column: string; value: string | string[] }>,
 ) {
   for (const table of tables) {
     const rows = await safeSelect<T>(supabase, table, select, filters);
@@ -526,6 +528,7 @@ export default function TowerOverviewPage() {
       const progress = await loadTowerProgressForTowers(supabase, [towerData], docketData);
       setResolvedProgress(progress.get(towerId) || null);
     }
+    setLoading(false);
 
     const docketIds = docketData.map((docket) => docket.id).filter(Boolean);
 
@@ -534,25 +537,28 @@ export default function TowerOverviewPage() {
     let plantData: PlantRow[] = [];
 
     if (docketIds.length > 0) {
-      labourData = await safeSelectFirstExisting<LabourRow>(
+      [labourData, delayData, plantData] = await Promise.all([
+        safeSelectFirstExisting<LabourRow>(
         supabase,
         ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"],
         "docket_id, total_hours, production_hours, delay_hours",
-      );
+        [{ column: "docket_id", value: docketIds }],
+        ),
+        safeSelect<DelayRow>(
+          supabase,
+          "tower_docket_delays",
+          "docket_id, delay_type, delay_hours, delay_applies_mode, plant_names",
+          [{ column: "docket_id", value: docketIds }],
+        ),
+        safeSelect<PlantRow>(
+          supabase,
+          "tower_docket_plant",
+          "docket_id, plant_name, plant_type, asset_number, total_hours",
+          [{ column: "docket_id", value: docketIds }],
+        ),
+      ]);
       labourData = labourData.filter((row) => docketIds.includes(row.docket_id));
-
-      delayData = await safeSelect<DelayRow>(
-        supabase,
-        "tower_docket_delays",
-        "docket_id, delay_type, delay_hours, delay_applies_mode, plant_names",
-      );
       delayData = delayData.filter((row) => docketIds.includes(row.docket_id));
-
-      plantData = await safeSelect<PlantRow>(
-        supabase,
-        "tower_docket_plant",
-        "docket_id, plant_name, plant_type, asset_number, total_hours",
-      );
       plantData = plantData.filter((row) => docketIds.includes(row.docket_id));
     }
 
@@ -935,7 +941,7 @@ export default function TowerOverviewPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 p-4 md:p-6 lg:p-8 space-y-6">
-      <TowerHeader projectId={projectId} tower={towerForHeader} latestDate={stats.latestDate} resolvedProgress={resolvedProgress ?? undefined} />
+      <TowerHeader projectId={projectId} tower={towerForHeader} latestDate={stats.latestDate} resolvedProgress={resolvedProgress ?? undefined} summary={{ totalHours: stats.totalHours, productionHours: stats.productionHours, openDefects: stats.openDefects, deliveryProgress: deliveryStats.deliveryPercent, latestDocketDate: stats.latestDate }} />
 
       <div className="overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-800 px-5 py-5 text-white md:px-6">

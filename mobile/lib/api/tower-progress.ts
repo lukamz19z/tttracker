@@ -1,7 +1,11 @@
-import { apiFetch } from "@/lib/api/client";
+import { apiFetch, apiRequestTrace } from "@/lib/api/client";
 import type { ResolvedMobileTowerProgress } from "@/types/daily-dockets";
 
-type TowerProgressResponse = { progress: Record<string, ResolvedMobileTowerProgress> };
+type TowerProgressResponse = {
+  progress: Record<string, ResolvedMobileTowerProgress>;
+  towers: { id: string; project_id: string; extra_data?: Record<string, unknown> | null }[];
+  dockets: { id: string; project_id: string; tower_id?: string | null; docket_date?: string | null; crew?: string | null; leading_hand?: string | null }[];
+};
 
 // Never log headers, request URLs, raw HTML attributes or opaque credentials.
 function safeResponsePreview(text: string) {
@@ -16,6 +20,7 @@ function safeResponsePreview(text: string) {
 }
 
 export async function readTowerProgressResponse(response: Response): Promise<TowerProgressResponse> {
+  const parseStartedAt = Date.now();
   const text = await response.text();
   const contentType = response.headers.get("content-type") || "";
   const isJson = /^(?:application\/(?:[\w.-]+\+)?json)(?:\s*;|$)/i.test(contentType);
@@ -40,6 +45,8 @@ export async function readTowerProgressResponse(response: Response): Promise<Tow
   }
   if (!payload || typeof payload !== "object" || !("progress" in payload) ||
       !payload.progress || typeof payload.progress !== "object" || Array.isArray(payload.progress) ||
+      !("towers" in payload) || !Array.isArray(payload.towers) ||
+      !("dockets" in payload) || !Array.isArray(payload.dockets) ||
       !Object.values(payload.progress).every((row: unknown) => row && typeof row === "object" &&
         "assemblyPercent" in row && typeof row.assemblyPercent === "number" && Number.isFinite(row.assemblyPercent) &&
         "erectionPercent" in row && typeof row.erectionPercent === "number" && Number.isFinite(row.erectionPercent) &&
@@ -48,6 +55,7 @@ export async function readTowerProgressResponse(response: Response): Promise<Tow
     log();
     throw new Error(`Tower Progress service returned an unexpected response (HTTP ${response.status}). Check that the website API has been deployed.`);
   }
+  if (typeof __DEV__ !== "undefined" && __DEV__) console.debug("TTTracker mobile JSON parsed", { trace: apiRequestTrace(response), path: response.url ? new URL(response.url).pathname : null, durationMs: Date.now() - parseStartedAt });
   return payload as TowerProgressResponse;
 }
 

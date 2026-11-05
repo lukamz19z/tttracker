@@ -128,8 +128,9 @@ export default function WorkpackDocumentsPage() {
 
     async function loadCurrentUser() {
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      const user = session?.user;
 
       if (cancelled) return;
 

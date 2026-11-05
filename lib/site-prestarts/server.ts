@@ -71,14 +71,10 @@ async function requirePermission(
   userId: string,
 ) {
   const { data, error } = await service
-    .from("effective_user_permissions")
-    .select("allowed")
-    .eq("user_id", userId)
-    .eq("code", "mobile.site_prestarts")
-    .maybeSingle();
+    .rpc("user_has_access", { p_user_id: userId, p_access_code: "mobile.site_prestarts" });
 
   if (error) throw new Error(error.message);
-  if (data?.allowed !== true) throw new Error("SITE_PRESTART_FORBIDDEN");
+  if (data !== true) throw new Error("SITE_PRESTART_FORBIDDEN");
 }
 
 export async function requireSitePrestartUser(request: Request) {

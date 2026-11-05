@@ -5,20 +5,27 @@ import { towerWeightTonnes } from "@/lib/dockets/daily-productivity";
 
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
+  const startedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
+  const mark = (phase: string, since: number) => { if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, route: "tower_progress", phase, durationMs: Date.now() - since }); };
   try {
     const projectId = clean(new URL(request.url).searchParams.get("projectId"));
     if (!projectId) return NextResponse.json({ error: "Project is required." }, { status: 400 });
     const { service } = await requireMobileDocketUser(request, projectId);
+    mark("auth_access", startedAt);
+    const contextStartedAt = Date.now();
     const project = await service.from("projects").select("id").eq("id", projectId).maybeSingle();
     if (project.error) throw new Error(project.error.message);
     if (!project.data) return NextResponse.json({ error: "Project could not be found." }, { status: 404 });
-    const { data, error } = await service.from("towers").select("id,extra_data").eq("project_id", projectId);
+    const { data, error } = await service.from("towers").select("*").eq("project_id", projectId);
     if (error) throw new Error(error.message);
     const towers = data || [];
     const { resolved, dockets } = await mobileProgressContext(service, projectId, towers);
+    mark("project_progress_context", contextStartedAt);
     const docketIds = dockets.map((row) => row.id);
     const labourByDocket = new Map<string, { raw: number; production: number }>();
     if (docketIds.length) {
+      const labourStartedAt = Date.now();
       for (const table of ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"]) {
         let tableFound = false;
         for (let offset = 0; offset < docketIds.length; offset += 200) {
@@ -38,6 +45,7 @@ export async function GET(request: Request) {
         }
         if (tableFound) break;
       }
+      mark("labour", labourStartedAt);
     }
     const progress = Object.fromEntries([...resolved].map(([towerId, row]) => {
       const towerDockets = dockets.filter((docket) => docket.tower_id === towerId && !docket.deleted_at && docket.approval_status !== "deleted");
@@ -50,8 +58,13 @@ export async function GET(request: Request) {
       const completedTonnes = weight !== null ? weight * (row.totalProgressPercent / 100) : null;
       return [towerId, { ...row, totalHours: rawHours, productionHours, completedTonnes, rawMhPerTonne: completedTonnes && completedTonnes > 0 ? rawHours / completedTonnes : null, productionMhPerTonne: completedTonnes && completedTonnes > 0 ? productionHours / completedTonnes : null }];
     }));
-    return NextResponse.json({ progress }, { headers: { "Cache-Control": "private, no-store" } });
+    const serializeStartedAt = Date.now();
+    const response = NextResponse.json({ progress, towers, dockets: dockets.map((docket) => ({ ...docket, project_id: projectId })) }, { headers: { "Cache-Control": "private, no-store" } });
+    mark("serialize", serializeStartedAt);
+    mark("total", startedAt);
+    return response;
   } catch (error) {
+    mark("failed_total", startedAt);
     const result = mobileDocketApiError(error);
     const status = [400, 401, 403, 404, 500].includes(result.status) ? result.status : 500;
     return NextResponse.json({ error: result.message }, { status });

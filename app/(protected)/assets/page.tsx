@@ -113,19 +113,25 @@ export default function AssetsDashboardPage() {
         throw new Error("Your session has expired. Sign in again.");
       }
 
-      return fetch(url, {
+      const trace = `web-${crypto.randomUUID()}`;
+      const startedAt = performance.now();
+      const response = await fetch(url, {
         headers: {
           Authorization: `Bearer ${session.access_token}`,
+          ...(process.env.NODE_ENV === "development" ? { "X-TTTracker-Trace": trace } : {}),
         },
         cache: "no-store",
       });
+      if (process.env.NODE_ENV === "development") console.debug("[web-trace]", { trace, phase: "assets_response_headers", durationMs: performance.now() - startedAt, status: response.status });
+      return { response, trace, startedAt };
     },
     [supabase],
   );
 
   const fetchDashboard = useCallback(async () => {
-    const response = await apiFetch("/api/assets/dashboard");
+    const { response, trace, startedAt } = await apiFetch("/api/assets/dashboard");
     const payload = (await response.json()) as DashboardPayload;
+    if (process.env.NODE_ENV === "development") console.debug("[web-trace]", { trace, phase: "assets_json_parsed", durationMs: performance.now() - startedAt });
 
     if (!response.ok) {
       throw new Error(payload.error || "Assets dashboard could not be loaded.");

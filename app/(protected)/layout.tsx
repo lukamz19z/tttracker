@@ -2,18 +2,26 @@ import { createSupabaseServer } from "@/lib/supabase-server";
 import { redirect } from "next/navigation";
 import { AccessProvider } from "@/components/access/access-provider";
 import { isTransientBackendFailure } from "@/lib/backend-resilience";
+import { headers } from "next/headers";
+
+async function loadProtectedUser() {
+  const startedAt = Date.now();
+  const trace = (await headers()).get("x-tttracker-web-trace");
+  const supabase = await createSupabaseServer();
+  const result = await supabase.auth.getUser();
+  if (process.env.NODE_ENV === "development" && trace) console.info("[web-trace]", { trace, phase: "protected_layout_auth", durationMs: Date.now() - startedAt });
+  return result;
+}
 
 export default async function ProtectedLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createSupabaseServer();
-
   const {
     data: { user },
     error,
-  } = await supabase.auth.getUser();
+  } = await loadProtectedUser();
 
   if (!user) {
     if (error && isTransientBackendFailure(error)) {

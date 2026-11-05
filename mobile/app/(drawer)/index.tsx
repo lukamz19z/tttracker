@@ -549,7 +549,6 @@ export default function HomeScreen() {
         recent: rows.slice(0, 2),
       });
     } catch (error) {
-      setNotifications(EMPTY_NOTIFICATIONS);
       setNotificationsError(
         error instanceof Error
           ? error.message
@@ -782,7 +781,6 @@ export default function HomeScreen() {
         latestDocketDate,
       });
     } catch (error) {
-      setProjectDashboard(EMPTY_PROJECT);
       setProjectError(
         error instanceof Error
           ? error.message
@@ -829,7 +827,7 @@ export default function HomeScreen() {
     }
   }
 
-  if (loading || profileLoading) {
+  if (loading) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingScreen}>

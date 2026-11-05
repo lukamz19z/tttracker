@@ -11,10 +11,11 @@ function stringValue(value: unknown) { return value == null ? "" : String(value)
 
 export async function GET(request: Request) {
   const startedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
   let phase = "validation";
   let phaseStartedAt = startedAt;
   const timing = (next: string) => {
-    if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { phase, durationMs: Date.now() - phaseStartedAt });
+    if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { trace, phase, durationMs: Date.now() - phaseStartedAt });
     phase = next;
     phaseStartedAt = Date.now();
   };
@@ -44,7 +45,7 @@ export async function GET(request: Request) {
     const docketResult = await query.order("docket_date", { ascending: false }).limit(1).maybeSingle();
     if (docketResult.error) throw new Error(`Previous Daily Docket lookup failed: ${docketResult.error.message}`);
     if (!docketResult.data) {
-      if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { phase, durationMs: Date.now() - phaseStartedAt, totalMs: Date.now() - startedAt, found: false });
+      if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { trace, phase, durationMs: Date.now() - phaseStartedAt, totalMs: Date.now() - startedAt, found: false });
       return NextResponse.json({ found: false });
     }
     const docket = docketResult.data;
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
     const timed = async <T,>(name: string, task: PromiseLike<T>): Promise<T> => {
       const began = Date.now();
       const result = await task;
-      if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { phase: name, durationMs: Date.now() - began });
+      if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { trace, phase: name, durationMs: Date.now() - began });
       return result;
     };
     const [labour, plant, progress, allocations] = await Promise.all([
@@ -132,10 +133,10 @@ export async function GET(request: Request) {
         worker_names: Array.isArray(row.worker_names) ? row.worker_names.map(clean).filter(Boolean) : [], reason: clean(row.reason),
       })),
     };
-    if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { phase: "total", durationMs: Date.now() - startedAt, labourRows: copy.labourRows.length, plantRows: copy.plantRows.length, progressRows: progressRows.length });
+    if (process.env.NODE_ENV === "development") console.info("[docket-copy]", { trace, phase: "total", durationMs: Date.now() - startedAt, labourRows: copy.labourRows.length, plantRows: copy.plantRows.length, progressRows: progressRows.length });
     return NextResponse.json({ found: true, previousDocketId: id, previousDocketDate: docket.docket_date, copy });
   } catch (error) {
-    if (process.env.NODE_ENV === "development") console.info("[docket-copy] failed", { phase, phaseDurationMs: Date.now() - phaseStartedAt, totalMs: Date.now() - startedAt, errorType: error instanceof Error ? error.name : "unknown" });
+    if (process.env.NODE_ENV === "development") console.info("[docket-copy] failed", { trace, phase, phaseDurationMs: Date.now() - phaseStartedAt, totalMs: Date.now() - startedAt, errorType: error instanceof Error ? error.name : "unknown" });
     const apiError = mobileDocketApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });
   }

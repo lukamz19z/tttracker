@@ -82,11 +82,22 @@ type AccessMePayload = {
 
 type BootstrapPayload = {
   error?: string;
+  roles?: DynamicRole[];
+  projects?: { id: string }[];
+  permissions?: string[];
   navigation?: DynamicNavigationItem[];
   app?: AppConfig;
   capabilities?: MobileCapabilities;
   approvalCounts?: ApprovalCounts;
 };
+
+function accessFromBootstrap(bootstrap: BootstrapPayload): AccessMePayload {
+  return {
+    roles: bootstrap.roles ?? [],
+    project_ids: (bootstrap.projects ?? []).map((project) => project.id),
+    permissions: { mobile: bootstrap.permissions ?? [] },
+  };
+}
 
 type AccessCache = {
   savedAt: string;
@@ -289,21 +300,12 @@ export function AccessProvider({ children }: PropsWithChildren) {
     }
     if (mountedRef.current) setError(null);
     const startedAt = Date.now();
-    if (__DEV__) console.debug("TTTracker access refresh", { url: apiUrl("/api/access/me") });
+    if (__DEV__) console.debug("TTTracker access refresh", { url: apiUrl("/api/mobile/bootstrap") });
 
     const requestedUserId = userId;
 
     try {
-      /*
-       * These requests do not depend on each other, so run them together.
-       * This removes an avoidable serial round trip during startup.
-       */
-      const [accessResult, bootstrapResult] = await Promise.allSettled([
-        apiJson<AccessMePayload>("/api/access/me", { timeoutMs: 15_000 }),
-        apiJson<BootstrapPayload>("/api/mobile/bootstrap", {
-          timeoutMs: 15_000,
-        }),
-      ]);
+      const bootstrap = await apiJson<BootstrapPayload>("/api/mobile/bootstrap", { timeoutMs: 15_000 });
 
       if (
         !mountedRef.current ||
@@ -312,31 +314,17 @@ export function AccessProvider({ children }: PropsWithChildren) {
         return;
       }
 
-      if (accessResult.status === "rejected") {
-        throw accessResult.reason;
-      }
-
-      applyAccess(accessResult.value);
-
-      if (bootstrapResult.status === "fulfilled") {
-        applyBootstrap(bootstrapResult.value);
-      } else {
-        console.warn(
-          "TTTracker /api/mobile/bootstrap failed; keeping cached mobile config:",
-          bootstrapResult.reason,
-        );
-      }
+      const access = accessFromBootstrap(bootstrap);
+      applyAccess(access);
+      applyBootstrap(bootstrap);
 
       setStale(false);
       lastServerRefreshRef.current = Date.now();
 
       await writeAccessCache(requestedUserId, {
         savedAt: new Date().toISOString(),
-        access: accessResult.value,
-        bootstrap:
-          bootstrapResult.status === "fulfilled"
-            ? bootstrapResult.value
-            : latestBootstrapRef.current,
+        access,
+        bootstrap,
       });
     } catch (refreshError) {
       const message =

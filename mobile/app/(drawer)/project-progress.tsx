@@ -1,4 +1,5 @@
 import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -438,6 +439,7 @@ export default function ProjectProgressScreen() {
 
   const projectId =
     profile?.projectId ?? null;
+  const cacheKey = profile?.userId && projectId ? `tttracker:project-progress:core:${profile.userId}:${projectId}` : null;
 
   const [project, setProject] =
     useState<ProjectRow | null>(null);
@@ -507,6 +509,20 @@ export default function ProjectProgressScreen() {
         setErrorMessage(null);
 
         try {
+          if (!isRefresh && cacheKey) {
+            try {
+              const raw = await AsyncStorage.getItem(cacheKey);
+              if (raw) {
+                const cached = JSON.parse(raw) as { project?: ProjectRow; towers?: Tower[]; dockets?: DocketRow[] };
+                if (cached.project?.id === projectId && Array.isArray(cached.towers) && Array.isArray(cached.dockets)) {
+                  setProject(cached.project);
+                  setTowers(cached.towers);
+                  setDockets(cached.dockets);
+                  setLoading(false);
+                }
+              }
+            } catch { /* A damaged cache does not block the live refresh. */ }
+          }
           const [
             projectResult,
             towersResult,
@@ -562,6 +578,13 @@ export default function ProjectProgressScreen() {
             (
               docketsResult.data ?? []
             ) as DocketRow[];
+
+          loadedTowers.sort((a, b) => getTowerDisplayName(a).localeCompare(getTowerDisplayName(b), undefined, { numeric: true, sensitivity: "base" }));
+          setProject(loadedProject);
+          setTowers(loadedTowers);
+          setDockets(loadedDockets);
+          setLoading(false);
+          if (cacheKey) void AsyncStorage.setItem(cacheKey, JSON.stringify({ project: loadedProject, towers: loadedTowers, dockets: loadedDockets })).catch(() => undefined);
 
           const towerIds =
             loadedTowers.map(
@@ -765,7 +788,7 @@ export default function ProjectProgressScreen() {
           setRefreshing(false);
         }
       },
-      [projectId],
+      [cacheKey, projectId],
     );
 
   useEffect(() => {

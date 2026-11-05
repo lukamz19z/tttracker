@@ -7,7 +7,7 @@
 // Nothing in the current Daily Dockets screen imports this file yet, so adding
 // Batch 1 does not change the existing app behaviour.
 
-import { apiFetch } from "@/lib/api/client";
+import { apiFetch, apiRequestTrace } from "@/lib/api/client";
 import { classifyBackendFailure } from "../../../lib/backend-resilience";
 import type {
   DailyDocketDraft,
@@ -25,6 +25,7 @@ async function readJson<T>(
   response: Response,
   fallback: string,
 ): Promise<T> {
+  const parseStartedAt = Date.now();
   const raw = await response.text();
 
   let payload: unknown = null;
@@ -58,6 +59,7 @@ async function readJson<T>(
     );
   }
 
+  if (typeof __DEV__ !== "undefined" && __DEV__) console.debug("TTTracker mobile JSON parsed", { trace: apiRequestTrace(response), path: response.url ? new URL(response.url).pathname : null, durationMs: Date.now() - parseStartedAt });
   return (payload ?? {}) as T;
 }
 

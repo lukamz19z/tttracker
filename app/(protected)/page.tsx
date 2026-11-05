@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useAccess } from "@/components/access/access-provider";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -37,19 +38,6 @@ type AccessRole = {
   description?: string | null;
   grants_all?: boolean;
   is_system?: boolean;
-};
-
-type AccessMePayload = {
-  error?: string;
-  roles?: AccessRole[];
-  projects?: Array<{ project_id?: string; id?: string }>;
-  project_ids?: string[];
-  permissions?: {
-    all?: string[];
-    web?: string[];
-    mobile?: string[];
-    sharepoint?: string[];
-  };
 };
 
 type ModuleCard = {
@@ -269,6 +257,7 @@ function accessRoleLabel(roles: AccessRole[]): string {
 export default function ProjectsPage() {
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const router = useRouter();
+  const { loading: accessLoading, roles: accessRoles, projectIds: accessProjectIds, webPermissions } = useAccess();
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [roles, setRoles] = useState<AccessRole[]>([]);
@@ -283,57 +272,16 @@ export default function ProjectsPage() {
     setAccessError(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
         router.push("/login");
         return;
       }
-
-      const response = await fetch("/api/access/me", {
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        cache: "no-store",
-      });
-
-      const payload = (await response.json()) as AccessMePayload;
-
-      if (!response.ok) {
-        throw new Error(payload.error || "Could not load your TTTracker access.");
-      }
-
-      const nextRoles = Array.isArray(payload.roles) ? payload.roles : [];
-      const allPermissions = Array.isArray(payload.permissions?.all)
-        ? payload.permissions?.all ?? []
-        : [];
-      const webPermissions = Array.isArray(payload.permissions?.web)
-        ? payload.permissions?.web ?? []
-        : allPermissions.filter(
-            (code) =>
-              !String(code).startsWith("mobile.") &&
-              !String(code).startsWith("sharepoint."),
-          );
-
-      const nextProjectIds = Array.from(
-        new Set(
-          (
-            payload.project_ids ??
-            payload.projects?.map(
-              (project) => project.project_id ?? project.id ?? "",
-            ) ??
-            []
-          )
-            .map(String)
-            .map((value) => value.trim())
-            .filter(Boolean),
-        ),
-      );
+      const nextRoles = accessRoles;
+      const nextProjectIds = accessProjectIds;
 
       setRoles(nextRoles);
-      setPermissions(new Set(webPermissions.map(String)));
+      setPermissions(new Set(webPermissions));
       setProjectIds(nextProjectIds);
 
       if (nextProjectIds.length === 0) {
@@ -366,15 +314,16 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false);
     }
-  }, [router, supabase]);
+  }, [accessRoles, accessProjectIds, webPermissions, router, supabase]);
 
   useEffect(() => {
+    if (accessLoading) return;
     const timer = window.setTimeout(() => {
       void loadData();
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [loadData]);
+  }, [accessLoading, loadData]);
 
   async function refreshPage() {
     setRefreshing(true);

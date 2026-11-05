@@ -54,18 +54,13 @@ async function requireMaterialPermission(
   userId: string,
 ) {
   const { data, error } = await service
-    .from("effective_user_permissions")
-    .select("allowed")
-    .eq("user_id", userId)
-    .eq("code", "mobile.materials")
-    .maybeSingle();
+    .rpc("user_has_access", { p_user_id: userId, p_access_code: "mobile.materials" });
 
   if (error) {
     throw new Error(`Materials permission could not be verified: ${error.message}`);
   }
 
-  const permission = data as { allowed?: boolean | null } | null;
-  if (permission?.allowed === true) return;
+  if (data === true) return;
 
   const err = new Error("You do not have permission to use Materials.");
   (err as Error & { status?: number }).status = 403;

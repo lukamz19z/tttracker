@@ -57,6 +57,8 @@ export function createServiceClient(): AccessService {
 }
 
 export async function getRequestUser(request: NextRequest) {
+  const authStartedAt = Date.now();
+  const trace = request.headers.get("x-tttracker-trace");
   const token = (request.headers.get("authorization") ?? "")
     .replace(/^Bearer\s+/i, "")
     .trim();
@@ -73,6 +75,7 @@ export async function getRequestUser(request: NextRequest) {
   );
 
   const { data, error } = await authClient.auth.getUser(token);
+  if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, phase: "server_auth", durationMs: Date.now() - authStartedAt });
   if (error || !data.user) throw new Error("You must be logged in.");
 
   return data.user;
@@ -83,16 +86,13 @@ export async function userHasAccess(
   userId: string,
   accessCode: string,
 ) {
+  const startedAt = Date.now();
   const { data, error } = await service
-    .from("effective_user_permissions")
-    .select("allowed")
-    .eq("user_id", userId)
-    .eq("code", accessCode)
-    .maybeSingle();
+    .rpc("user_has_access", { p_user_id: userId, p_access_code: accessCode });
+  if (process.env.NODE_ENV === "development") console.info("[mobile-trace]", { phase: "permission", code: accessCode, durationMs: Date.now() - startedAt });
 
   if (error) throw new Error(error.message);
-  if (data?.allowed === true) return true;
-  return hasV1FullAccess(service, userId);
+  return data === true;
 }
 
 export async function requireAccess(
