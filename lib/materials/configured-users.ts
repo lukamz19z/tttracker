@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveProjectUserLabels, type ProjectUserLabel } from "@/lib/materials/project-users";
 
-/** The project's explicitly configured picker list, shared by Assign To and Also Notify. */
+/** The project's explicitly configured Materials notification-user picker list. */
 export async function configuredMaterialUsers(service: SupabaseClient, projectId: string): Promise<ProjectUserLabel[]> {
   const [{ data: members, error: memberError }, { data: configured, error: configuredError }] = await Promise.all([
     service.from("project_access").select("user_id").eq("project_id", projectId),

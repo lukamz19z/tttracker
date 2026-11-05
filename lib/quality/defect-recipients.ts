@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export function cleanDefectRecipientIds(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value.map(item => String(item ?? "").trim()).filter(Boolean))].slice(0, 20);
+  return [...new Set(value.map(item => String(item ?? "").trim()).filter(Boolean))];
 }
 
 export async function assertProjectDefectRecipients(service: SupabaseClient, projectId: string, ids: string[], grandfatherIds: string[] = []) {

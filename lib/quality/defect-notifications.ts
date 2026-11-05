@@ -6,6 +6,7 @@ import {
 } from "@/lib/email/daily-dockets";
 import { filterAppNotificationUserIds } from "@/lib/notifications/preferences";
 import { defectRequiredByDisplay } from "@/lib/quality/defect-dates";
+import { mergeDefectRecipientIds } from "@/lib/quality/defect-recipient-channels";
 
 export type DefectNotificationKind =
   | "created"
@@ -223,21 +224,14 @@ export async function notifyDefectEvent({
     });
   }
 
-  // The assigned person and explicitly selected additional recipients receive
-  // direct visibility even when they are not general project recipients.
-  if (defect.assigned_to_user_id) {
-    channels.set(defect.assigned_to_user_id, {
-      // In-app and push are direct assignment channels; email follows the
-      // project's configured email preference for this user/event.
-      email: true,
-      inApp: true,
-      push: true,
-    });
-  }
-
-  for (const userId of defect.notify_user_ids || []) {
-    if (!clean(userId)) continue;
-    channels.set(userId, { email: true, inApp: true, push: true });
+  // Notify is an explicit instruction, independent of automatic preferences.
+  // Defect Raised uses only Notify. Keep the existing owner visibility on follow-up events.
+  const explicitIds = new Set((defect.notify_user_ids || []).map(clean).filter(Boolean));
+  const recipientIds = mergeDefectRecipientIds(channels.keys(), [...explicitIds], defect.assigned_to_user_id, kind);
+  for (const userId of recipientIds) {
+    if (!channels.has(userId) || explicitIds.has(userId) || (kind !== "created" && kind !== "critical" && userId === defect.assigned_to_user_id)) {
+      channels.set(userId, { email: true, inApp: true, push: true });
+    }
   }
 
   if (actorUserId) {
@@ -246,7 +240,7 @@ export async function notifyDefectEvent({
 
   const category = eventType(kind);
   const actionRoute = `/project/${defect.project_id}/tower/${defect.tower_id}/defects?defectId=${encodeURIComponent(defect.id)}`;
-  const explicitIds = new Set([clean(defect.assigned_to_user_id), ...(defect.notify_user_ids || []).map(clean)].filter(Boolean));
+  if (kind !== "created" && kind !== "critical" && defect.assigned_to_user_id) explicitIds.add(clean(defect.assigned_to_user_id));
   const appEligible = new Set([
     ...await filterAppNotificationUserIds(service, [...channels.keys()], category, actionRoute),
     ...explicitIds,
@@ -307,7 +301,7 @@ export async function notifyDefectEvent({
       user_id: recipient.userId,
       event_type: eventType(kind),
       title,
-      message: ["assigned","created","critical"].includes(kind) && recipient.userId === defect.assigned_to_user_id
+      message: kind === "assigned" && recipient.userId === defect.assigned_to_user_id
         ? `${message} · Assigned to you by ${actorLabel}`
         : message,
       severity,
@@ -430,7 +424,7 @@ export async function notifyDefectEvent({
         headers: { "Content-Type": "application/json", Accept: "application/json", "Accept-Encoding": "gzip, deflate" },
         body: JSON.stringify(tokens.map(([to, userId]) => ({
           to, sound: "default", title,
-          body: `${message}${["assigned","created","critical"].includes(kind) && userId === defect.assigned_to_user_id ? ` · Assigned to you by ${actorLabel}` : ""}`,
+          body: `${message}${kind === "assigned" && userId === defect.assigned_to_user_id ? ` · Assigned to you by ${actorLabel}` : ""}`,
           data: { action_route: "/defects", action_params: { defect_id: defect.id, project_id: defect.project_id, tower_id: defect.tower_id }, defect_id: defect.id, project_id: defect.project_id, tower_id: defect.tower_id },
         }))),
       });

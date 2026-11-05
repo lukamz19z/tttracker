@@ -37,6 +37,7 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 import TowerHeader from "@/components/towers/TowerHeader";
 import { MissingMaterialCanonicalPanel } from "@/components/materials/MissingMaterialCanonicalPanel";
 import { ReportMissingMaterialForm } from "@/components/materials/ReportMissingMaterialForm";
+import { remainingMaterialIssueQuantity } from "@/lib/materials/issue-quantity";
 
 
 type BundleCheckStatus = "not_checked" | "arrived" | "partial" | "missing" | "issue" | "transferred";
@@ -874,7 +875,7 @@ function buildMissingIssues(data: MaterialsData): MissingIssueRow[] {
           (sum, receipt) => sum + Math.max(safeNumber(receipt.item.quantity, 0), 0),
           0,
         );
-        const remainingQty = Math.max(originalQty - deliveredQty, 0);
+        const remainingQty = remainingMaterialIssueQuantity(event.issue_status, originalQty, deliveredQty);
         const status: MissingIssueStatus = event.issue_status === "cancelled" ? "cancelled" : event.issue_status === "resolved" ? "resolved" :
           remainingQty <= 0 ? "resolved" : deliveredQty > 0 ? "partial" : "open";
         const sortedReceipts = [...receipts].sort((a, b) =>
@@ -3975,6 +3976,11 @@ function IssuesWorkspace({
   const cancelled = missingIssues.filter((row) => row.status === "cancelled");
 
   const excessEvents = data.materialEvents.filter((event) => event.event_type === "excess");
+  const filteredExcessEvents = filter === "cancelled"
+    ? excessEvents.filter((event) => event.issue_status === "cancelled")
+    : filter === "excess"
+      ? excessEvents.filter((event) => event.issue_status !== "cancelled" && event.issue_status !== "resolved")
+      : excessEvents;
   const damagedEvents = data.materialEvents.filter((event) => event.event_type === "damaged_incorrect");
   const movementEvents = data.materialEvents.filter((event) =>
     event.event_type === "taken_from_another_tower" || event.event_type === "sent_to_another_tower",
@@ -4027,7 +4033,7 @@ function IssuesWorkspace({
         <IssueMetric label="Part Delivered" value={partial.length} tone="amber" />
         <IssueMetric label="Resolved" value={resolved.length} tone="green" />
         <IssueMetric label="Qty Remaining" value={outstandingQty} tone="red" />
-        <IssueMetric label="Excess" value={excessEvents.reduce((sum, event) => sum + event.items.length, 0) + overReceived.length} tone="blue" />
+        <IssueMetric label="Excess" value={excessEvents.filter(event=>event.issue_status!=="cancelled"&&event.issue_status!=="resolved").reduce((sum, event) => sum + event.items.length, 0) + overReceived.length} tone="blue" />
         <IssueMetric label="Damaged / Incorrect" value={damagedEvents.reduce((sum, event) => sum + event.items.length, 0)} />
         <IssueMetric label="Movements" value={movementEvents.reduce((sum, event) => sum + event.items.length, 0) + transferMovements.length} />
       </div>
@@ -4171,7 +4177,7 @@ function IssuesWorkspace({
                             </div>
                           )}
                         </div>
-                        {row.item.issue_key ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={row.issueKey} status={row.status} receipts={row.receipts.map(({event})=>({id:event.id,occurred_at:event.occurred_at,notes:event.notes}))}/> : null}
+                        {row.item.issue_key ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={row.issueKey} status={row.status} receipts={row.receipts.map(({event})=>({id:event.id,occurred_at:event.occurred_at,notes:event.notes}))} onChanged={data.refresh}/> : null}
                       </div>
                     )}
                   </div>
@@ -4182,15 +4188,15 @@ function IssuesWorkspace({
         </section>
       )}
 
-      {(filter === "all" || filter === "excess") && (
+      {(filter === "all" || filter === "excess" || filter === "cancelled") && (
         <section className="border-t border-slate-200 pt-4">
           <h3 className="font-black text-slate-950">Excess material</h3>
           <div className="mt-2 space-y-2">
-            {excessEvents.length === 0 && overReceived.length === 0 ? (
+            {filteredExcessEvents.length === 0 && (filter === "cancelled" || overReceived.length === 0) ? (
               <IssueEmpty text="No excess material is currently recorded." />
             ) : (
               <>
-                {excessEvents.map((event) => {
+                {filteredExcessEvents.map((event) => {
                   const issueKey = event.items[0]?.issue_key || "";
                   const collections = data.materialEvents
                     .filter((row) => row.event_type === "excess_collected")
@@ -4199,10 +4205,10 @@ function IssuesWorkspace({
                   return <div id={`material-issue-${issueKey}`} key={event.id}>
                     <MaterialEventCard event={event} data={data} tone="blue" />
                     <ExcessCollectionControl event={event} data={data} />
-                    {issueKey ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={issueKey} status={event.issue_status || "available"} receipts={collections} /> : null}
+                    {issueKey ? <MissingMaterialCanonicalPanel projectId={projectId} towerId={towerId} issueKey={issueKey} status={event.issue_status || "available"} receipts={collections} onChanged={data.refresh} /> : null}
                   </div>;
                 })}
-                {overReceived.map(({ bundle, received, excess }) => (
+                {(filter === "cancelled" ? [] : overReceived).map(({ bundle, received, excess }) => (
                   <div key={bundleUiKey(bundle)} className="rounded-2xl border border-blue-200 bg-blue-50/50 p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -7529,7 +7535,7 @@ export default function MaterialsControlPage() {
   const partialMissing = missingIssues.filter((row) => row.status === "partial").length;
   const missingOutstandingQty = missingIssues.reduce((sum, row) => sum + row.remainingQty, 0);
   const excessCount =
-    data.excessEvents.reduce((sum, event) => sum + event.items.length, 0) +
+    data.excessEvents.filter(event=>event.issue_status!=="cancelled"&&event.issue_status!=="resolved").reduce((sum, event) => sum + event.items.length, 0) +
     data.bundles.filter((bundle) => data.receivedQty(bundle) > bundle.qty_required).length;
   const completed = data.bundles.filter((bundle) => data.deriveBundleStatus(bundle) === "arrived").length;
   const inTransitTransfers = data.transfers.filter((transfer) => transfer.status === "in_transit").length;

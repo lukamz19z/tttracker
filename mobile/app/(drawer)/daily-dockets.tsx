@@ -2,6 +2,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import * as Updates from "expo-updates";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   useCallback,
   useEffect,
@@ -26,6 +27,7 @@ import {
 import { PermissionScreen } from "@/components/common/PermissionScreen";
 import { DailyDocketEditorFoundation } from "@/components/dockets/DailyDocketEditorFoundation";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAccess } from "@/lib/access";
 import {
   getDailyDocketEditor,
   getDailyDocketSubmissionStatus,
@@ -41,6 +43,9 @@ import {
 import { formatDocketDate } from "@/lib/dockets/dates";
 import { reconcileDailyDocketSubmissionStatus } from "@/lib/dockets/submission-status";
 import { createClientUuid } from "@/lib/client-id";
+import { createBlankDailyDocketDraft } from "@/lib/dockets/constants";
+import { createLocalDailyDocketShell, mergeNewDailyDocketHydration } from "@/lib/dockets/local-editor-shell";
+import { MOBILE_DOCKET_DEFAULTS, recommendedDocketDate } from "../../../lib/dockets/mobile-defaults";
 import {
   calculateLabourTotals,
   toNumber,
@@ -50,14 +55,6 @@ import type {
   DailyDocketDraft,
   DailyDocketEditorPayload,
 } from "@/types/daily-dockets";
-
-type ProfileRecord = {
-  projectId?: string | null;
-  projectName?: string | null;
-  projectNumber?: string | null;
-  full_name?: string | null;
-  email?: string | null;
-};
 
 type TowerRow = {
   id: string;
@@ -86,6 +83,18 @@ type DocketListRow = {
   incident_type: string | null;
   created_at?: string | null;
 };
+
+type DocketListCache = {
+  projectId: string;
+  towers: TowerRow[];
+  dockets: DocketListRow[];
+};
+
+const DOCKET_LIST_CACHE_PREFIX = "tttracker:daily-dockets:list:v1:";
+
+function docketListCacheKey(userId: string, projectId: string) {
+  return `${DOCKET_LIST_CACHE_PREFIX}${userId}:${projectId}`;
+}
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -310,8 +319,9 @@ export default function DailyDocketScreen() {
   const routeDocketId = clean(firstParam(routeParams.docketId));
   const routeSource = clean(firstParam(routeParams.source));
 
-  const { profile } = useAuth();
-  const userProfile = profile as unknown as ProfileRecord | null;
+  const { profile, session, status: authStatus } = useAuth();
+  const { loading: accessLoading, can: canAccess } = useAccess();
+  const userProfile = profile;
 
   const projectId =
     routeProjectId || clean(userProfile?.projectId);
@@ -328,9 +338,11 @@ export default function DailyDocketScreen() {
   const [search, setSearch] = useState("");
 
   const [loading, setLoading] = useState(true);
+  const [listRefreshError, setListRefreshError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [editorLoading, setEditorLoading] = useState(false);
   const [editorSupplementaryLoading, setEditorSupplementaryLoading] = useState(false);
+  const [editorHydrationError, setEditorHydrationError] = useState("");
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
@@ -340,11 +352,17 @@ export default function DailyDocketScreen() {
   const [editorPayload, setEditorPayload] =
     useState<DailyDocketEditorPayload | null>(null);
   const [draft, setDraft] = useState<DailyDocketDraft | null>(null);
+  const draftRef = useRef<DailyDocketDraft | null>(null);
+  const editorPayloadRef = useRef<DailyDocketEditorPayload | null>(null);
+  const editorHydrationCache = useRef(new Map<string, DailyDocketEditorPayload>());
+  const editorEditedFields = useRef<Set<keyof DailyDocketDraft>>(new Set());
   const [step, setStep] = useState<DailyDocketStep>("setup");
 
   const directRouteHandled = useRef(false);
   const editorOpenInFlight = useRef(false);
   const editorOpenGeneration = useRef(0);
+  const listGeneration = useRef(0);
+  const listRequest = useRef<{ projectId: string; promise: Promise<void> } | null>(null);
 
   const loadList = useCallback(
     async (silent = false) => {
@@ -355,60 +373,116 @@ export default function DailyDocketScreen() {
         return;
       }
 
-      if (!silent) setLoading(true);
+      // Wait only for local session restoration. This avoids unauthenticated
+      // startup reads and does not wait for remote user verification.
+      if (authStatus === "initialising") return;
 
-      try {
-        const [towerResult, docketResult] = await Promise.all([
-          supabase
-            .from("towers")
-            .select(
-              "id,project_id,name,line,status,progress,extra_data",
-            )
-            .eq("project_id", projectId),
-          supabase
-            .from("tower_daily_dockets")
-            .select(
-              "id,project_id,tower_id,docket_date,crew,leading_hand,approval_status,approval_revision,assembly_percent,erection_percent,raw_manhours,production_manhours,incident_occurred,incident_type,created_at",
-            )
-            .eq("project_id", projectId)
-            .is("deleted_at", null)
-            .order("docket_date", { ascending: false }),
-        ]);
-
-        if (towerResult.error) throw towerResult.error;
-        if (docketResult.error) throw docketResult.error;
-
-        const nextTowers = ((towerResult.data ?? []) as TowerRow[]).sort(
-          naturalTowerSort,
-        );
-
-        setTowers(nextTowers);
-        setDockets((docketResult.data ?? []) as DocketListRow[]);
-
-        setSelectedTowerId((current) => {
-          if (
-            current &&
-            nextTowers.some((tower) => tower.id === current)
-          ) {
-            return current;
-          }
-
-          if (
-            routeTowerId &&
-            nextTowers.some((tower) => tower.id === routeTowerId)
-          ) {
-            return routeTowerId;
-          }
-
-          return nextTowers[0]?.id || "";
-        });
-      } catch (error) {
-        Alert.alert("Could not load Daily Dockets", errorMessage(error));
-      } finally {
-        if (!silent) setLoading(false);
+      if (listRequest.current?.projectId === projectId) {
+        await listRequest.current.promise;
+        return;
       }
+
+      const generation = ++listGeneration.current;
+      const userId = clean(session?.user.id);
+      const task = (async () => {
+        const startedAt = Date.now();
+        let hasCache = false;
+        if (!silent) setLoading(true);
+        setListRefreshError("");
+        if (__DEV__) console.debug("[dockets-list] phase=auth_access", { sessionRestored: true, authenticated: authStatus === "signed_in", serverAccessCheckRequiredToPaint: false });
+
+        const applyList = (nextTowers: TowerRow[], nextDockets: DocketListRow[]) => {
+          if (generation !== listGeneration.current) return;
+          setTowers(nextTowers);
+          setDockets(nextDockets);
+          setSelectedTowerId((current) => {
+            if (current && nextTowers.some((tower) => tower.id === current)) return current;
+            if (routeTowerId && nextTowers.some((tower) => tower.id === routeTowerId)) return routeTowerId;
+            return nextTowers[0]?.id || "";
+          });
+        };
+
+        // Cached list and tower metadata make the screen usable before network reads.
+        if (userId) {
+          const cacheStartedAt = Date.now();
+          try {
+            const raw = await AsyncStorage.getItem(docketListCacheKey(userId, projectId));
+            if (generation !== listGeneration.current) return;
+            if (raw) {
+              const cached = JSON.parse(raw) as DocketListCache;
+              if (cached.projectId === projectId && Array.isArray(cached.towers) && Array.isArray(cached.dockets)) {
+                applyList(cached.towers, cached.dockets);
+                hasCache = true;
+              }
+            }
+            // Reuse tower/progress cache if this is the first docket-list visit on this device.
+            if (!hasCache) {
+              const progressRaw = await AsyncStorage.getItem(`tttracker:tower-progress:${projectId}`);
+              if (generation !== listGeneration.current) return;
+              if (progressRaw) {
+                const progressCache = JSON.parse(progressRaw) as { towers?: TowerRow[] };
+                if (Array.isArray(progressCache.towers)) {
+                  // Progress cache supplies tower metadata only. Its compact
+                  // docket rows omit list fields, so don't render them as full dockets.
+                  applyList(progressCache.towers, []);
+                  hasCache = true;
+                }
+              }
+            }
+          } catch (error) {
+            if (__DEV__) console.debug("[dockets-list] cache-read-failed", { durationMs: Date.now() - cacheStartedAt, category: error instanceof Error ? error.name : "unknown" });
+          } finally {
+            if (__DEV__) console.debug("[dockets-list] cache", { durationMs: Date.now() - cacheStartedAt, hit: hasCache });
+            if (!silent && generation === listGeneration.current) setLoading(false);
+          }
+        } else if (!silent && generation === listGeneration.current) {
+          setLoading(false);
+        }
+
+        const queryStartedAt = Date.now();
+        try {
+          const towerQueryStartedAt = Date.now();
+          const docketQueryStartedAt = Date.now();
+          const [towerResult, docketResult] = await Promise.all([
+            supabase.from("towers").select("id,project_id,name,line,status,progress,extra_data").eq("project_id", projectId).then((result) => {
+              if (__DEV__) console.debug("[dockets-list] phase=tower_query", { durationMs: Date.now() - towerQueryStartedAt, status: result.error ? "error" : "success" });
+              return result;
+            }),
+            supabase.from("tower_daily_dockets").select("id,project_id,tower_id,docket_date,crew,leading_hand,approval_status,approval_revision,assembly_percent,erection_percent,raw_manhours,production_manhours,incident_occurred,incident_type,created_at").eq("project_id", projectId).is("deleted_at", null).order("docket_date", { ascending: false }).then((result) => {
+              if (__DEV__) console.debug("[dockets-list] phase=docket_query", { durationMs: Date.now() - docketQueryStartedAt, status: result.error ? "error" : "success" });
+              return result;
+            }),
+          ]);
+          if (towerResult.error) throw towerResult.error;
+          if (docketResult.error) throw docketResult.error;
+          if (generation !== listGeneration.current) return;
+
+          const nextTowers = ((towerResult.data ?? []) as TowerRow[]).sort(naturalTowerSort);
+          const nextDockets = (docketResult.data ?? []) as DocketListRow[];
+          applyList(nextTowers, nextDockets);
+          if (userId) {
+            void AsyncStorage.setItem(docketListCacheKey(userId, projectId), JSON.stringify({ projectId, towers: nextTowers, dockets: nextDockets } satisfies DocketListCache)).catch(() => undefined);
+          }
+          if (__DEV__) console.debug("[dockets-list] queries", { durationMs: Date.now() - queryStartedAt, towers: nextTowers.length, dockets: nextDockets.length, cacheHit: hasCache });
+          if (__DEV__) console.debug("[dockets-list] phase=response", { durationMs: Date.now() - startedAt, rows: nextDockets.length, cacheHit: hasCache, separateProgressQuery: false });
+        } catch (error) {
+          if (generation !== listGeneration.current) return;
+          setListRefreshError(hasCache ? "Showing saved Daily Dockets. Could not refresh." : "Daily Dockets are unavailable while offline. Retry when connected.");
+          if (__DEV__) console.warn("[dockets-list] refresh-failed", { durationMs: Date.now() - queryStartedAt, category: error instanceof Error ? error.name : "unknown", cacheHit: hasCache });
+        } finally {
+          if (generation === listGeneration.current) {
+            setLoading(false);
+            if (__DEV__) console.debug("[dockets-list] total", { durationMs: Date.now() - startedAt, cacheHit: hasCache });
+          }
+        }
+      })();
+      const tracked = task.finally(() => {
+        if (listRequest.current?.promise === tracked) listRequest.current = null;
+      });
+      listRequest.current = { projectId, promise: tracked };
+      await tracked;
     },
-    [projectId, routeTowerId],
+    [authStatus, projectId, routeTowerId, session?.user.id],
   );
 
   useEffect(() => {
@@ -416,7 +490,10 @@ export default function DailyDocketScreen() {
     editorOpenGeneration.current += 1;
     setSearch("");
     setEditorPayload(null);
+    editorPayloadRef.current = null;
     setDraft(null);
+    draftRef.current = null;
+    editorEditedFields.current.clear();
     void loadList();
   }, [loadList, projectId]);
 
@@ -432,20 +509,146 @@ export default function DailyDocketScreen() {
       docketId?: string;
       mode: "create" | "edit" | "view";
     }) => {
-      if (!projectId || !args.towerId || editorOpenInFlight.current || editorLoading) return;
+      if (!projectId || !args.towerId || editorOpenInFlight.current || editorLoading || draftRef.current || editorPayloadRef.current) return;
 
       editorOpenInFlight.current = true;
       const generation = ++editorOpenGeneration.current;
+
+      if (args.mode === "create" && !args.docketId) {
+        const startedAt = Date.now();
+        try {
+          if (authStatus === "signed_out") throw new Error("Sign in to create a Daily Docket.");
+          const userId = clean(userProfile?.userId) || clean(session?.user.id);
+          if (!userId) throw new Error("Your signed-in profile is still loading. Try again in a moment.");
+          const tower = towers.find((row) => row.id === args.towerId);
+          if (!tower) throw new Error("Select a loaded tower before creating a Daily Docket.");
+
+          const today = localDate();
+          const previousDate = dockets
+            .filter((row) => row.tower_id === args.towerId && clean(row.docket_date) && clean(row.docket_date) <= today)
+            .map((row) => clean(row.docket_date))
+            .sort()
+            .at(-1) || null;
+          const docketDate = recommendedDocketDate(previousDate, today);
+          const identityName = clean(userProfile?.fullName) || clean(session?.user.user_metadata?.full_name) || clean(session?.user.email).split("@")[0] || "User";
+          const identityEmail = clean(userProfile?.email) || clean(session?.user.email);
+          const identity = {
+            userId,
+            employeeId: userProfile?.employeeId || null,
+            name: identityName,
+            email: identityEmail,
+            display: identityEmail ? `${identityName} · ${identityEmail}` : identityName,
+          };
+          const towerOption = {
+            id: tower.id,
+            project_id: tower.project_id,
+            name: towerName(tower),
+            line: tower.line,
+            status: tower.status,
+            progress: tower.progress,
+            has_body_extension: typeof tower.extra_data?.has_body_extension === "boolean" ? tower.extra_data.has_body_extension : true,
+          };
+          const localShell = createLocalDailyDocketShell({
+            projectId,
+            projectName,
+            projectNumber: projectNumber || null,
+            tower: towerOption,
+            docketDate,
+            docketId: createClientUuid(),
+            identity,
+            defaults: MOBILE_DOCKET_DEFAULTS,
+            createBlankDraft: createBlankDailyDocketDraft,
+          });
+          const cachedPayload = editorHydrationCache.current.get(projectId);
+          const localTowers = towers.map((row) => ({
+            id: row.id,
+            project_id: row.project_id,
+            name: towerName(row),
+            line: row.line,
+            status: row.status,
+            progress: row.progress,
+            has_body_extension: typeof row.extra_data?.has_body_extension === "boolean" ? row.extra_data.has_body_extension : true,
+          }));
+          const localPayload: DailyDocketEditorPayload = cachedPayload ? {
+            ...cachedPayload,
+            ...localShell,
+            towers: localTowers,
+            crews: cachedPayload.crews,
+            employees: cachedPayload.employees,
+            productivityTowers: cachedPayload.productivityTowers,
+            towerProgress: cachedPayload.towerProgress,
+            defectIssueTypes: cachedPayload.defectIssueTypes,
+            defectAssignees: cachedPayload.defectAssignees,
+            towerDefects: cachedPayload.towerDefects,
+            outstandingMaterials: cachedPayload.outstandingMaterials,
+            activeBundleTransfers: cachedPayload.activeBundleTransfers,
+            bundleReplacementStatus: cachedPayload.bundleReplacementStatus,
+          } : { ...localShell, towers: localTowers };
+
+          // State construction and navigation happen before any network call.
+          editorEditedFields.current.clear();
+          draftRef.current = localPayload.draft;
+          editorPayloadRef.current = localPayload;
+          setEditorHydrationError("");
+          setEditorPayload(localPayload);
+          setDraft(localPayload.draft);
+          setStep("setup");
+          setEditorLoading(false);
+          setEditorSupplementaryLoading(true);
+          editorOpenInFlight.current = false;
+
+          if (__DEV__) console.info("[docket-open] local-shell", { runtimeVersion: Updates.runtimeVersion, updateId: Updates.updateId, createdAt: Updates.createdAt?.toISOString() ?? null, elapsedMs: Date.now() - startedAt, towerCached: true, projectCached: Boolean(projectName), docketId: localPayload.draft.docketId });
+
+          // Start network hydration on the next frame, after the editor shell
+          // has had a chance to render.
+          requestAnimationFrame(() => {
+            if (generation !== editorOpenGeneration.current) return;
+            void getDailyDocketEditor({
+              projectId,
+              towerId: args.towerId,
+            }).then((hydrated) => {
+              if (generation !== editorOpenGeneration.current) return;
+              const currentDraft = draftRef.current;
+              const currentPayload = editorPayloadRef.current;
+              if (!currentDraft || !currentPayload) return;
+              const merged = mergeNewDailyDocketHydration({
+                currentPayload,
+                currentDraft,
+                hydrated,
+                editedFields: editorEditedFields.current,
+                expectedDocketId: localPayload.draft.docketId || "",
+              });
+              if (!merged) return;
+              draftRef.current = merged.draft;
+              editorPayloadRef.current = merged.payload;
+              editorHydrationCache.current.set(projectId, merged.payload);
+              setDraft(merged.draft);
+              setEditorPayload(merged.payload);
+              if (__DEV__) console.info("[docket-open] hydration", { elapsedMs: Date.now() - startedAt, crews: hydrated.crews.length, personnel: hydrated.employees.length, towers: hydrated.towers.length });
+            }).catch((error) => {
+              if (generation !== editorOpenGeneration.current) return;
+              setEditorHydrationError("Some docket setup data could not be refreshed. Your blank draft is still open; you can continue entering information.");
+              if (__DEV__) console.info("[docket-open] hydration-unavailable", { elapsedMs: Date.now() - startedAt, category: error instanceof Error ? error.name : "unknown" });
+            }).finally(() => {
+              if (generation === editorOpenGeneration.current) setEditorSupplementaryLoading(false);
+            });
+          });
+        } catch (error) {
+          if (generation === editorOpenGeneration.current) {
+            Alert.alert("Daily Docket could not be opened", errorMessage(error));
+          }
+          editorOpenInFlight.current = false;
+        }
+        return;
+      }
+
       setEditorLoading(true);
 
       try {
-        const startedAt = Date.now();
-        const isNewDraft = args.mode === "create" && !args.docketId;
         const payload = await getDailyDocketEditor({
           projectId,
           towerId: args.towerId,
           docketId: args.docketId || null,
-          ...(isNewDraft ? { bootstrap: "core" as const } : {}),
         });
 
         if (generation !== editorOpenGeneration.current) return;
@@ -461,63 +664,13 @@ export default function DailyDocketScreen() {
             clean(payload.draft.bcRepUserId) || payload.identity.userId,
         };
 
+        editorPayloadRef.current = payload;
+        draftRef.current = nextDraft;
+        editorHydrationCache.current.set(projectId, { ...payload, draft: nextDraft });
+        editorEditedFields.current.clear();
         setEditorPayload(payload);
         setDraft(nextDraft);
         setStep("setup");
-
-        if (isNewDraft) {
-          if (__DEV__) {
-            console.info("[docket-open] bundle", {
-              runtimeVersion: Updates.runtimeVersion,
-              updateId: Updates.updateId,
-              createdAt: Updates.createdAt?.toISOString() ?? null,
-              elapsedMs: Date.now() - startedAt,
-            });
-          }
-
-          const initialDate = nextDraft.docketDate;
-          const initialProgressRows = JSON.stringify(nextDraft.sectionV2Rows);
-          setEditorSupplementaryLoading(true);
-          void getDailyDocketEditor({
-            projectId,
-            towerId: args.towerId,
-          }).then((enrichedPayload) => {
-            if (generation !== editorOpenGeneration.current) return;
-            if (__DEV__) {
-              console.info("[docket-open] supplementary", {
-                elapsedMs: Date.now() - startedAt,
-                crews: enrichedPayload.crews.length,
-                personnel: enrichedPayload.employees.length,
-                towers: enrichedPayload.towers.length,
-              });
-            }
-            setEditorPayload((current) => current ? { ...current, ...enrichedPayload } : current);
-            setDraft((current) => {
-              if (!current || current.docketId || current.towerId !== args.towerId) return current;
-              const patch: Partial<DailyDocketDraft> = {
-                outstandingMaterials: enrichedPayload.draft.outstandingMaterials,
-                activeBundleTransfers: enrichedPayload.draft.activeBundleTransfers,
-                bundleReplacementStatus: enrichedPayload.draft.bundleReplacementStatus,
-              };
-              if (current.docketDate === initialDate && enrichedPayload.draft.docketDate !== initialDate) {
-                patch.docketDate = enrichedPayload.draft.docketDate;
-              }
-              if (JSON.stringify(current.sectionV2Rows) === initialProgressRows) {
-                patch.sectionV2Rows = enrichedPayload.draft.sectionV2Rows;
-              }
-              return { ...current, ...patch };
-            });
-          }).catch((error) => {
-            if (__DEV__) {
-              console.info("[docket-open] supplementary-unavailable", {
-                elapsedMs: Date.now() - startedAt,
-                category: error instanceof Error ? error.name : "unknown",
-              });
-            }
-          }).finally(() => {
-            if (generation === editorOpenGeneration.current) setEditorSupplementaryLoading(false);
-          });
-        }
       } catch (error) {
         if (generation === editorOpenGeneration.current) {
           Alert.alert(
@@ -530,8 +683,19 @@ export default function DailyDocketScreen() {
         editorOpenInFlight.current = false;
       }
     },
-    [editorLoading, projectId],
+    [authStatus, dockets, editorLoading, projectId, projectName, projectNumber, session, towers, userProfile],
   );
+
+  const handleEditorDraftChange = useCallback((next: DailyDocketDraft) => {
+    const current = draftRef.current;
+    if (current && current.docketId === next.docketId) {
+      (Object.keys(next) as (keyof DailyDocketDraft)[]).forEach((field) => {
+        if (JSON.stringify(current[field]) !== JSON.stringify(next[field])) editorEditedFields.current.add(field);
+      });
+    }
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
 
   useEffect(() => {
     if (
@@ -652,12 +816,20 @@ export default function DailyDocketScreen() {
       const nextDraft: DailyDocketDraft = {
         ...payload.draft,
         mode: "create",
+        docketId: draft.docketId,
         bcRepName: payload.identity.name,
         bcRepEmail: payload.identity.email,
         bcRepUserId: payload.identity.userId,
       };
 
-      setEditorPayload(payload);
+      editorOpenGeneration.current += 1;
+      setEditorSupplementaryLoading(false);
+      setEditorHydrationError("");
+      const nextPayload = { ...payload, draft: nextDraft };
+      editorPayloadRef.current = nextPayload;
+      draftRef.current = nextDraft;
+      editorHydrationCache.current.set(projectId, nextPayload);
+      setEditorPayload(nextPayload);
       setDraft(nextDraft);
       setStep("setup");
 
@@ -702,6 +874,10 @@ export default function DailyDocketScreen() {
       // reopening the saved docket in Edit mode.
       setSelectedTowerId(draft.towerId);
       await loadList(true);
+      editorOpenGeneration.current += 1;
+      setEditorSupplementaryLoading(false);
+      editorPayloadRef.current = null;
+      draftRef.current = null;
       setEditorPayload(null);
       setDraft(null);
       setStep("setup");
@@ -820,6 +996,11 @@ export default function DailyDocketScreen() {
                 }
 
                 await loadList(true);
+                editorOpenGeneration.current += 1;
+                setEditorSupplementaryLoading(false);
+                editorPayloadRef.current = null;
+                draftRef.current = null;
+                setEditorHydrationError("");
                 setEditorPayload(null);
                 setDraft(null);
                 setStep("setup");
@@ -859,6 +1040,9 @@ export default function DailyDocketScreen() {
 
     editorOpenGeneration.current += 1;
     setEditorSupplementaryLoading(false);
+    setEditorHydrationError("");
+    editorPayloadRef.current = null;
+    draftRef.current = null;
     setEditorPayload(null);
     setDraft(null);
     setStep("setup");
@@ -885,23 +1069,36 @@ export default function DailyDocketScreen() {
       (draft.mode === "view" || isLockedStatus(draft.approvalStatus)),
   );
 
-  if (loading) {
+  // Access state is restored from cache on mobile. Let a cached-session user
+  // render the local docket shell while that cache/server refresh is pending;
+  // the editor and save APIs continue to enforce permission server-side.
+  if (!accessLoading && !canAccess("mobile.daily_dockets")) {
     return (
       <PermissionScreen permission="mobile.daily_dockets">
-        <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safe}>
-          <View style={styles.loading}>
-            <ActivityIndicator size="large" color="#2563eb" />
-            <Text style={styles.loadingText}>Loading Daily Dockets…</Text>
-          </View>
-        </SafeAreaView>
+        <View />
       </PermissionScreen>
     );
   }
 
+  if (loading) {
+    return (
+      <SafeAreaView edges={["left", "right", "bottom"]} style={styles.safe}>
+        <View style={styles.loading}>
+          <ActivityIndicator size="large" color="#2563eb" />
+          <Text style={styles.loadingText}>Loading saved Daily Dockets…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <PermissionScreen permission="mobile.daily_dockets">
       <SafeAreaView style={styles.safe}>
         <View style={styles.screen}>
+          {listRefreshError ? (
+            <Pressable onPress={() => void loadList(true)} style={{ marginBottom: 8 }}>
+              <Text style={{ color: "#9a3412", fontSize: 12 }}>{listRefreshError} Tap to retry.</Text>
+            </Pressable>
+          ) : null}
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={styles.eyebrow}>OPERATIONS</Text>
@@ -1237,11 +1434,16 @@ export default function DailyDocketScreen() {
                     <Text style={{ color: "#64748b", fontSize: 12 }}>Loading crew and project details…</Text>
                   </View>
                 ) : null}
+                {editorHydrationError ? (
+                  <View accessibilityRole="alert" style={{ marginHorizontal: 12, marginBottom: 8, borderRadius: 10, backgroundColor: "#fff7ed", padding: 10 }}>
+                    <Text style={{ color: "#9a3412", fontSize: 12 }}>{editorHydrationError}</Text>
+                  </View>
+                ) : null}
                 <DailyDocketEditorFoundation
                   payload={editorPayload}
                   draft={draft}
                   step={step}
-                  onChange={setDraft}
+                  onChange={handleEditorDraftChange}
                   onStepChange={setStep}
                   onCopyPrevious={copyPrevious}
                   copyingPrevious={copyingPrevious}
@@ -1358,7 +1560,6 @@ export default function DailyDocketScreen() {
           ) : null}
         </View>
       </SafeAreaView>
-    </PermissionScreen>
   );
 }
 

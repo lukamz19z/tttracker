@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { reconcileDailyDocketSubmissionStatus } from "../lib/dockets/submission-status.ts";
-import { createPortableId } from "../lib/portable-id.ts";
+import { createPortableId, createPortableUuid } from "../lib/portable-id.ts";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
@@ -30,7 +30,7 @@ test("submission uses a stable docket ID and reconciles ambiguous results throug
     read("app/api/mobile/daily-dockets/save/route.ts"),
   ]);
   assert.match(screen, /submissionInFlight\.current/);
-  assert.match(screen, /docketId: draft\.docketId \|\| createClientId\(\)/);
+  assert.match(screen, /docketId: draft\.docketId \|\| createClientUuid\(\)/);
   assert.match(screen, /submissionUncertainDocketId\.current === docketId/);
   assert.match(screen, /Checking submission status/);
   assert.match(screen, /couldn't confirm whether this docket was submitted/);
@@ -43,31 +43,102 @@ test("submission uses a stable docket ID and reconciles ambiguous results throug
   assert.match(saveRoute, /\.\.\.\(savedDocketId \? \{ id: savedDocketId \} : \{\}\)/);
 });
 
-test("mobile client IDs work with no browser crypto global and stay injectable for native runtimes", () => {
+test("pure JavaScript operational IDs work with no crypto global", () => {
   const originalCrypto = globalThis.crypto;
   try {
     Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
-    const generated = createPortableId(() => "6e1f42a4-c083-4dcf-9a7b-1ce853d89d43");
-    assert.equal(generated, "6e1f42a4-c083-4dcf-9a7b-1ce853d89d43");
+    const generated = createPortableId(() => 0.42, "test");
+    assert.match(generated, /^test_[a-z0-9]+_[a-z0-9]+_[a-z0-9]+$/);
   } finally {
     Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
   }
 });
 
-test("portable ID helper uses Web Crypto in browser and server runtimes", () => {
-  assert.match(createPortableId(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+test("10,000 pure JavaScript operational IDs have no collisions without crypto", () => {
+  const originalCrypto = globalThis.crypto;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    const ids = new Set(Array.from({ length: 10_000 }, () => createPortableId()));
+    assert.equal(ids.size, 10_000);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
+});
+
+test("canonical Daily Docket fallback ID stays UUID-shaped without crypto", () => {
+  const originalCrypto = globalThis.crypto;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    const id = createPortableUuid();
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
+});
+
+test("10,000 canonical UUID-shaped IDs have no collisions without crypto", () => {
+  const originalCrypto = globalThis.crypto;
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    const ids = new Set(Array.from({ length: 10_000 }, () => createPortableUuid()));
+    assert.equal(ids.size, 10_000);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
 });
 
 test("Materials offline queue uses the same React Native safe ID helper", async () => {
-  const [queue, materials, idHelper] = await Promise.all([
+  const [queue, materials, idHelper, materialMutations] = await Promise.all([
     read("mobile/lib/offline/db.ts"),
     read("mobile/lib/api/materials.ts"),
     read("mobile/lib/client-id.ts"),
+    read("mobile/lib/offline/materialsQueue.ts"),
   ]);
   assert.match(queue, /id: string = createClientId\(\)/);
   assert.doesNotMatch(queue, /crypto\.randomUUID/);
-  assert.match(idHelper, /Crypto\.randomUUID/);
+  assert.match(idHelper, /createPortableId\(Math\.random/);
+  assert.doesNotMatch(idHelper, /expo-crypto|crypto\./i);
+  assert.match(materialMutations, /return createClientId\("material"\)/);
   assert.match(materials, /clientMutationId/);
+});
+
+test("Materials mutation queue retains one operational ID across retries without crypto", async () => {
+  const source = await read("mobile/lib/offline/materialsQueue.ts");
+  const originalCrypto = globalThis.crypto;
+  const cache = new Map();
+  let generatedIds = 0;
+  const id = "material_test_1_random";
+  const mocks = {
+    "@/lib/offline/db": {
+      getCache: async (key) => ({ value: cache.get(key) || [] }),
+      setCache: async (key, value) => cache.set(key, value),
+    },
+    "@/lib/client-id": { createClientId: () => { generatedIds++; return id; } },
+  };
+  const exports = {};
+  const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  try {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+    new Function("require", "exports", compiled)((name) => {
+      assert.ok(name in mocks, `Unexpected Materials queue dependency: ${name}`);
+      return mocks[name];
+    }, exports);
+
+    const first = exports.makeReportMissingMutation({ projectId: "P", towerId: "T", itemName: "Bolt", quantity: 1 });
+    await exports.saveMaterialQueue("P", exports.mergeMaterialMutation(await exports.loadMaterialQueue("P"), first));
+    const retry = { ...first, attempts: 1, lastError: "temporary network failure" };
+    await exports.saveMaterialQueue("P", exports.mergeMaterialMutation(await exports.loadMaterialQueue("P"), retry));
+    const queued = await exports.loadMaterialQueue("P");
+
+    assert.equal(generatedIds, 1);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].id, id);
+    assert.equal(queued[0].clientMutationId, id);
+    assert.equal(queued[0].input.clientMutationId, id);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+  }
 });
 
 test("Quality offline revision creation uses the same safe stable local ID for its queue record", async () => {
@@ -88,7 +159,7 @@ test("Quality offline revision can queue and retry sync with global crypto undef
   const queue = new Map();
   const syncPayloads = [];
   let generatedIds = 0;
-  const id = "6e1f42a4-c083-4dcf-9a7b-1ce853d89d43";
+  const id = "fli-local_test_1_id";
   const mocks = {
     "@/lib/offline/db": {
       enqueue: async (kind, payload, queueId) => {
@@ -97,7 +168,7 @@ test("Quality offline revision can queue and retry sync with global crypto undef
       },
     },
     "@/lib/offline/files": { persistOfflineFile: async (uri) => uri, removeOfflineFile: async () => {} },
-    "@/lib/client-id": { createClientId: () => { generatedIds++; return createPortableId(() => id); } },
+    "@/lib/client-id": { createClientId: () => { generatedIds++; return id; } },
     "./quality-sync": { syncQualityQueueRecord: async ({ payload }) => syncPayloads.push(payload) },
   };
   const exports = {};

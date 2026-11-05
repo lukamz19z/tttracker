@@ -654,6 +654,16 @@ function blankDraft(args: {
 }
 
 export async function GET(request: Request) {
+  const requestStartedAt = Date.now();
+  let phaseStartedAt = requestStartedAt;
+  let currentPhase = "request_validation";
+  const logPhase = (phase: string) => {
+    if (process.env.NODE_ENV === "development") {
+      const durationMs = phase === "total" ? Date.now() - requestStartedAt : Date.now() - phaseStartedAt;
+      console.info(`[docket-open] phase=${phase} durationMs=${durationMs}`);
+    }
+    phaseStartedAt = Date.now();
+  };
   try {
     const url = new URL(request.url);
     const today = localCalendarDate(new Date(), request.headers.get("X-TTTracker-Timezone"));
@@ -672,6 +682,8 @@ export async function GET(request: Request) {
       today;
     const copyPrevious =
       url.searchParams.get("copyPrevious") === "1";
+    const coreBootstrap =
+      url.searchParams.get("bootstrap") === "core" && !docketId && !copyPrevious;
 
     if (!projectId || !towerId) {
       return NextResponse.json(
@@ -683,12 +695,67 @@ export async function GET(request: Request) {
       );
     }
 
+    currentPhase = "auth_access";
     const { service, identity } =
       await requireMobileDocketUser(
         request,
         projectId,
       );
+    logPhase("auth_access");
 
+    if (coreBootstrap) {
+      currentPhase = "project_tower";
+      const [projectResult, towerResult] = await Promise.all([
+        service
+          .from("projects")
+          .select("id,name,project_number")
+          .eq("id", projectId)
+          .maybeSingle(),
+        service
+          .from("towers")
+          .select("id,project_id,name,line,status,progress,extra_data")
+          .eq("project_id", projectId)
+          .eq("id", towerId)
+          .maybeSingle(),
+      ]);
+      logPhase("project_tower");
+
+      if (projectResult.error) throw new Error(projectResult.error.message);
+      if (!projectResult.data) {
+        return NextResponse.json({ error: "Project could not be found." }, { status: 404 });
+      }
+      if (towerResult.error) throw new Error(towerResult.error.message);
+      if (!towerResult.data) {
+        return NextResponse.json({ error: "Tower could not be found in this project." }, { status: 404 });
+      }
+
+      const tower = {
+        ...towerResult.data,
+        has_body_extension: inferBodyExtension(towerResult.data),
+      };
+      const draft = blankDraft({ projectId, towerId, docketDate, tower, identity });
+      logPhase("total");
+      return NextResponse.json({
+        project: projectResult.data,
+        resolvedDefaults: MOBILE_DOCKET_DEFAULTS,
+        recommendedDocketDate: docketDate,
+        productivityTowers: [],
+        towerProgress: {},
+        towers: [tower],
+        crews: [],
+        employees: [],
+        identity,
+        draft,
+        defectIssueTypes: [],
+        defectAssignees: [],
+        towerDefects: [],
+        outstandingMaterials: [],
+        activeBundleTransfers: [],
+        bundleReplacementStatus: [],
+      });
+    }
+
+    currentPhase = "configuration_queries";
     const [
       projectResult,
       towersResult,
@@ -738,6 +805,7 @@ export async function GET(request: Request) {
           ascending: false,
         }),
     ]);
+    logPhase("configuration_queries");
 
     if (projectResult.error) {
       throw new Error(projectResult.error.message);
@@ -773,11 +841,14 @@ export async function GET(request: Request) {
       );
     }
 
+    currentPhase = "previous_progress";
     const currentContext = await mobileProgressContext(service, projectId, towers);
+    logPhase("previous_progress");
     const previousDate = currentContext.resolved.get(towerId)?.latestDocketDate || null;
     const recommendedDate = recommendedDocketDate(previousDate, today);
     if (!docketId && !clean(url.searchParams.get("docketDate"))) docketDate = recommendedDate;
 
+    currentPhase = "materials_context";
     const [
       outstandingMaterials,
       bundleTransferContext,
@@ -795,6 +866,7 @@ export async function GET(request: Request) {
         docketDate,
       }),
     ]);
+    logPhase("materials_context");
 
     let sourceDocket: any = null;
 
@@ -842,6 +914,7 @@ export async function GET(request: Request) {
     const savedIssueSnapshot=Array.isArray(sourceDocket?.material_issue_snapshot)?sourceDocket.material_issue_snapshot:null;
     const docketMaterialIssues=selectDocketMaterialSnapshot(sourceDocket?.approval_status,savedIssueSnapshot,outstandingMaterials);
 
+    currentPhase = "docket_data";
     let draft: any = sourceDocket
       ? await loadDocketData(
           service,
@@ -921,12 +994,15 @@ export async function GET(request: Request) {
       bundleReplacementDrafts: {},
     };
 
+    currentPhase = "progress_baseline";
     const baseline = await mobileProgressContext(service, projectId, towers, { excludeDocketId: docketId || undefined, throughDate: docketDate });
+    logPhase("progress_baseline");
     if (!sourceDocket) {
       const progress = baseline.resolved.get(towerId);
       if (progress?.sectionV2Rows) draft.sectionV2Rows = progress.sectionV2Rows;
     }
 
+    logPhase("total");
     return NextResponse.json({
       project: projectResult.data,
       resolvedDefaults: MOBILE_DOCKET_DEFAULTS,
@@ -964,6 +1040,14 @@ export async function GET(request: Request) {
         bundleTransferContext.bundleReplacementStatus,
     });
   } catch (error) {
+    if (process.env.NODE_ENV === "development") {
+      console.info("[docket-open] failed", {
+        phase: currentPhase,
+        phaseDurationMs: Date.now() - phaseStartedAt,
+        totalDurationMs: Date.now() - requestStartedAt,
+        errorType: error instanceof Error ? error.name : "unknown",
+      });
+    }
     const apiError = mobileDocketApiError(error);
 
     return NextResponse.json(

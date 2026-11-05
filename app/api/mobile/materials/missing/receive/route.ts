@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mobileApiError, requireMobilePermission } from "@/lib/mobile/server";
 import { notifyMissingMaterialEvent } from "@/lib/materials/missing-notifications";
+import { configuredMaterialUsers } from "@/lib/materials/configured-users";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,11 +12,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 export async function POST(request: NextRequest) {
   try {
     const { service, identity } = await requireMobilePermission(request, "mobile.materials");
-    const body = await request.json() as { projectId?: unknown; issueKey?: unknown; quantity?: unknown; notes?: unknown; clientMutationId?: unknown; deliveryReference?: unknown; occurredAt?: unknown };
+    const body = await request.json() as { projectId?: unknown; issueKey?: unknown; quantity?: unknown; notes?: unknown; clientMutationId?: unknown; deliveryReference?: unknown; occurredAt?: unknown; notifyUserIds?: unknown };
     const issueKey = clean(body.issueKey);
     const requestedProjectId = clean(body.projectId);
     const quantity = numberValue(body.quantity);
     const mutationId = clean(body.clientMutationId);
+    if (body.notifyUserIds !== undefined && !Array.isArray(body.notifyUserIds)) {
+      return NextResponse.json({ error: "Notify users must be supplied as a list." }, { status: 400 });
+    }
     if (!issueKey || quantity <= 0 || !mutationId) return NextResponse.json({ error: "Issue key, positive received quantity and mutation ID are required." }, { status: 400 });
     if (!issueKey.startsWith("pending:") && !UUID.test(issueKey)) return NextResponse.json({ error: "The missing-material item ID is invalid. Refresh the Materials list and retry." }, { status: 400 });
 
@@ -35,6 +39,17 @@ export async function POST(request: NextRequest) {
     if (accessError) throw new Error(accessError.message);
     if (!access) return NextResponse.json({ error: "You do not have access to this project." }, { status: 403 });
 
+    const notifyUserIds = Array.isArray(body.notifyUserIds)
+      ? [...new Set(body.notifyUserIds.map(clean).filter(Boolean))]
+      : [];
+    if (notifyUserIds.length) {
+      const configuredUsers = await configuredMaterialUsers(service, parent.project_id);
+      const eligibleIds = new Set(configuredUsers.map(person => person.id));
+      if (notifyUserIds.some(id => !eligibleIds.has(id))) {
+        return NextResponse.json({ error: "Notify users must come from this project's configured Materials Notification Users." }, { status: 400 });
+      }
+    }
+
     const result = await service.rpc("tttracker_v1_record_material_receipt", {
       p_project_id: parent.project_id,
       p_tower_id: parent.tower_id,
@@ -51,6 +66,11 @@ export async function POST(request: NextRequest) {
       throw new Error(result.error.message);
     }
     const receipt = result.data as { event_id: string; duplicate?: boolean; remaining_quantity?: number; issue_status?: string };
+    const { error: recipientsError } = await service.from("tower_material_events")
+      .update({ notify_user_ids: notifyUserIds })
+      .eq("id", receipt.event_id)
+      .eq("project_id", parent.project_id);
+    if (recipientsError) throw new Error(`Receipt was recorded but Notify recipients could not be saved: ${recipientsError.message}`);
     let remaining = Number(receipt.remaining_quantity);
     if (!Number.isFinite(remaining)) {
       const [{ data: receiptRows, error: receiptRowsError }, { data: receiptEventRows, error: receiptEventError }] = await Promise.all([
@@ -74,6 +94,8 @@ export async function POST(request: NextRequest) {
       receivedQuantity: totalQuantity - remaining,
       remainingQuantity: remaining,
       deliveryReference: clean(body.deliveryReference) || null,
+      notifyUserIds,
+      includeIssueRecipients: false,
     });
     let issueStatus = receipt.issue_status;
     if (!issueStatus || receipt.duplicate) {

@@ -353,7 +353,7 @@ export default function DefectNotificationManager({
                 <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                   <label>
                     <span className="mb-1 block text-xs font-black uppercase tracking-wide text-slate-500">
-                      Defect Users · Add project user
+                      Defect Notification Users · Add project user
                     </span>
                     <input value={userSearch} onChange={(event) => setUserSearch(event.target.value)} placeholder="Search name or role" className="mb-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm" />
                     <select

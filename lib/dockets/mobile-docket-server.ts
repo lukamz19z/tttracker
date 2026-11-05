@@ -100,12 +100,10 @@ async function requirePermission(
   service: ServiceClient,
   userId: string,
 ) {
-  const { data, error } = await service
-    .from("effective_user_permissions")
-    .select("allowed")
-    .eq("user_id", userId)
-    .eq("code", "mobile.daily_dockets")
-    .maybeSingle();
+  const { data, error } = await service.rpc("user_has_access", {
+    p_user_id: userId,
+    p_access_code: "mobile.daily_dockets",
+  });
 
   if (error) {
     throw new Error(
@@ -113,10 +111,7 @@ async function requirePermission(
     );
   }
 
-  const permission =
-    data as { allowed?: boolean | null } | null;
-
-  if (permission?.allowed !== true) {
+  if (data !== true) {
     const err = new Error(
       "You do not have permission to use Daily Dockets.",
     );

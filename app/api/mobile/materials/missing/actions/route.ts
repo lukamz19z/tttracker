@@ -44,19 +44,35 @@ export async function POST(request:Request){
     if(["update","cancel"].includes(actionType)&&!text)return NextResponse.json({error:actionType==="cancel"?"Enter a cancellation reason.":"Enter an update."},{status:400});
     const permission=await Promise.all([userHasAccess(service,user.id,"materials.manage_issues"),userHasAccess(service,user.id,"mobile.materials"),service.from("project_access").select("user_id").eq("project_id",projectId).eq("user_id",user.id).maybeSingle()]);
     if(!permission[2].data||(!permission[0]&&!permission[1]))return NextResponse.json({error:"You do not have permission to change Missing Materials."},{status:403});
-    const materialUsers=await configuredMaterialUsers(service,projectId);
-    const notifyUserIds=Array.isArray(body.notifyUserIds)?[...new Set(body.notifyUserIds.map(clean).filter(Boolean))]:null;
+    // Cancellation changes lifecycle state only; it must retain the issue's
+    // existing assignment/recipient history and should not depend on today's
+    // configured recipient pool.
+    const notifyUserIds=actionType==="cancel"?null:Array.isArray(body.notifyUserIds)?[...new Set(body.notifyUserIds.map(clean).filter(Boolean))]:null;
     const {data:existingItem,error:existingItemError}=await service.from("tower_material_event_items").select("event_id").eq("issue_key",issueKey).maybeSingle();if(existingItemError)throw new Error(existingItemError.message);
-    let previouslySelected=new Set<string>(),previousAssigneeId="";
-    if(existingItem?.event_id){const {data:existingEvent,error:existingEventError}=await service.from("tower_material_events").select("assigned_to_user_id,notify_user_ids").eq("id",existingItem.event_id).eq("project_id",projectId).maybeSingle();if(existingEventError)throw new Error(existingEventError.message);previousAssigneeId=clean(existingEvent?.assigned_to_user_id);previouslySelected=new Set(Array.isArray(existingEvent?.notify_user_ids)?existingEvent.notify_user_ids.map(clean):[]);}
+    let previouslySelected=new Set<string>(),previousAssigneeId="",existingStatus="",existingTowerId="";
+    if(existingItem?.event_id){const {data:existingEvent,error:existingEventError}=await service.from("tower_material_events").select("assigned_to_user_id,notify_user_ids,issue_status,tower_id").eq("id",existingItem.event_id).eq("project_id",projectId).maybeSingle();if(existingEventError)throw new Error(existingEventError.message);previousAssigneeId=clean(existingEvent?.assigned_to_user_id);existingStatus=clean(existingEvent?.issue_status);existingTowerId=clean(existingEvent?.tower_id);previouslySelected=new Set(Array.isArray(existingEvent?.notify_user_ids)?existingEvent.notify_user_ids.map(clean):[]);}
+    if(actionType==="cancel"&&existingStatus==="cancelled"&&existingTowerId===towerId)return NextResponse.json({ok:true,alreadyCancelled:true,issueStatus:"cancelled"});
+    const materialUsers=actionType==="assignment"||notifyUserIds?.length?await configuredMaterialUsers(service,projectId):[];
     if(assignedToUserId&&!materialUsers.some(row=>row.id===assignedToUserId)&&assignedToUserId!==previousAssigneeId)return NextResponse.json({error:"Choose a new assignee from this project's configured Materials users."},{status:400});
     if(notifyUserIds?.some(id=>!materialUsers.some(row=>row.id===id)&&!previouslySelected.has(id)))return NextResponse.json({error:"New additional recipients must be selected from this project's configured Materials users."},{status:400});
-    const {data:result,error}=await service.rpc("tttracker_v1_missing_material_action",{p_project_id:projectId,p_tower_id:towerId,p_issue_key:issueKey,p_client_mutation_id:clientMutationId,p_action_type:actionType,p_body:text,p_user_id:user.id,p_assigned_to_user_id:assignedToUserId,p_notify_user_ids:notifyUserIds});if(error)throw new Error(error.message);
-    const action=result as {action_id:string;event_id:string;duplicate:boolean};
+    const {data:result,error}=await service.rpc("tttracker_v1_missing_material_action",{p_project_id:projectId,p_tower_id:towerId,p_issue_key:issueKey,p_client_mutation_id:clientMutationId,p_action_type:actionType,p_body:text,p_user_id:user.id,p_assigned_to_user_id:assignedToUserId,p_notify_user_ids:notifyUserIds});
+    if(error){
+      if(actionType==="cancel"){
+        const {data:reconciled,error:reconcileError}=await service.from("tower_material_events").select("issue_status,cancelled_at,cancellation_reason").eq("project_id",projectId).eq("tower_id",towerId).eq("id",existingItem?.event_id||"").maybeSingle();
+        if(!reconcileError&&clean(reconciled?.issue_status)==="cancelled")return NextResponse.json({ok:true,alreadyCancelled:true,issueStatus:"cancelled",cancelledAt:reconciled?.cancelled_at||null,cancellationReason:reconciled?.cancellation_reason||null});
+      }
+      throw new Error(error.message);
+    }
+    const action=result as {action_id?:string;event_id:string;duplicate:boolean;already_cancelled?:boolean;issue_status?:string};
+    if(action.already_cancelled)return NextResponse.json({ok:true,alreadyCancelled:true,issueStatus:"cancelled"});
+    if(!action.action_id)return NextResponse.json({error:"Material action was committed without an action ID."},{status:500});
     const {data:row,error:rowError}=await service.from("tower_material_event_actions").select("id,material_event_id,action_type,body,previous_assignee_id,assigned_to_user_id").eq("id",action.action_id).maybeSingle();if(rowError||!row)throw new Error(rowError?.message||"Material action was committed without an action ID.");
-    if(row.action_type==="assignment"&&row.previous_assignee_id!==row.assigned_to_user_id)await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"assignment",actorUserId:user.id,actionId:row.id,assignedToUserId:row.assigned_to_user_id});
-    if(row.action_type==="update")await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"update",actorUserId:user.id,actionId:row.id,note:row.body});
-    if(row.action_type==="cancel")await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"cancelled",actorUserId:user.id,actionId:row.id,cancellationReason:row.body});
-    return NextResponse.json({ok:true,action:{...action,action_id:row.id}});
+    if(!action.duplicate&&row.action_type==="assignment"&&row.previous_assignee_id!==row.assigned_to_user_id)await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"assignment",actorUserId:user.id,actionId:row.id,assignedToUserId:row.assigned_to_user_id});
+    if(!action.duplicate&&row.action_type==="update")await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"update",actorUserId:user.id,actionId:row.id,note:row.body});
+    if(!action.duplicate&&row.action_type==="cancel"){
+      try{await notifyMissingMaterialEvent({service,projectId,sourceEventId:row.material_event_id,issueEventId:row.material_event_id,kind:"cancelled",actorUserId:user.id,actionId:row.id,cancellationReason:row.body});}
+      catch(notificationError){console.error("Material cancellation notification dispatch failed",{actionId:row.id,errorType:notificationError instanceof Error?notificationError.name:"unknown"});}
+    }
+    return NextResponse.json({ok:true,issueStatus:action.issue_status||undefined,action:{...action,action_id:row.id}});
   }catch(error){const result=qualityApiError(error);return NextResponse.json({error:result.message},{status:result.status});}
 }
