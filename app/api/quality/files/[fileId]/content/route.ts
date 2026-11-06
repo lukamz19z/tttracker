@@ -93,6 +93,10 @@ export async function GET(request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
+    const message=error instanceof Error?error.message:String(error);
+    if(/\(404\b|itemNotFound/i.test(message)) {
+      return NextResponse.json({error:"Evidence file missing from SharePoint. The evidence record and metadata have been retained; recover the original image before replacing it."},{status:404});
+    }
     console.error("QUALITY FILE CONTENT ERROR", error);
     const apiError = qualityApiError(error);
     return NextResponse.json({ error: apiError.message }, { status: apiError.status });

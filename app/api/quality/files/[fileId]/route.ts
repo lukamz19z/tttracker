@@ -3,6 +3,7 @@ import { qualityWorkflowAccess } from "@/lib/quality/workflow-access";
 import { atomicQualityError } from "@/lib/quality/atomic-error";
 import { qualityApiError } from "@/lib/quality/server";
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
+import { unreferencedQualityDriveItems } from "@/lib/quality/evidence-deletion";
 
 export async function DELETE(request: Request, context: { params: Promise<{ fileId: string }> }) {
   try {
@@ -17,7 +18,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ file
     if (!audit.completed_at) {
       const file = audit.file_snapshot;
       if (!file.sharepoint_drive_id) throw new Error("Evidence storage reference is missing. Deletion is pending reconciliation.");
-      for (const itemId of new Set<string>([file.sharepoint_item_id, file.annotated_sharepoint_item_id].filter(Boolean))) {
+      const itemIds = await unreferencedQualityDriveItems(service,file.sharepoint_drive_id,[file.sharepoint_item_id,file.annotated_sharepoint_item_id].filter((value):value is string=>Boolean(value)),[fileId]);
+      for (const itemId of itemIds) {
         try { await deleteDriveItem({ driveId: file.sharepoint_drive_id, itemId }); }
         catch (error) { if (!/\(404\b/.test(error instanceof Error ? error.message : "")) throw error; }
       }

@@ -31,6 +31,20 @@ export async function PATCH(request: Request, context: { params: Promise<{ revis
       if (Object.hasOwn(body, "operationalDetails")) patch.operational_details = values;
     }
     if (!Number.isSafeInteger(body.expectedVersion) || !body.clientMutationId) return NextResponse.json({ error: "Refresh this FLI before saving; its version and edit request ID are required.", code: "RECONCILIATION_REQUIRED" }, { status: 409 });
+    if (patch.status === "Rectified") {
+      const evidence = await service.from("tower_quality_files")
+        .select("file_role")
+        .eq("revision_id", revisionId)
+        .eq("revision_item_id", itemId)
+        .eq("deletion_pending", false)
+        .eq("is_outdated", false)
+        .in("file_role", ["before_photo", "after_photo"]);
+      if (evidence.error) throw new Error(evidence.error.message);
+      const roles = new Set((evidence.data || []).map(row => row.file_role));
+      if (!roles.has("before_photo") || !roles.has("after_photo")) {
+        return NextResponse.json({ error: "An active Before and After photo are required to mark this finding Rectified." }, { status: 409 });
+      }
+    }
     const result = await service.rpc("update_v1_quality_item", { p_item: itemId, p_actor: user.id, p_version: body.expectedVersion, p_mutation: body.clientMutationId, p_patch: patch, p_label: label });
     if (result.error) { const error = atomicQualityError(result.error); return NextResponse.json({ error: error.message, code: error.status === 409 ? "RECONCILIATION_REQUIRED" : undefined }, { status: error.status }); }
     return NextResponse.json({ item: result.data });

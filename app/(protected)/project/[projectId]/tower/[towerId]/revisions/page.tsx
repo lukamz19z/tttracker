@@ -5,7 +5,7 @@ import { qualityJsonResponse } from "@/lib/quality/http-response";
 import { qualityCaptureLabel } from "@/lib/quality/date-time";
 import { uploadBrowserEvidence, emptyCaptureDetails, type CaptureDetails } from "@/lib/quality/browser-evidence";
 import EvidenceCaptureFields from "@/components/quality/EvidenceCaptureFields";
-import { findingReadiness } from "@/lib/quality/finding-readiness";
+import { revisionEvidenceState } from "@/lib/quality/revision-evidence-state";
 import { qualityDisplayName } from "@/lib/quality/display-name";
 import { OperationalDetailEditor } from "@/components/quality/OperationalDetailEditor";
 import { populatedDetailEntries, type DetailSchema, type DetailValues } from "@/lib/quality/operational-details";
@@ -119,6 +119,8 @@ type RevisionItem = {
 
 type QualityFile = {
   evidence_metadata?: {capturedBy?:string;capturedDate?:string} | null;
+  deletion_pending?: boolean;
+  is_outdated?: boolean;
   id: string;
   revision_id: string | null;
   revision_item_id: string | null;
@@ -128,6 +130,16 @@ type QualityFile = {
   captured_at: string | null;
   uploaded_by_label: string | null;
   created_at: string;
+};
+
+type RectifyPreview = {
+  revisionId: string;
+  canExecute: boolean;
+  lockedReason: string | null;
+  counts: { eligible: number; alreadyRectified: number; alreadyRectifiedMetadataComplete: number; verified: number; noEvidence: number; beforeOnly: number; afterOnly: number; skipped: number; metadataRepairCandidates: number; metadataRepairable: number; metadataLocked: number; metadataUnavailable: number };
+  eligibleItems: Array<{ id: string; fli: string }>;
+  metadataRepairItems: Array<{ id: string; fli: string; status: string; fields: string[]; missingFields: string[]; repairable: boolean }>;
+  skippedItems: Array<{ id: string; fli: string; reason: string }>;
 };
 
 type RevisionDraft = {
@@ -179,6 +191,7 @@ type EvidenceView = {
   url: string;
   capturedAt: string | null;
   uploadedBy: string | null;
+  missingMessage?: string;
 };
 
 function today() {
@@ -272,6 +285,9 @@ export default function TowerRevisionsPage() {
   const [findingSaving, setFindingSaving] = useState(false);
   const [findingEdit, setFindingEdit] = useState<FindingEdit | null>(null);
   const [findingEditSaving, setFindingEditSaving] = useState(false);
+  const [rectifyPreview, setRectifyPreview] = useState<RectifyPreview | null>(null);
+  const [rectifyPreviewLoading, setRectifyPreviewLoading] = useState(false);
+  const [rectifySaving, setRectifySaving] = useState(false);
 
   const [evidenceItem, setEvidenceItem] = useState<RevisionItem | null>(null);
   const { can } = useAccess();
@@ -325,7 +341,7 @@ export default function TowerRevisionsPage() {
         .order("item_number"),
       supabase
         .from("tower_quality_files")
-        .select("id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at,evidence_metadata").eq("deletion_pending",false)
+        .select("id,revision_id,revision_item_id,file_role,file_name,mime_type,captured_at,uploaded_by_label,created_at,evidence_metadata,deletion_pending,is_outdated").eq("deletion_pending",false)
         .eq("project_id", projectId)
         .eq("tower_id", towerId)
         .order("created_at"),
@@ -770,14 +786,15 @@ export default function TowerRevisionsPage() {
       });
       const payload = await qualityJsonResponse< {
         error?: string;
+        warning?: string;
         report_revision?: number;
         file?: QualityFile;
       }>(response,"Revision PDF service");
       if (!response.ok || !payload.file) throw new Error(payload.error || "Revision PDF could not be created.");
       await load();
       setMessage({
-        tone: "success",
-        text: `${rectCode(revision)}-R${String(payload.report_revision ?? 1).padStart(2, "0")} created and saved to SharePoint.`,
+        tone: payload.warning ? "error" : "success",
+        text: payload.warning || `${rectCode(revision)}-R${String(payload.report_revision ?? 1).padStart(2, "0")} created and saved to SharePoint.`,
       });
       await openFile(payload.file.id, popup);
     } catch (error) {
@@ -819,22 +836,27 @@ export default function TowerRevisionsPage() {
           file.file_role === "before_photo" || file.file_role === "after_photo",
       );
 
-      const views = await Promise.all(
-        itemFiles.map(async (file) => {
+      const views = await Promise.all(itemFiles.map(async (file) => {
+        const base = {
+          id: file.id,
+          name: `${file.file_role === "before_photo" ? "Before" : "After"} · ${revisions.find(row=>row.id===item.revision_id)?.revision_number || "RECT"} · ${item.fli_number || `FLI-${String(item.item_number).padStart(3,"0")}`}`,
+          role: file.file_role,
+          capturedAt: file.captured_at,
+          recordedAt: file.created_at,
+          uploadedBy: qualityDisplayName(file.uploaded_by_label),
+          capturedBy:file.evidence_metadata?.capturedBy,capturedDate:file.evidence_metadata?.capturedDate,
+        } as const;
+        try {
           const response = await apiFetch(`/api/quality/files/${encodeURIComponent(file.id)}/content?preview=1`);
-          if (!response.ok) throw new Error(`Could not load ${file.file_name}.`);
-          return {
-            id: file.id,
-            name: `${file.file_role === "before_photo" ? "Before" : "After"} · ${revisions.find(row=>row.id===item.revision_id)?.revision_number || "RECT"} · ${item.fli_number || `FLI-${String(item.item_number).padStart(3,"0")}`}`,
-            role: file.file_role,
-            url: URL.createObjectURL(await response.blob()),
-            capturedAt: file.captured_at,
-            recordedAt: file.created_at,
-            uploadedBy: qualityDisplayName(file.uploaded_by_label),
-            capturedBy:file.evidence_metadata?.capturedBy,capturedDate:file.evidence_metadata?.capturedDate,
-          } as EvidenceView;
-        }),
-      );
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({})) as {error?:string};
+            return {...base,url:"",missingMessage:response.status===404?"Evidence file missing from SharePoint":payload.error || "Evidence could not be loaded."} as EvidenceView;
+          }
+          return {...base,url:URL.createObjectURL(await response.blob())} as EvidenceView;
+        } catch {
+          return {...base,url:"",missingMessage:"Evidence could not be loaded. Retry when connected."} as EvidenceView;
+        }
+      }));
       setEvidenceViews(views);
     } catch (error) {
       setMessage({ tone: "error", text: error instanceof Error ? error.message : "Evidence could not be loaded." });
@@ -883,7 +905,45 @@ export default function TowerRevisionsPage() {
   }
   function completeness(item:RevisionItem) {
     const itemFiles=filesByItem.get(item.id) || [];
-    return findingReadiness(item,itemFiles.filter(file=>file.file_role==="before_photo").length,itemFiles.filter(file=>file.file_role==="after_photo").length);
+    return revisionEvidenceState(item,itemFiles);
+  }
+  async function openRectifyPreview(revision: RevisionRow) {
+    setRectifyPreviewLoading(true);
+    setBusyId(`rectify-preview-${revision.id}`);
+    try {
+      const response = await apiFetch(`/api/quality/revisions/${revision.id}/rectify-eligible`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Rectification preview could not be loaded.");
+      setRectifyPreview(result as RectifyPreview);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Rectification preview could not be loaded." });
+    } finally {
+      setRectifyPreviewLoading(false);
+      setBusyId(null);
+    }
+  }
+  async function rectifyEligible() {
+    if (!rectifyPreview || rectifySaving || (!rectifyPreview.counts.eligible && !rectifyPreview.counts.metadataRepairable)) return;
+    setRectifySaving(true);
+    try {
+      const response = await apiFetch(`/api/quality/revisions/${rectifyPreview.revisionId}/rectify-eligible`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId: crypto.randomUUID() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Eligible findings could not be reconciled.");
+      setRectifyPreview(null);
+      setMessage({ tone: result.failedCount || result.metadataFailedCount ? "error" : "success", text: `${result.updatedCount} findings marked Rectified; ${result.metadataRepairedCount} findings had historical capture metadata repaired. ${result.failedCount} status transitions failed; ${result.metadataFailedCount} metadata repairs failed or need retry. ${result.remainingIncompleteCount} incomplete findings left Open.` });
+      await load();
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Eligible findings could not be reconciled." });
+      // Refresh the preview after a conflict so the confirmation never relies on stale counts.
+      const revision = revisions.find(row => row.id === rectifyPreview?.revisionId);
+      if (revision) void openRectifyPreview(revision);
+    } finally {
+      setRectifySaving(false);
+    }
   }
 
   if (loading) return <div className="p-8 text-sm text-slate-500">Loading Revisions…</div>;
@@ -937,7 +997,7 @@ export default function TowerRevisionsPage() {
           <div className="flex flex-wrap gap-2"><input className="input max-w-xs" placeholder="Search FLI, reference, member, segment, leg" value={itemSearch} onChange={e=>setItemSearch(e.target.value)}/><select className="input max-w-40" value={itemStatus} onChange={e=>setItemStatus(e.target.value)}>{["All","Open","Rectified"].map(value=><option key={value}>{value}</option>)}</select><select className="input max-w-40" value={itemSource} onChange={e=>setItemSource(e.target.value)}>{["All","Imported","Manual"].map(value=><option key={value}>{value}</option>)}</select></div>
           {revisions.map((revision) => {
             const revisionItems = itemsByRevision.get(revision.id) ?? [];
-            const completeCount = revisionItems.filter((item) => completeness(item).ready).length;
+            const completeCount = revisionItems.filter((item) => completeness(item).state === "complete").length;
             const openCount = revisionItems.filter((item) => item.status === "Open").length;
             const pdfs = pdfsByRevision.get(revision.id) ?? [];
             const latestPdf = revision.latest_pdf_file_id
@@ -961,11 +1021,12 @@ export default function TowerRevisionsPage() {
                         <span><b>Client:</b> {revision.client_company || "-"}</span>
                         <span><b>Reference:</b> {revision.client_reference || "-"}</span>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs"><span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-600">{revisionItems.length} findings</span><span className="rounded-lg bg-emerald-50 px-2.5 py-1.5 font-bold text-emerald-700">{completeCount} ready / rectified</span>{openCount > 0 ? <span className="rounded-lg bg-rose-50 px-2.5 py-1.5 font-bold text-rose-700">{openCount} open</span> : null}</div>
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs"><span className="rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-600">{revisionItems.length} findings</span><span className="rounded-lg bg-emerald-50 px-2.5 py-1.5 font-bold text-emerald-700">{completeCount} evidence complete</span>{openCount > 0 ? <span className="rounded-lg bg-rose-50 px-2.5 py-1.5 font-bold text-rose-700">{openCount} open</span> : null}</div>
                     </button>
 
                     <div className="flex flex-wrap items-center gap-2">
                       <button type="button" onClick={() => openFinding(revision.id)} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700"><Plus size={14} /> Finding</button>
+                      <button type="button" onClick={() => void openRectifyPreview(revision)} disabled={rectifyPreviewLoading || rectifySaving || !revisionItems.length || revision.status === "Closed"} className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 disabled:opacity-50"><ClipboardCheck size={14} />{rectifyPreviewLoading && busyId === `rectify-preview-${revision.id}` ? "Checking…" : "Rectify eligible"}</button>
                       {latestPdf ? <button type="button" onClick={() => void viewPdf(latestPdf)} className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700"><FileText size={14} /> View PDF</button> : null}
                       <button type="button" onClick={() => void createPdf(revision)} disabled={busyId === `pdf-${revision.id}` || revisionItems.length === 0} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{busyId === `pdf-${revision.id}` ? <Loader2 size={14} className="animate-spin" /> : <FileCheck2 size={14} />} Create PDF</button>
                       <button
@@ -1001,15 +1062,14 @@ export default function TowerRevisionsPage() {
 
                     <div className="space-y-3">
                       {revisionItems.filter(item=>qualityItemMatches(item,itemSearch,itemStatus,itemSource)).map((item) => {
-                        const itemFiles = filesByItem.get(item.id) ?? [];
-                        const beforeCount = itemFiles.filter((file) => file.file_role === "before_photo").length;
-                        const afterCount = itemFiles.filter((file) => file.file_role === "after_photo").length;
                         const complete = completeness(item);
+                        const beforeCount = complete.beforeCount;
+                        const afterCount = complete.afterCount;
                         return (
                           <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                               <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span>{item.source_type==="punchlist"?<span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs">Punchlist</span>:null}{item.external_reference?<span className="text-xs text-slate-500">{item.external_reference}</span>:null}<span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{complete.workflow}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px]">{complete.photosComplete?"Photos Complete":"Photos Incomplete"}</span></div>
+                                <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span>{item.source_type==="punchlist"?<span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs">Punchlist</span>:null}{item.external_reference?<span className="text-xs text-slate-500">{item.external_reference}</span>:null}<span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{item.status === "Open" ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${complete.state === "complete" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{complete.label}</span> : null}<span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px]">{complete.state === "complete"?"Photos Complete":"Photos Incomplete"}</span></div>
                                 <div className="mt-1 font-bold text-slate-900">{issueName(item.issue_type_id,item.other_issue_text)}</div>
                                 {item.source_type==="punchlist"?<div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500"><span>Inspector: {item.inspector_name || "Not supplied"}</span>{item.source_date?<span>Source Date: {sourceDateDisplay(item.source_date)}</span>:null}<span>Imported By: {qualityDisplayName(item.imported_by_label)}</span></div>:null}
                                 <div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-3">{item.source_type==="punchlist"&&typeof item.source_payload?.sourceSection==="string"?<span>Source Section: <b className="text-slate-700">{item.source_payload.sourceSection}</b></span>:null}<span>Tower Segment: <b className="text-slate-700">{item.tower_segment || "-"}</b></span><span>Member: <b className="text-slate-700">{item.member_number || "-"}</b></span><span>Drawing: <b className="text-slate-700">{item.drawing_number || "-"}</b></span></div>
@@ -1038,6 +1098,35 @@ export default function TowerRevisionsPage() {
 
       {importOpen?<PunchlistImport projectId={projectId} timeZone={project?.timezone} apiFetch={apiFetch} onClose={()=>setImportOpen(false)} onSaved={load}/>:null}
       {notificationManagerOpen ? <RevisionNotificationManager projectId={projectId} apiFetch={apiFetch} onClose={() => setNotificationManagerOpen(false)} /> : null}
+
+      {rectifyPreview ? (
+        <Modal title="Rectify eligible findings" subtitle={revisions.find(row => row.id === rectifyPreview.revisionId)?.fli_number || "Revision"} onClose={() => { if (!rectifySaving) setRectifyPreview(null); }}>
+          <p className="text-sm text-slate-700">{rectifyPreview.counts.eligible} findings can be marked Rectified from existing active Before + After evidence.</p>
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Stat label="Eligible" value={rectifyPreview.counts.eligible} tone="green" />
+            <Stat label="Already Rectified" value={rectifyPreview.counts.alreadyRectified} tone="blue" />
+            <Stat label="Rectified · metadata complete" value={rectifyPreview.counts.alreadyRectifiedMetadataComplete} tone="blue" />
+            <Stat label="Already Verified" value={rectifyPreview.counts.verified} />
+            <Stat label="Metadata repair required" value={rectifyPreview.counts.metadataRepairCandidates} tone={rectifyPreview.counts.metadataRepairable ? "green" : undefined} />
+            <Stat label="Verified · repair locked" value={rectifyPreview.counts.metadataLocked} />
+            <Stat label="Missing · no source values" value={rectifyPreview.counts.metadataUnavailable} tone={rectifyPreview.counts.metadataUnavailable ? "rose" : undefined} />
+            <Stat label="No evidence" value={rectifyPreview.counts.noEvidence} tone="rose" />
+            <Stat label="Before only" value={rectifyPreview.counts.beforeOnly} tone="rose" />
+            <Stat label="After only" value={rectifyPreview.counts.afterOnly} tone="rose" />
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Metadata repair counts can overlap the status counts above: each finding is counted once in its workflow category. Verified findings with missing metadata are shown as locked and will not be changed.</p>
+          {rectifyPreview.metadataRepairItems.some(item => item.repairable) ? <p className="mt-2 text-xs font-semibold text-amber-800">Metadata repair required: {rectifyPreview.metadataRepairItems.filter(item => item.repairable).slice(0, 12).map(item => item.fli).join(", ")}{rectifyPreview.metadataRepairItems.filter(item => item.repairable).length > 12 ? `, +${rectifyPreview.metadataRepairItems.filter(item => item.repairable).length - 12} more` : ""}</p> : null}
+          {rectifyPreview.metadataRepairItems.some(item => !item.repairable) ? <p className="mt-1 text-xs font-semibold text-rose-700">Metadata missing with no source values: {rectifyPreview.metadataRepairItems.filter(item => !item.repairable).map(item => item.fli).join(", ")}</p> : null}
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+            Only Open findings with active Before and After evidence can change status. Missing capture metadata can be repaired independently from active evidence for Open or Rectified findings. Verified records and locked revisions are not changed. Findings with incomplete evidence remain Open. Existing non-null capture details are preserved; the reconciliation user is recorded only as the status actioner.
+          </div>
+          {rectifyPreview.lockedReason ? <p className="mt-3 text-sm font-semibold text-rose-700">{rectifyPreview.lockedReason}</p> : null}
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" onClick={() => setRectifyPreview(null)} disabled={rectifySaving} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold">Cancel</button>
+            <button type="button" onClick={() => void rectifyEligible()} disabled={rectifySaving || !rectifyPreview.canExecute || (!rectifyPreview.counts.eligible && !rectifyPreview.counts.metadataRepairable)} className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{rectifySaving ? "Reconciling…" : rectifyPreview.counts.eligible ? `Mark ${rectifyPreview.counts.eligible} as Rectified · repair ${rectifyPreview.counts.metadataRepairable} metadata` : `Repair ${rectifyPreview.counts.metadataRepairable} capture metadata`}</button>
+          </div>
+        </Modal>
+      ) : null}
 
       {revisionModalOpen ? (
         <Modal title="Manual Rectification" subtitle="Creates the parent RECT record. Add each flagged issue as an FLI after creation." onClose={() => setRevisionModalOpen(false)}>
@@ -1185,14 +1274,14 @@ export default function TowerRevisionsPage() {
             {(["before_photo", "after_photo"] as const).map((role) => {
               const roleViews = evidenceViews.filter((view) => view.role === role);
               const label = role === "before_photo" ? "Before" : "After";
-              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view,viewIndex) => <div key={view.id}><div className="flex justify-between text-xs p-1"><span className="inline-flex gap-2"><span>{label.toUpperCase()}</span><span>{viewIndex+1} of {roleViews.length}</span></span><button type="button" aria-label="Delete Photo" className="inline-flex items-center gap-1" onClick={()=>{if(window.confirm(`Delete this ${label} photo?`))void deleteEvidence(view);}}><Trash2 size={14}/> Delete Photo</button></div><button key={view.id} type="button" onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left"><img loading="lazy" src={view.url} alt={view.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{!view.capturedAt && view.capturedDate?`Captured ${sourceDateDisplay(view.capturedDate)} (time unknown)`:qualityCaptureLabel(view.capturedAt,project?.timezone,view.recordedAt)}<br />Captured By: {view.capturedBy || "Unknown"}<br />Uploaded By: {view.uploadedBy || "TTTracker User"}</div></div></button></div>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
+              return <div key={role} className="rounded-2xl border border-slate-200 p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><div className="font-black text-slate-900">{label}</div><div className="text-xs text-slate-500">{role === "before_photo" ? "Condition identified during inspection." : "Condition following rectification."}</div></div><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Camera size={14} />{evidenceUploading === `${evidenceItem.id}-${role}` ? "Uploading…" : `Add ${label}`}<input type="file" multiple disabled={Boolean(evidenceUploading)} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const selected = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addEvidence(evidenceItem, role, selected); }} /></label></div>{evidenceLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading…</div> : <div className="grid grid-cols-2 gap-2">{roleViews.map((view,viewIndex) => <div key={view.id}><div className="flex justify-between text-xs p-1"><span className="inline-flex gap-2"><span>{label.toUpperCase()}</span><span>{viewIndex+1} of {roleViews.length}</span></span><button type="button" aria-label="Delete Photo" className="inline-flex items-center gap-1" onClick={()=>{if(window.confirm(`Delete this ${label} photo?`))void deleteEvidence(view);}}><Trash2 size={14}/> Delete Photo</button></div><button key={view.id} type="button" disabled={!view.url} onClick={() => setPreview(view)} className="overflow-hidden rounded-xl border border-slate-200 text-left disabled:cursor-default"><div className="flex aspect-square w-full items-center justify-center bg-slate-100">{view.url?<img loading="lazy" src={view.url} alt={view.name} className="h-full w-full object-cover" />:<span className="p-3 text-center text-xs font-semibold text-amber-800">{view.missingMessage || "Evidence file missing from SharePoint"}</span>}</div><div className="p-2"><div className="truncate text-[11px] font-bold text-slate-700">{view.name}</div><div className="mt-1 text-[10px] text-slate-400">{!view.capturedAt && view.capturedDate?`Captured ${sourceDateDisplay(view.capturedDate)} (time unknown)`:qualityCaptureLabel(view.capturedAt,project?.timezone,view.recordedAt)}<br />Captured By: {view.capturedBy || "Unknown"}<br />Uploaded By: {view.uploadedBy || "TTTracker User"}</div></div></button></div>)}{roleViews.length === 0 ? <div className="col-span-2 rounded-xl border border-dashed border-slate-300 py-10 text-center text-xs text-slate-500">No {label.toLowerCase()} evidence yet.</div> : null}</div>}</div>;
             })}
           </div>
           <div className="mt-4 space-y-3"><Field label="Rectification / Action Taken (optional)"><textarea className="input" rows={3} value={actionComment} onChange={event=>setActionComment(event.target.value)}/></Field><div className="flex gap-2"><button disabled={findingEditSaving || Boolean(evidenceUploading)} onClick={()=>void saveEvidenceAction(false)} className="rounded-xl border px-4 py-2">Save Only</button><button disabled={findingEditSaving || Boolean(evidenceUploading)} onClick={()=>void saveEvidenceAction(true)} className="rounded-xl bg-emerald-700 text-white px-4 py-2">Save &amp; Mark Rectified</button></div>{message?<p role="status" className={message.tone==="error"?"text-red-700":"text-emerald-700"}>{message.text}</p>:null}</div>
         </Modal>
       ) : null}
 
-      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => setPreview(null)}><div onClick={(event) => event.stopPropagation()}><div className="flex justify-between text-white"><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i>0)setPreview(ordered[i-1]);}}>Previous</button><button onClick={()=>setPreview(null)}>Close</button><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i<ordered.length-1)setPreview(ordered[i+1]);}}>Next</button></div><img src={preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" /><div className="mt-2 text-center text-sm text-white">{preview.role === "before_photo" ? "Before" : "After"} · {preview.name}</div></div></div> : null}
+      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => setPreview(null)}><div onClick={(event) => event.stopPropagation()}><div className="flex justify-between text-white"><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i>0)setPreview(ordered[i-1]);}}>Previous</button><button onClick={()=>setPreview(null)}>Close</button><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i<ordered.length-1)setPreview(ordered[i+1]);}}>Next</button></div>{preview.url?<img src={preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" />:<div className="flex min-h-48 min-w-72 items-center justify-center rounded-xl bg-slate-800 p-8 text-center text-sm text-white">{preview.missingMessage || "Evidence file missing from SharePoint"}</div>}<div className="mt-2 text-center text-sm text-white">{preview.role === "before_photo" ? "Before" : "After"} · {preview.name}</div></div></div> : null}
 
       <style jsx global>{`
         .input { width: 100%; border: 1px solid rgb(226 232 240); border-radius: 0.75rem; background: white; padding: 0.625rem 0.75rem; font-size: 0.875rem; outline: none; }

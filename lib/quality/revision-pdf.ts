@@ -21,11 +21,15 @@ export type RevisionPdfPhoto = {
   id: string;
   fileName: string;
   mimeType: string;
-  dataUrl: string;
+  imageBuffer?: Uint8Array | null;
+  /** Used only for branding assets, never for evidence photos. */
+  dataUrl?: string;
   capturedAt?: string | null;
   recordedAt?: string | null;
   capturedBy?:string|null; capturedDate?:string|null;
   uploadedByLabel?: string | null;
+  missingFromSharePoint?: boolean;
+  unavailableMessage?: string;
 };
 
 function photoCaptureLabel(photo:RevisionPdfPhoto|undefined,timeZone?:unknown) {
@@ -110,7 +114,7 @@ function date(value: string | null | undefined, withTime = false) {
   }).format(parsed);
 }
 
-function imageFormat(mimeType: string, dataUrl: string) {
+function imageFormat(mimeType: string, dataUrl = "") {
   const type = mimeType.toLowerCase();
   if (type.includes("png") || dataUrl.startsWith("data:image/png")) return "PNG";
   return "JPEG";
@@ -254,16 +258,16 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
     setDraw(C.border);
     doc.roundedRect(x, y, width, height, 2, 2, "FD");
 
-    if (!photo?.dataUrl) {
+    if (!photo?.imageBuffer?.byteLength) {
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       setText(C.muted);
-      doc.text(title.toLowerCase().includes("after") ? "After evidence pending" : "Before evidence not available", x + width / 2, y + height / 2, { align: "center" });
+      doc.text(photo?.unavailableMessage || (photo?.missingFromSharePoint ? "Evidence unavailable / missing from SharePoint" : title.toLowerCase().includes("after") ? "After evidence pending" : "Before evidence not available"), x + width / 2, y + height / 2, { align: "center", maxWidth: width - 8 });
       return;
     }
 
     try {
-      const props = doc.getImageProperties(photo.dataUrl);
+      const props = doc.getImageProperties(photo.imageBuffer);
       const ratio = props.width / props.height;
       let drawWidth = width - 4;
       let drawHeight = drawWidth / ratio;
@@ -274,8 +278,8 @@ export function generateRevisionPdf(data: RevisionPdfData): Uint8Array {
       const drawX = x + (width - drawWidth) / 2;
       const drawY = y + (height - 10 - drawHeight) / 2;
       doc.addImage(
-        photo.dataUrl,
-        imageFormat(photo.mimeType, photo.dataUrl),
+        photo.imageBuffer,
+        imageFormat(photo.mimeType),
         drawX,
         drawY,
         drawWidth,

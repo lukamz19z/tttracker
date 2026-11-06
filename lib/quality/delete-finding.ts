@@ -4,6 +4,7 @@ import { revisionItemFli } from "./fli";
 import { deleteDriveItem } from "@/lib/sharepoint/graph";
 import { requireMobilePermission } from "@/lib/mobile/server";
 import { cleanupQualityUploadSessions } from "./upload-cleanup";
+import { unreferencedQualityDriveItems } from "./evidence-deletion";
 
 /** Shared controlled deletion; keep metadata on provider failures for safe retry. */
 export async function deleteFinding(request: NextRequest, context: {params:Promise<{revisionId:string;itemId:string}>}) {
@@ -25,8 +26,18 @@ export async function deleteFinding(request: NextRequest, context: {params:Promi
     await cleanupQualityUploadSessions(service,{itemId});
     const files=await service.from("tower_quality_files").select("id,sharepoint_drive_id,sharepoint_item_id,annotated_sharepoint_item_id").eq("revision_id",revisionId).or(`revision_item_id.eq.${itemId},file_role.eq.revision_pdf`);
     if(files.error) throw new Error(files.error.message);
+    const deletingIds=(files.data || []).map(file=>file.id);
+    const candidatesByDrive=new Map<string,string[]>();
+    for(const file of files.data || []) {
+      if(!file.sharepoint_drive_id) throw new Error("Evidence storage reference is missing; deletion was retained for reconciliation.");
+      const candidates=candidatesByDrive.get(file.sharepoint_drive_id) || [];
+      candidates.push(...[file.sharepoint_item_id,file.annotated_sharepoint_item_id].filter((id):id is string=>Boolean(id)));
+      candidatesByDrive.set(file.sharepoint_drive_id,candidates);
+    }
+    const safeByDrive=new Map(await Promise.all([...candidatesByDrive].map(async ([driveId,ids])=>[driveId,new Set(await unreferencedQualityDriveItems(service,driveId,ids,deletingIds))] as const)));
     for(const file of files.data || []) {
       for(const id of new Set([file.sharepoint_item_id,file.annotated_sharepoint_item_id].filter(Boolean))) {
+        if(!safeByDrive.get(file.sharepoint_drive_id!)?.has(id)) continue;
         if(!file.sharepoint_drive_id) throw new Error("Evidence storage reference is missing; deletion was retained for reconciliation.");
         try { await deleteDriveItem({driveId:file.sharepoint_drive_id,itemId:id}); }
         catch(error) { if(!/\(404\b/.test(error instanceof Error?error.message:"")) throw error; }

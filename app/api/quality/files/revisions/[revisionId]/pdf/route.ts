@@ -2,8 +2,7 @@ import { revisionEvidenceContext } from "@/lib/quality/evidence-context";
 import { annotateEvidence, WATERMARK_POSITIONS, type WatermarkPosition } from "@/lib/quality/evidence-watermark";
 import { revisionItemFli, revisionReference } from "@/lib/quality/fli";
 import { NextResponse } from "next/server";
-import sharp from "sharp";
-import { ensurePublishedQualityEvidence } from "@/lib/quality/evidence-publication";
+import { prepareEvidenceForPdf, RevisionPdfImageProcessingError } from "@/lib/quality/revision-pdf-images";
 import { qualityPdfName } from "@/lib/quality/file-names";
 import { qualityTimeZone } from "@/lib/quality/date-time";
 import { populatedDetailEntries, type DetailSchema } from "@/lib/quality/operational-details";
@@ -53,7 +52,12 @@ type QualityFileRow = {
   uploaded_by_label: string | null;
 };
 
-async function graphFileDataUrl(file: QualityFileRow, context?: Record<string,unknown>) {
+function isMissingSharePointItem(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\(404\b|itemNotFound/i.test(message);
+}
+
+async function graphFileForPdf(file: QualityFileRow, context?: Record<string,unknown>) {
   const token = await getGraphAccessToken();
   const response = await fetch(
     `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(file.sharepoint_drive_id)}/items/${encodeURIComponent(file.annotated_sharepoint_item_id || file.sharepoint_item_id)}/content`,
@@ -71,31 +75,51 @@ async function graphFileDataUrl(file: QualityFileRow, context?: Record<string,un
     );
   }
 
-  let contentType =
-    response.headers.get("content-type") || file.mime_type || "image/jpeg";
   let buffer: Buffer = Buffer.from(await response.arrayBuffer());
-  try {buffer=await sharp(buffer).rotate().jpeg({quality:90}).toBuffer();contentType="image/jpeg";}
-  catch {throw new Error(`Evidence image could not be decoded: ${file.file_name}.`);}
   if (!file.annotated_sharepoint_item_id && context) {
     const position=file.evidence_metadata?.position;
     buffer = Buffer.from(await annotateEvidence(buffer,{...context,phase:file.file_role === "after_photo" ? "AFTER" : "BEFORE",capturedAt:file.captured_at,capturedBy:file.evidence_metadata?.capturedBy,capturedDate:file.evidence_metadata?.capturedDate},typeof position === "string" && WATERMARK_POSITIONS.includes(position as WatermarkPosition) ? position as WatermarkPosition : "bottom-left"));
-    contentType="image/jpeg";
   }
-
-  return `data:${contentType};base64,${buffer.toString("base64")}`;
+  return prepareEvidenceForPdf(buffer);
 }
 
 async function toPdfPhoto(file: QualityFileRow, context?: Record<string,unknown>): Promise<RevisionPdfPhoto> {
+  const prepared = await graphFileForPdf(file, context);
   return {
     id: file.id,
     fileName: file.file_name,
-    mimeType: file.annotated_sharepoint_item_id || context ? "image/jpeg" : file.mime_type || "image/jpeg",
-    dataUrl: await graphFileDataUrl(file,context),
+    mimeType: prepared.mimeType,
+    imageBuffer: prepared.buffer,
     capturedAt: file.captured_at,
     recordedAt: file.created_at,
     capturedBy:String(file.evidence_metadata?.capturedBy || ""),capturedDate:String(file.evidence_metadata?.capturedDate || ""),
     uploadedByLabel: file.uploaded_by_label,
   };
+}
+
+async function toPdfPhotoOrMissing(file: QualityFileRow, context: Record<string,unknown> | undefined, missing: string[], unavailable: string[]): Promise<RevisionPdfPhoto> {
+  try {
+    // Read the current canonical pointer only. PDF rendering must not rename,
+    // move, upload, or update SharePoint evidence as a side effect.
+    return await toPdfPhoto(file, context);
+  } catch (error) {
+    const base: RevisionPdfPhoto = {
+      id:file.id,fileName:file.file_name,mimeType:file.mime_type || "image/jpeg",
+      capturedAt:file.captured_at,recordedAt:file.created_at,
+      capturedBy:String(file.evidence_metadata?.capturedBy || ""),capturedDate:String(file.evidence_metadata?.capturedDate || ""),
+      uploadedByLabel:file.uploaded_by_label,
+    };
+    if (isMissingSharePointItem(error)) {
+      missing.push(file.file_name);
+      return { ...base, missingFromSharePoint:true };
+    }
+    if (error instanceof RevisionPdfImageProcessingError) {
+      unavailable.push(file.file_name);
+      console.error("Revision PDF evidence image preparation failed", { evidenceId:file.id, category:"image-processing" });
+      return { ...base, unavailableMessage:"Evidence could not be prepared for this PDF" };
+    }
+    throw error;
+  }
 }
 
 export async function GET() {
@@ -218,6 +242,8 @@ export async function POST(request: Request, context: RouteContext) {
 
     checkpoint("canonical evidence publication, download and image decode");
     const pdfItems: RevisionPdfItem[] = [];
+    const missingEvidence: string[] = [];
+    const unavailableEvidence: string[] = [];
     for (const item of items) {
       const beforeRows = files.filter(
         (file) =>
@@ -228,10 +254,11 @@ export async function POST(request: Request, context: RouteContext) {
       );
 
       const evidenceContext = revisionEvidenceContext(revision,item,qualityTowerLabel(tower),issueTypeMap.get(item.issue_type_id));
-      const [beforePhotos, afterPhotos] = await Promise.all([
-        Promise.all(beforeRows.map(async file => toPdfPhoto({...file,...await ensurePublishedQualityEvidence(service,file),revision_id:file.revision_id},evidenceContext))),
-        Promise.all(afterRows.map(async file => toPdfPhoto({...file,...await ensurePublishedQualityEvidence(service,file),revision_id:file.revision_id},evidenceContext))),
-      ]);
+      const beforePhotos: RevisionPdfPhoto[] = [];
+      const afterPhotos: RevisionPdfPhoto[] = [];
+      // Download, optimize and release full-resolution source buffers one at a time.
+      for (const file of beforeRows) beforePhotos.push(await toPdfPhotoOrMissing(file,evidenceContext,missingEvidence,unavailableEvidence));
+      for (const file of afterRows) afterPhotos.push(await toPdfPhotoOrMissing(file,evidenceContext,missingEvidence,unavailableEvidence));
 
       pdfItems.push({
         itemNumber: Number(item.item_number),
@@ -261,7 +288,7 @@ export async function POST(request: Request, context: RouteContext) {
     const reserved=await service.rpc("reserve_v1_revision_pdf_number",{target_revision:revision.id});
     if(reserved.error || !reserved.data) throw new Error(reserved.error?.message || "PDF revision could not be reserved.");
     const reportRevision = Number(reserved.data);
-    const complete=incomplete.length===0;
+    const complete=incomplete.length===0 && missingEvidence.length===0 && unavailableEvidence.length===0;
     const generatedAt = new Date().toISOString();
     const generatedBy = qualityUserLabel(user);
 
@@ -379,6 +406,10 @@ export async function POST(request: Request, context: RouteContext) {
       success: true,
       report_revision: reportRevision,
       file: savedFile,
+      ...((missingEvidence.length || unavailableEvidence.length) ? { warning: [
+        missingEvidence.length ? `Evidence unavailable / missing from SharePoint: ${[...new Set(missingEvidence)].join(", ")}. Recover the original evidence and regenerate the report.` : "",
+        unavailableEvidence.length ? `Evidence could not be prepared: ${[...new Set(unavailableEvidence)].join(", ")}. Check the source image and regenerate the report.` : "",
+      ].filter(Boolean).join(" ") } : {}),
     });
   } catch (error) {
     console.error("REVISION PDF ERROR", {stage,durationMs:Date.now()-started,error:error instanceof Error?error.message:"Unknown error"});
