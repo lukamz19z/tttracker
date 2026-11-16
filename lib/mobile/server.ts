@@ -7,6 +7,7 @@ import {
   userHasAccess,
   type AccessService,
 } from "@/lib/access/server";
+import { mobilePerfTrace } from "@/lib/mobile/perf-trace";
 
 export type MobileIdentity = {
   userId: string;
@@ -87,9 +88,12 @@ export async function mobileIdentityForUser(
 }
 
 export async function requireMobileUser(request: NextRequest) {
+  const trace = mobilePerfTrace(request);
   const user = await getRequestUser(request);
+  const identityStartedAt = Date.now();
   const service = createServiceClient();
   const identity = await mobileIdentityForUser(service, user.id, user.email);
+  trace?.log("profile-lookup", { userId: user.id, currentProjectId: identity.currentProjectId, durationMs: Date.now() - identityStartedAt });
   return { user, service, identity };
 }
 
@@ -97,7 +101,9 @@ export async function requireMobilePermission(
   request: NextRequest,
   permissionCode: string,
 ) {
+  const trace = mobilePerfTrace(request);
   const auth = await requireMobileUser(request);
+  const accessStartedAt = Date.now();
   const allowed = await userHasAccess(
     auth.service,
     auth.identity.userId,
@@ -105,10 +111,13 @@ export async function requireMobilePermission(
   );
 
   if (!allowed) {
+    trace?.log("access-failed", { userId: auth.identity.userId, category: "permission_denied", durationMs: Date.now() - accessStartedAt });
     const error = new Error("MOBILE_PERMISSION_DENIED");
     (error as Error & { permissionCode?: string }).permissionCode = permissionCode;
     throw error;
   }
+
+  trace?.log("access-ok", { userId: auth.identity.userId, durationMs: Date.now() - accessStartedAt });
 
   return auth;
 }

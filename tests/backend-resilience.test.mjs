@@ -309,6 +309,49 @@ test("twenty overlapping identical bootstrap reads share one bounded request", a
   assert.deepEqual(await responses[0].json(), { projects: [] });
 });
 
+test("a rejected GET is removed from dedupe so an identical later GET reaches the network", async () => {
+  let calls = 0;
+  const policy = new BackendResilience({
+    fetchImpl: async () => {
+      calls++;
+      return calls <= 4 ? new Response("temporarily unavailable", { status: 503 }) : new Response("fresh", { status: 200 });
+    },
+    sleep: async () => {},
+    log: () => {},
+  });
+  const url = "https://example.test/api/mobile/profile";
+  assert.equal((await policy.fetch(url, { headers: { Authorization: "Bearer opaque-test" } })).status, 503);
+  assert.equal((await policy.fetch(url, { headers: { Authorization: "Bearer opaque-test" } })).status, 200);
+  assert.equal(calls, 5, "second call must issue one fresh network request after first call's retries");
+});
+
+test("a timed-out caller signal does not poison a later request with a fresh signal", async () => {
+  let calls = 0;
+  const policy = new BackendResilience({
+    fetchImpl: async (_input, init) => {
+      calls++;
+      if (calls === 1) return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new TypeError("fetch failed")), { once: true }));
+      return new Response("fresh", { status: 200 });
+    },
+    timeoutMs: 5,
+    sleep: async () => {},
+    log: () => {},
+  });
+  await assert.rejects(policy.fetch("https://example.test/profile", { signal: AbortSignal.timeout(2) }));
+  assert.equal((await policy.fetch("https://example.test/profile")).status, 200);
+  assert.equal(calls, 2);
+});
+
+test("mobile API diagnostics preserve authorization errors as HTTP outcomes instead of timeout errors", async () => {
+  const client = fs.readFileSync(path.resolve("mobile/lib/api/client.ts"), "utf8");
+  assert.match(client, /\[apiFetch\] response/);
+  assert.match(client, /status: response\.status/);
+  assert.match(client, /hasAuthorization: Boolean\(session\?\.access_token\)/);
+  assert.match(client, /circuitState: response\.headers\.get\("x-tttracker-circuit-state"\)/);
+  assert.match(client, /\[apiFetch\] failure[\s\S]*?category: "session"/);
+  assert.match(client, /inFlightJson\.delete\(key\)/);
+});
+
 test("request timeout terminates a hanging request with timeout metadata", async () => {
   const policy = new BackendResilience({
     fetchImpl: (_input, init) => new Promise((_, reject) => {

@@ -161,7 +161,7 @@ export class BackendResilience {
     const path = safeRequestPath(url);
     const requestHeaders = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init.headers).forEach((value, key) => requestHeaders.set(key, value));
-    const trace = requestHeaders.get("x-tttracker-trace") || nextTraceId();
+    const trace = requestHeaders.get("x-tttracker-trace-id") || requestHeaders.get("x-tttracker-trace") || nextTraceId();
     const requestStartedAt = this.now();
     this.log?.("backend_request_started", { trace, method, path, timeoutMs: requestTimeoutMs, maxAttempts: safeRead && !authRequest ? 4 : 1 });
     const circuitKey = `${safeOrigin(url)}${path}`;
@@ -313,7 +313,19 @@ function circuitOpenResponse(reason: "cooldown" | "probe_in_flight") {
 }
 
 function developmentLog(event: string, fields: Record<string, unknown>) {
-  if (typeof process !== "undefined" && process.env.NODE_ENV !== "production") console.info("TTTracker backend resilience", { event, ...fields });
+  if (typeof process === "undefined") return;
+  if (process.env.NODE_ENV !== "production") {
+    console.info("TTTracker backend resilience", { event, ...fields });
+    return;
+  }
+  const productionTraceEnabled = process.env.EXPO_PUBLIC_TTTRACKER_PERF_TRACE === "1";
+  if (productionTraceEnabled && fields.path === "/api/mobile/bootstrap" && typeof fields.trace === "string") {
+    const stage = event === "backend_request_timeout" ? "timeout"
+      : event === "backend_retry_exhausted" || event === "backend_transient_failure" ? "failure"
+      : event === "backend_request_finished" ? "cleanup"
+      : "attempt";
+    console.info(`[apiFetch] ${stage}`, { event, ...fields });
+  }
 }
 
 export const backendResilience = new BackendResilience({ log: developmentLog });

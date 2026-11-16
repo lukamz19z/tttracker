@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { effectivePermissionsForUser } from "@/lib/access/server";
 import { requireMobileUser, mobileApiError } from "@/lib/mobile/server";
+import { mobilePerfTrace } from "@/lib/mobile/perf-trace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,12 +62,26 @@ function applies(rule: FinanceRule, type: "expense_claim" | "invoice") {
 
 export async function GET(request: NextRequest) {
   const startedAt = Date.now();
-  const trace = request.headers.get("x-tttracker-trace");
-  const mark = (phase: string, since: number) => { if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, route: "mobile_bootstrap", phase, durationMs: Date.now() - since }); };
+  const trace = mobilePerfTrace(request);
+  const mark = (phase: string, since: number, fields: Record<string, string | number | boolean | null> = {}) => trace?.log(phase, { durationMs: Date.now() - since, ...fields });
+  trace?.log("handler-start", { at: new Date().toISOString() });
   try {
     const { service, identity } = await requireMobileUser(request);
-    mark("auth_identity", startedAt);
+    mark("auth-session-validated", startedAt, { userId: identity.userId, currentProjectId: identity.currentProjectId });
     const configStartedAt = Date.now();
+    const projectAccessStartedAt = Date.now();
+    const projectAccessRead = service
+      .from("project_access")
+      .select("project_id,role,projects(id,name,project_number,status)")
+      .eq("user_id", identity.userId)
+      .then((result) => {
+        if (result.error) {
+          trace?.log("access-failed", { userId: identity.userId, category: "project_access_query", errorCode: result.error.code ?? null, durationMs: Date.now() - projectAccessStartedAt });
+        } else {
+          trace?.log("access-ok", { userId: identity.userId, authorizedProjectCount: result.data?.length ?? 0, durationMs: Date.now() - projectAccessStartedAt });
+        }
+        return result;
+      });
 
     const [
       permissionRows,
@@ -82,10 +97,7 @@ export async function GET(request: NextRequest) {
         .from("user_role_assignments")
         .select("role_id,roles(id,code,name,description)")
         .eq("user_id", identity.userId),
-      service
-        .from("project_access")
-        .select("project_id,role,projects(id,name,project_number,status)")
-        .eq("user_id", identity.userId),
+      projectAccessRead,
       service
         .from("mobile_navigation_items")
         .select("code,section_code,section_label,section_sort_order,label,route,icon_key,permission_code,capability_key,requires_project,sort_order,active")
@@ -109,7 +121,7 @@ export async function GET(request: NextRequest) {
         .eq("user_id", identity.userId)
         .eq("receives_bc_review", true),
     ]);
-    mark("configuration_queries", configStartedAt);
+    mark("profile-and-access-queries", configStartedAt);
 
     for (const result of [roleRows, projectRows, navResult, settingsResult, financeResult, docketReviewerResult]) {
       if (result.error) throw new Error(result.error.message);
@@ -166,6 +178,12 @@ export async function GET(request: NextRequest) {
         };
       })
       .filter((row): row is NonNullable<typeof row> => row !== null);
+    trace?.log("current-project-resolution", {
+      userId: identity.userId,
+      currentProjectId: identity.currentProjectId,
+      currentProjectAuthorized: identity.currentProjectId ? projects.some((project) => project.id === identity.currentProjectId) : false,
+      authorizedProjectCount: projects.length,
+    });
 
     const serializeStartedAt = Date.now();
     const response = NextResponse.json({
@@ -200,12 +218,20 @@ export async function GET(request: NextRequest) {
         hasApprovals,
       },
     });
-    mark("serialize", serializeStartedAt);
-    mark("total", startedAt);
+    mark("response-serialization", serializeStartedAt);
+    mark("handler-end", startedAt, { httpStatus: 200 });
+    if (trace) response.headers.set("x-tttracker-trace-id", trace.id);
     return response;
   } catch (error) {
-    mark("failed_total", startedAt);
     const apiError = mobileApiError(error);
-    return NextResponse.json({ error: apiError.message }, { status: apiError.status });
+    trace?.log("error", {
+      httpStatus: apiError.status,
+      category: apiError.status === 401 ? "authentication" : apiError.status === 403 ? "authorization" : "handler_failure",
+      durationMs: Date.now() - startedAt,
+    });
+    trace?.log("handler-end", { httpStatus: apiError.status, durationMs: Date.now() - startedAt });
+    const response = NextResponse.json({ error: apiError.message }, { status: apiError.status });
+    if (trace) response.headers.set("x-tttracker-trace-id", trace.id);
+    return response;
   }
 }

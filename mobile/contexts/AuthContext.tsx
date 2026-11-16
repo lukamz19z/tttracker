@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
-import { ApiRequestError, apiJson } from "@/lib/api/client";
+import { ApiRequestError, apiJson, setApiProjectContext, setApiSession } from "@/lib/api/client";
 import type { Session } from "@supabase/supabase-js";
 import {
   createContext,
@@ -15,7 +15,6 @@ import {
 
 import { supabase } from "@/lib/supabase";
 import { clearMobileBootstrapCache, getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
-import { setApiSession } from "@/lib/api/client";
 import { isCurrentProjectGeneration, resolveInitialProjectId } from "@/lib/project-context";
 import { isTransientBackendFailure } from "../../lib/backend-resilience";
 
@@ -148,6 +147,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const applyProfile = useCallback((next: MobileProfile | null) => {
     profileRef.current = next;
     selectedProjectIdRef.current = next?.projectId ?? null;
+    setApiProjectContext(next?.projectId ?? null, selectionGenerationRef.current);
 
     if (!mountedRef.current) return;
 
@@ -162,6 +162,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const clearProfile = useCallback(() => {
     profileRef.current = null;
     selectedProjectIdRef.current = null;
+    setApiProjectContext(null, selectionGenerationRef.current + 1);
     setCurrentProjectIdState(null);
     selectionGenerationRef.current++;
     lastPersistenceTargetRef.current = null;

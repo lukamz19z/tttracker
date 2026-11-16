@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { NextRequest } from "next/server";
+import { mobilePerfTrace } from "@/lib/mobile/perf-trace";
 
 export type AccessService = SupabaseClient;
 
@@ -58,12 +59,16 @@ export function createServiceClient(): AccessService {
 
 export async function getRequestUser(request: NextRequest) {
   const authStartedAt = Date.now();
-  const trace = request.headers.get("x-tttracker-trace");
+  const trace = mobilePerfTrace(request);
   const token = (request.headers.get("authorization") ?? "")
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  if (!token) throw new Error("Missing authentication token.");
+  trace?.log("received", { hasAuthorization: Boolean(token), at: new Date().toISOString() });
+  if (!token) {
+    trace?.log("auth-failed", { category: "missing_authorization", durationMs: Date.now() - authStartedAt });
+    throw new Error("Missing authentication token.");
+  }
 
   const authClient = createClient(
     requiredEnv("NEXT_PUBLIC_SUPABASE_URL"),
@@ -75,8 +80,11 @@ export async function getRequestUser(request: NextRequest) {
   );
 
   const { data, error } = await authClient.auth.getUser(token);
-  if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, phase: "server_auth", durationMs: Date.now() - authStartedAt });
-  if (error || !data.user) throw new Error("You must be logged in.");
+  if (error || !data.user) {
+    trace?.log("auth-failed", { category: "invalid_session", errorCode: error?.code ?? null, httpStatus: error?.status ?? null, durationMs: Date.now() - authStartedAt });
+    throw new Error("You must be logged in.");
+  }
+  trace?.log("auth-ok", { userId: data.user.id, durationMs: Date.now() - authStartedAt });
 
   return data.user;
 }
