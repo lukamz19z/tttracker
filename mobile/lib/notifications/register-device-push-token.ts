@@ -3,6 +3,7 @@ import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 
 import { supabase } from "@/lib/supabase";
+import { getApiSessionUser } from "@/lib/api/client";
 
 const GENERAL_NOTIFICATION_CHANNEL_ID = "tttracker-general";
 
@@ -58,12 +59,7 @@ export async function registerDevicePushToken(): Promise<RegistrationResult> {
     };
   }
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError) throw userError;
+  const user = await getApiSessionUser();
 
   if (!user) {
     return {

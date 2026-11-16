@@ -12,6 +12,8 @@ import {
 } from "react";
 
 import { supabase } from "@/lib/supabase";
+import { clearMobileBootstrapCache, getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
+import { setApiSession } from "@/lib/api/client";
 import { isTransientBackendFailure } from "../../lib/backend-resilience";
 
 export type AvailableProject = {
@@ -52,44 +54,6 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-type EmployeeRow = {
-  id: string;
-  full_name: string | null;
-  role: string | null;
-  crew_id: string | null;
-  current_project_id: string | null;
-  crews:
-    | {
-        id: string;
-        crew_number: string | null;
-        crew_name: string | null;
-      }
-    | Array<{
-        id: string;
-        crew_number: string | null;
-        crew_name: string | null;
-      }>
-    | null;
-};
-
-type ProjectAccessRow = {
-  project_id: string;
-  projects:
-    | {
-        id: string;
-        name: string;
-        project_number: string | null;
-        status: string | null;
-      }
-    | Array<{
-        id: string;
-        name: string;
-        project_number: string | null;
-        status: string | null;
-      }>
-    | null;
-};
-
 type CachedProfile = {
   savedAt: string;
   profile: MobileProfile;
@@ -99,11 +63,6 @@ const PROFILE_CACHE_PREFIX = "tttracker:mobile-profile:v2:";
 
 function profileCacheKey(userId: string) {
   return `${PROFILE_CACHE_PREFIX}${userId}`;
-}
-
-function one<T>(value: T | T[] | null | undefined): T | null {
-  if (!value) return null;
-  return Array.isArray(value) ? value[0] ?? null : value;
 }
 
 function fallbackName(session: Session): string {
@@ -184,7 +143,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, []);
 
   const fetchAndApplyProfile = useCallback(
-    async (currentSession: Session) => {
+    async (currentSession: Session, force = false) => {
       const userId = currentSession.user.id;
 
       if (profileRequestRef.current?.userId === userId) {
@@ -203,48 +162,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
 
         try {
-          const email = currentSession.user.email ?? "";
-
-          const [employeeResult, projectAccessResult] = await Promise.all([
-            supabase
-              .from("employees")
-              .select(
-                "id,full_name,role,crew_id,current_project_id,crews(id,crew_number,crew_name)",
-              )
-              .eq("user_id", userId)
-              .maybeSingle(),
-            supabase
-              .from("project_access")
-              .select("project_id,projects(id,name,project_number,status)")
-              .eq("user_id", userId),
-          ]);
-
-          if (employeeResult.error) throw employeeResult.error;
-          if (projectAccessResult.error) throw projectAccessResult.error;
-
-          const employee =
-            (employeeResult.data ?? null) as EmployeeRow | null;
-          const crew = one(employee?.crews);
-          const accessRows =
-            (projectAccessResult.data ?? []) as ProjectAccessRow[];
-
-          const availableProjects = accessRows
-            .map((access): AvailableProject | null => {
-              const project = one(access.projects);
-              if (!project) return null;
-
-              return {
-                id: project.id,
-                name: project.name,
-                projectNumber: project.project_number,
-                status: project.status,
-              };
-            })
-            .filter(
-              (project): project is AvailableProject => project !== null,
-            );
-
-          const savedProjectId = employee?.current_project_id ?? null;
+          const bootstrap = await getMobileBootstrap(userId, force);
+          const employee = bootstrap.employee;
+          const availableProjects: AvailableProject[] = (bootstrap.projects ?? []).map((project) => ({
+            id: project.id,
+            name: project.name,
+            projectNumber: project.projectNumber,
+            status: project.status,
+          }));
+          const savedProjectId = employee?.currentProjectId ?? null;
           const selectedProject =
             availableProjects.find(
               (project) => project.id === savedProjectId,
@@ -260,14 +186,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
           applyProfile({
             userId,
-            email,
+            email: currentSession.user.email ?? "",
             employeeId: employee?.id ?? null,
-            fullName:
-              employee?.full_name?.trim() || fallbackName(currentSession),
-            employeeRole: employee?.role ?? null,
-            crewId: crew?.id ?? employee?.crew_id ?? null,
-            crewNumber: crew?.crew_number ?? null,
-            crewName: crew?.crew_name ?? null,
+            fullName: employee?.fullName?.trim() || fallbackName(currentSession),
+            employeeRole: employee?.position ?? null,
+            crewId: employee?.crewId ?? null,
+            crewNumber: employee?.crewNumber ?? null,
+            crewName: employee?.crewName ?? null,
             projectId: selectedProject?.id ?? null,
             projectName: selectedProject?.name ?? null,
             projectNumber: selectedProject?.projectNumber ?? null,
@@ -331,7 +256,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    await fetchAndApplyProfile(session);
+    clearMobileBootstrapCache(session.user.id);
+    await fetchAndApplyProfile(session, true);
   }, [clearProfile, fetchAndApplyProfile, session]);
 
   const setCurrentProject = useCallback(
@@ -371,6 +297,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (error) throw error;
 
         /* No full profile reload is required; the selected project is known. */
+        clearMobileBootstrapCache(session.user.id);
         await writeCachedProfile(next);
       } catch (error) {
         applyProfile(previous);
@@ -396,6 +323,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         authGenerationRef.current++;
         activeSessionRef.current = data.session;
+        setApiSession(data.session);
         setSession(data.session);
         setStatus(data.session ? "signed_in" : "signed_out");
         setLoading(false);
@@ -439,6 +367,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         authGenerationRef.current++;
         activeSessionRef.current = nextSession;
+        setApiSession(nextSession);
         setSession(nextSession);
         setStatus(nextSession ? "signed_in" : "signed_out");
         setLoading(false);
@@ -460,6 +389,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         if (!nextSession) {
           const previousUserId = profileRef.current?.userId;
+          clearMobileBootstrapCache();
           clearProfile();
 
           if (previousUserId) {

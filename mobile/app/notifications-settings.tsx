@@ -37,6 +37,7 @@ import {
 import { useAccess } from "@/lib/access";
 import { registerDevicePushToken } from "@/lib/notifications/register-device-push-token";
 import { supabase } from "@/lib/supabase";
+import { getApiSessionUser } from "@/lib/api/client";
 
 type Preferences = {
   notifications_enabled: boolean;
@@ -289,12 +290,7 @@ export default function NotificationSettingsScreen() {
   );
 
   const loadPreferences = useCallback(async () => {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError) throw userError;
+    const user = await getApiSessionUser();
     if (!user) {
       throw new Error(
         "No signed-in TTTracker user was found.",

@@ -38,50 +38,12 @@ import {
 import { ProjectSelector } from "@/components/ProjectSelector";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
+import { apiJson } from "@/lib/api/client";
 import { getMyTraining } from "@/lib/api/training";
 import { supabase } from "@/lib/supabase";
 import type { TrainingRecord } from "@/types/training";
 
 type Tone = "green" | "amber" | "red" | "blue" | "slate";
-
-type Tower = {
-  id: string;
-  project_id: string;
-  progress: number | null;
-};
-
-type DocketRow = {
-  id: string;
-  tower_id: string | null;
-  project_id: string | null;
-  docket_date: string | null;
-  assembly_percent: number | null;
-  erection_percent: number | null;
-};
-
-type DefectRow = {
-  id: string;
-  status: string | null;
-};
-
-type DeliveryRow = {
-  id: string;
-  tower_id: string | null;
-};
-
-type DeliveryItemRow = {
-  delivery_id: string | null;
-  qty_delivered?: number | null;
-  quantity_delivered?: number | null;
-  delivered_qty?: number | null;
-  qty?: number | null;
-};
-
-type MaterialBundleRow = {
-  tower_id: string | null;
-  qty_required?: number | null;
-  required_qty?: number | null;
-};
 
 type UserNotification = {
   id: string;
@@ -149,6 +111,13 @@ type ProjectDashboardData = {
 };
 
 const ASSIGNED_VEHICLE_KEY = "tttracker.mobile.assigned_vehicle_id";
+const PROJECT_DASHBOARD_CACHE_PREFIX = "tttracker.mobile.project-dashboard.v1:";
+const PROJECT_DASHBOARD_FRESH_MS = 60_000;
+const HOME_CARD_FRESH_MS = 60_000;
+
+function projectDashboardCacheKey(userId: string, projectId: string) {
+  return `${PROJECT_DASHBOARD_CACHE_PREFIX}${userId}:${projectId}`;
+}
 
 const EMPTY_NOTIFICATIONS: NotificationSummary = {
   unreadCount: 0,
@@ -177,11 +146,6 @@ const EMPTY_PROJECT: ProjectDashboardData = {
 
 function clean(value: unknown) {
   return String(value ?? "").trim();
-}
-
-function safeNumber(value: unknown, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function clampPercent(value: number) {
@@ -245,39 +209,6 @@ function daysSince(value: string | null | undefined) {
 
 function formatPercent(value: number) {
   return `${Math.round(clampPercent(value))}%`;
-}
-
-function getDocketProgress(docket: DocketRow) {
-  return clampPercent(
-    safeNumber(docket.assembly_percent) * 0.5 +
-      safeNumber(docket.erection_percent) * 0.5,
-  );
-}
-
-function getTowerProgress(tower: Tower, dockets: DocketRow[]) {
-  const related = dockets.filter((docket) => docket.tower_id === tower.id);
-
-  if (!related.length) {
-    return clampPercent(safeNumber(tower.progress));
-  }
-
-  return related.reduce(
-    (maximum, docket) => Math.max(maximum, getDocketProgress(docket)),
-    clampPercent(safeNumber(tower.progress)),
-  );
-}
-
-function getDeliveredQty(row: DeliveryItemRow) {
-  return safeNumber(
-    row.qty_delivered ??
-      row.quantity_delivered ??
-      row.delivered_qty ??
-      row.qty,
-  );
-}
-
-function getRequiredQty(row: MaterialBundleRow) {
-  return safeNumber(row.qty_required ?? row.required_qty);
 }
 
 function crewDisplay(
@@ -460,9 +391,16 @@ export default function HomeScreen() {
   const [projectDashboard, setProjectDashboard] =
     useState<ProjectDashboardData>(EMPTY_PROJECT);
   const [projectLoading, setProjectLoading] = useState(false);
+  const [projectDashboardLoaded, setProjectDashboardLoaded] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
   const personalLoadActive = useRef(false);
-  const projectLoadActive = useRef(false);
+  const personalLoadedAt = useRef(0);
+  const notificationsLoadedAt = useRef(0);
+  const personalLoadedForUser = useRef<string | null>(null);
+  const notificationsLoadedForUser = useRef<string | null>(null);
+  const projectRequestVersion = useRef(0);
+  const loadedDashboardProjectId = useRef<string | null>(null);
+  const projectDashboardFetchedAt = useRef(0);
   const notificationLoadActive = useRef(false);
 
   const selectedProject =
@@ -509,7 +447,7 @@ export default function HomeScreen() {
     [personal.latestVehiclePrestart, personal.vehicle],
   );
 
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (force = false) => {
     if (notificationLoadActive.current) return;
     notificationLoadActive.current = true;
     if (!canUseNotifications || !session?.user.id) {
@@ -518,6 +456,11 @@ export default function HomeScreen() {
       notificationLoadActive.current = false;
       return;
     }
+    if (notificationsLoadedForUser.current !== session.user.id) {
+      notificationsLoadedForUser.current = session.user.id;
+      notificationsLoadedAt.current = 0;
+    }
+    if (!force && Date.now() - notificationsLoadedAt.current < HOME_CARD_FRESH_MS) return;
 
     setNotificationsLoading(true);
     setNotificationsError(null);
@@ -548,6 +491,7 @@ export default function HomeScreen() {
         ).length,
         recent: rows.slice(0, 2),
       });
+      notificationsLoadedAt.current = Date.now();
     } catch (error) {
       setNotificationsError(
         error instanceof Error
@@ -560,12 +504,17 @@ export default function HomeScreen() {
     }
   }, [canUseNotifications, session?.user.id]);
 
-  const loadPersonalDashboard = useCallback(async () => {
+  const loadPersonalDashboard = useCallback(async (force = false) => {
     if (personalLoadActive.current) return;
     if (!canSeeMyDay) {
       setPersonal(EMPTY_PERSONAL);
       return;
     }
+    if (personalLoadedForUser.current !== session?.user.id) {
+      personalLoadedForUser.current = session?.user.id ?? null;
+      personalLoadedAt.current = 0;
+    }
+    if (!force && Date.now() - personalLoadedAt.current < HOME_CARD_FRESH_MS) return;
 
     personalLoadActive.current = true;
     setPersonalLoading(true);
@@ -613,190 +562,97 @@ export default function HomeScreen() {
 
     try {
       await Promise.all(tasks);
+      personalLoadedAt.current = Date.now();
     } finally {
       setPersonalLoading(false);
       personalLoadActive.current = false;
     }
-  }, [canSeeMyDay, canUseTraining, canUseVehiclePrestarts, fullName]);
+  }, [canSeeMyDay, canUseTraining, canUseVehiclePrestarts, fullName, session?.user.id]);
 
-  const loadProjectDashboard = useCallback(async () => {
-    if (projectLoadActive.current) return;
+  const loadProjectDashboard = useCallback(async (force = false) => {
     const projectId = profile?.projectId;
+    const userId = profile?.userId;
+    const requestVersion = ++projectRequestVersion.current;
 
-    if (!canSeeProjectSnapshot || !projectId) {
+    if (!canSeeProjectSnapshot || !projectId || !userId) {
       setProjectDashboard(EMPTY_PROJECT);
+      setProjectDashboardLoaded(false);
       setProjectError(null);
+      setProjectLoading(false);
       return;
     }
 
-    projectLoadActive.current = true;
-    setProjectLoading(true);
+    const cacheIdentity = `${userId}:${projectId}`;
+    const sameProjectCache = loadedDashboardProjectId.current === cacheIdentity;
+    if (!sameProjectCache) {
+      setProjectDashboard(EMPTY_PROJECT);
+      setProjectDashboardLoaded(false);
+      setProjectLoading(true);
+    }
     setProjectError(null);
 
     try {
-      const towersResult = await supabase
-        .from("towers")
-        .select("id,project_id,progress")
-        .eq("project_id", projectId);
-
-      if (towersResult.error) throw towersResult.error;
-
-      const towers = (towersResult.data ?? []) as Tower[];
-      const towerIds = towers.map((tower) => tower.id);
-
-      let dockets: DocketRow[] = [];
-
-      if (canUseTowerProgress || canUseDockets) {
-        const docketResult = await supabase
-          .from("tower_daily_dockets")
-          .select(
-            "id,tower_id,project_id,docket_date,assembly_percent,erection_percent",
-          )
-          .eq("project_id", projectId)
-          .is("deleted_at", null);
-
-        if (!docketResult.error) {
-          dockets = (docketResult.data ?? []) as DocketRow[];
-        }
+      if (sameProjectCache && !force && Date.now() - projectDashboardFetchedAt.current < PROJECT_DASHBOARD_FRESH_MS) {
+        return;
       }
-
-      const progressValues = towers.map((tower) =>
-        getTowerProgress(tower, dockets),
-      );
-
-      const completedTowers = progressValues.filter(
-        (progress) => progress >= 100,
-      ).length;
-      const towersInProgress = progressValues.filter(
-        (progress) => progress > 0 && progress < 100,
-      ).length;
-      const notStartedTowers = progressValues.filter(
-        (progress) => progress <= 0,
-      ).length;
-      const overallProgress =
-        progressValues.length > 0
-          ? progressValues.reduce((sum, progress) => sum + progress, 0) /
-            progressValues.length
-          : 0;
-
-      let openDefects: number | null = null;
-
-      if (canUseDefects && towerIds.length > 0) {
-        const defectResult = await supabase
-          .from("tower_defects")
-          .select("id,status")
-          .in("tower_id", towerIds);
-
-        if (!defectResult.error) {
-          openDefects = ((defectResult.data ?? []) as DefectRow[]).filter(
-            (row) =>
-              !["closed", "complete", "completed"].includes(
-                clean(row.status).toLowerCase(),
-              ),
-          ).length;
+      if (!sameProjectCache) {
+        const cacheKey = projectDashboardCacheKey(userId, projectId);
+        let cached: string | null = null;
+        try {
+          cached = await AsyncStorage.getItem(cacheKey);
+        } catch (cacheError) {
+          if (__DEV__) console.debug("TTTracker dashboard cache read unavailable", { category: cacheError instanceof Error ? cacheError.name : "unknown" });
         }
-      }
-
-      let deliveryProgress: number | null = null;
-
-      if (canUseDeliveries && towerIds.length > 0) {
-        const bundleResult = await supabase
-          .from("tower_required_bundles")
-          .select("tower_id,qty_required,required_qty")
-          .in("tower_id", towerIds);
-
-        let deliveries: DeliveryRow[] = [];
-        let deliveryItems: DeliveryItemRow[] = [];
-
-        for (const table of ["tower_bundle_deliveries", "tower_deliveries"]) {
-          const result = await supabase
-            .from(table)
-            .select("id,tower_id")
-            .in("tower_id", towerIds);
-
-          if (!result.error) {
-            deliveries = (result.data ?? []) as DeliveryRow[];
-            break;
-          }
-        }
-
-        const deliveryIds = deliveries.map((row) => row.id);
-
-        if (deliveryIds.length > 0) {
-          for (const table of [
-            "tower_bundle_delivery_items",
-            "tower_delivery_items",
-            "tower_delivered_items",
-          ]) {
-            const result = await supabase
-              .from(table)
-              .select("*")
-              .in("delivery_id", deliveryIds);
-
-            if (!result.error) {
-              deliveryItems = (result.data ?? []) as DeliveryItemRow[];
-              break;
+        if (requestVersion !== projectRequestVersion.current) return;
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as { savedAt?: string; summary?: ProjectDashboardData };
+            if (parsed.summary && parsed.summary.totalTowers !== undefined) {
+              setProjectDashboard(parsed.summary);
+              setProjectDashboardLoaded(true);
+              loadedDashboardProjectId.current = cacheIdentity;
+              projectDashboardFetchedAt.current = Date.parse(parsed.savedAt ?? "") || 0;
+              setProjectLoading(false);
             }
+          } catch {
+            void AsyncStorage.removeItem(cacheKey);
           }
-        }
-
-        if (!bundleResult.error) {
-          const bundles =
-            (bundleResult.data ?? []) as MaterialBundleRow[];
-          const totalRequired = bundles.reduce(
-            (sum, row) => sum + getRequiredQty(row),
-            0,
-          );
-          const totalDelivered = deliveryItems.reduce(
-            (sum, row) => sum + getDeliveredQty(row),
-            0,
-          );
-
-          deliveryProgress =
-            totalRequired > 0
-              ? clampPercent((totalDelivered / totalRequired) * 100)
-              : 0;
         }
       }
 
-      const latestDocketDate = canUseDockets
-        ? dockets
-            .map((docket) => docket.docket_date)
-            .filter((value): value is string => Boolean(value))
-            .sort((a, b) => {
-              const left = parseDateOnly(a)?.getTime() ?? 0;
-              const right = parseDateOnly(b)?.getTime() ?? 0;
-              return right - left;
-            })[0] ?? null
-        : null;
-
-      setProjectDashboard({
-        totalTowers: towers.length,
-        completedTowers,
-        towersInProgress,
-        notStartedTowers,
-        overallProgress,
-        deliveryProgress,
-        openDefects,
-        latestDocketDate,
+      const requestStartedAt = Date.now();
+      const summary = await apiJson<ProjectDashboardData>(
+        `/api/mobile/dashboard-summary?projectId=${encodeURIComponent(projectId)}`,
+      );
+      if (requestVersion !== projectRequestVersion.current || profile?.projectId !== projectId || profile?.userId !== userId) return;
+      setProjectDashboard(summary);
+      setProjectDashboardLoaded(true);
+      loadedDashboardProjectId.current = cacheIdentity;
+      projectDashboardFetchedAt.current = Date.now();
+      try {
+        await AsyncStorage.setItem(projectDashboardCacheKey(userId, projectId), JSON.stringify({ savedAt: new Date().toISOString(), summary }));
+      } catch (cacheError) {
+        if (__DEV__) console.debug("TTTracker dashboard cache unavailable", { category: cacheError instanceof Error ? cacheError.name : "unknown" });
+      }
+      if (__DEV__) console.debug("TTTracker Home dashboard summary", {
+        requestCount: 1,
+        durationMs: Date.now() - requestStartedAt,
+        cache: "refreshed",
       });
     } catch (error) {
+      if (requestVersion !== projectRequestVersion.current) return;
       setProjectError(
         error instanceof Error
           ? error.message
           : "Project summary could not be loaded.",
       );
     } finally {
-      setProjectLoading(false);
-      projectLoadActive.current = false;
+      if (requestVersion === projectRequestVersion.current) setProjectLoading(false);
     }
   }, [
     canSeeProjectSnapshot,
-    canUseDefects,
-    canUseDeliveries,
-    canUseDockets,
-    canUseTowerProgress,
     profile?.projectId,
+    profile?.userId,
   ]);
 
   useFocusEffect(
@@ -815,9 +671,9 @@ export default function HomeScreen() {
     try {
       await refreshProfile();
       await Promise.all([
-        loadPersonalDashboard(),
-        loadProjectDashboard(),
-        loadNotifications(),
+        loadPersonalDashboard(true),
+        loadProjectDashboard(true),
+        loadNotifications(true),
       ]);
     } catch (error) {
       Alert.alert(
@@ -1098,10 +954,10 @@ export default function HomeScreen() {
             />
 
             {projectError ? (
-              <ErrorCard title="Project snapshot unavailable" message={projectError} />
+              <ErrorCard title="Project snapshot unavailable" message={projectError} onRetry={() => void loadProjectDashboard(true)} />
             ) : null}
 
-            {projectLoading ? (
+            {projectLoading && !projectDashboardLoaded ? (
               <LoadingCard text="Updating project snapshot..." />
             ) : (
               <View style={styles.panel}>
@@ -1302,9 +1158,11 @@ function SmallMetric({
 function ErrorCard({
   title,
   message,
+  onRetry,
 }: {
   title: string;
   message: string;
+  onRetry?: () => void;
 }) {
   return (
     <View style={styles.errorCard}>
@@ -1312,6 +1170,11 @@ function ErrorCard({
       <View style={styles.errorCardText}>
         <Text style={styles.errorTitle}>{title}</Text>
         <Text style={styles.errorMessage}>{message}</Text>
+        {onRetry ? (
+          <Pressable onPress={onRetry} style={styles.textButton}>
+            <Text style={styles.textButtonText}>Retry</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );

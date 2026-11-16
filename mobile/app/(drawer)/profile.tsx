@@ -46,6 +46,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
+import { getApiSessionUser } from "@/lib/api/client";
 
 type SelectOption = {
   label: string;
@@ -238,12 +239,7 @@ export default function ProfileScreen() {
     setEmployeeLinkError(null);
 
     try {
-      const {
-        data: { user: currentUser },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
+      const currentUser = await getApiSessionUser();
       if (!currentUser) throw new Error("No signed-in user was found.");
 
       const { data: employeeData, error: employeeError } = await supabase

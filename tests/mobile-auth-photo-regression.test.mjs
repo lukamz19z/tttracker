@@ -113,6 +113,14 @@ function loadAuthProvider({ getSession, cachedProfile = null, queriesFail = fals
     if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }) };
     if (name === "@react-native-async-storage/async-storage") return storage;
     if (name === "@/lib/supabase") return { supabase };
+    if (name === "@/lib/api/client") return { setApiSession() {} };
+    if (name === "@/lib/api/mobile-bootstrap") return {
+      clearMobileBootstrapCache() {},
+      getMobileBootstrap: async () => {
+        if (queriesFail) throw new TypeError("Failed to fetch");
+        return { employee: { id: "emp-1", fullName: "Field User", position: null, crewId: null, crewNumber: null, crewName: null, currentProjectId: "project-1" }, projects: [{ id: "project-1", name: "Project", projectNumber: "P-1", status: "Active" }] };
+      },
+    };
     if (name.endsWith("/backend-resilience")) return { isTransientBackendFailure: (error) => /network|fetch/i.test(error?.message || "") };
     throw new Error(`Unexpected AuthContext dependency: ${name}`);
   }, exports);

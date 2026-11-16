@@ -1,5 +1,5 @@
 import { getCache, setCache } from "@/lib/offline/db";
-import { supabase } from "@/lib/supabase";
+import { getApiSession } from "@/lib/api/client";
 
 const WEB_BASE_URL = (
   process.env.EXPO_PUBLIC_TTTRACKER_WEB_URL ||
@@ -39,9 +39,7 @@ export async function sitePrestartApi(
   path: string,
   init: RequestInit = {},
 ) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getApiSession();
 
   if (!session?.access_token) {
     throw new Error("Your TTTracker session has expired. Sign in again.");

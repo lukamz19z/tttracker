@@ -530,28 +530,28 @@ export default function ProjectProgressScreen() {
           ] = await Promise.all([
             supabase
               .from("projects")
-              .select("*")
+              .select("id,name,project_number")
               .eq("id", projectId)
               .single(),
 
             supabase
               .from("towers")
-              .select("*")
+              .select("id,project_id,name,line,status,progress,extra_data")
               .eq(
                 "project_id",
                 projectId,
-              )
-              .is("deleted_at", null),
+              ),
 
             supabase
               .from(
                 "tower_daily_dockets",
               )
-              .select("*")
+              .select("id,project_id,tower_id,docket_date,deleted_at,assembly_percent,erection_percent,crew,leading_hand,raw_manhours,production_manhours")
               .eq(
                 "project_id",
                 projectId,
-              ),
+              )
+              .is("deleted_at", null),
           ]);
 
           if (projectResult.error) {
@@ -611,126 +611,48 @@ export default function ProjectProgressScreen() {
           let loadedMaterialBundles: MaterialBundleRow[] =
             [];
 
-          if (docketIds.length > 0) {
-            for (const table of [
-              "tower_docket_labour",
-              "tower_daily_docket_labour",
-              "tower_daily_docket_labour_rows",
-            ]) {
-              const {
-                data,
-                error,
-              } = await supabase
-                .from(table)
-                .select("*")
-                .in(
-                  "docket_id",
-                  docketIds,
-                );
-
-              if (!error && data) {
-                loadedLabourRows =
-                  data as LabourRow[];
-
-                break;
+          const [labourRows, defectsRows, bundleRows, deliveryRows] = await Promise.all([
+            (async () => {
+              if (!docketIds.length) return [] as LabourRow[];
+              for (const table of ["tower_docket_labour", "tower_daily_docket_labour", "tower_daily_docket_labour_rows"]) {
+                const { data, error } = await supabase.from(table)
+                  .select("docket_id,total_hours,production_hours")
+                  .in("docket_id", docketIds);
+                if (!error && data) return data as LabourRow[];
               }
-            }
-          }
-
-          if (towerIds.length > 0) {
-            const [
-              defectsResult,
-              materialsResult,
-            ] = await Promise.all([
-              supabase
-                .from("tower_defects")
-                .select("*")
-                .in(
-                  "tower_id",
-                  towerIds,
-                ),
-
-              supabase
-                .from(
-                  "tower_required_bundles",
-                )
-                .select("*")
-                .in(
-                  "tower_id",
-                  towerIds,
-                ),
-            ]);
-
-            if (
-              !defectsResult.error &&
-              defectsResult.data
-            ) {
-              loadedDefects =
-                defectsResult.data as DefectRow[];
-            }
-
-            if (
-              !materialsResult.error &&
-              materialsResult.data
-            ) {
-              loadedMaterialBundles =
-                materialsResult.data as MaterialBundleRow[];
-            }
-
-            for (const table of [
-              "tower_bundle_deliveries",
-              "tower_deliveries",
-            ]) {
-              const {
-                data,
-                error,
-              } = await supabase
-                .from(table)
-                .select("*")
-                .in(
-                  "tower_id",
-                  towerIds,
-                );
-
-              if (!error && data) {
-                loadedDeliveries =
-                  data as DeliveryRow[];
-
-                break;
+              return [] as LabourRow[];
+            })(),
+            towerIds.length
+              ? supabase.from("tower_defects").select("id,tower_id,status").in("tower_id", towerIds)
+                  .then(({ data, error }) => error ? [] as DefectRow[] : (data ?? []) as DefectRow[])
+              : Promise.resolve([] as DefectRow[]),
+            towerIds.length
+              ? supabase.from("tower_required_bundles").select("tower_id,qty_required").in("tower_id", towerIds)
+                  .then(({ data, error }) => error ? [] as MaterialBundleRow[] : (data ?? []) as MaterialBundleRow[])
+              : Promise.resolve([] as MaterialBundleRow[]),
+            (async () => {
+              if (!towerIds.length) return [] as DeliveryRow[];
+              for (const table of ["tower_bundle_deliveries", "tower_deliveries"]) {
+                const { data, error } = await supabase.from(table).select("id,tower_id").in("tower_id", towerIds);
+                if (!error && data) return data as DeliveryRow[];
               }
-            }
+              return [] as DeliveryRow[];
+            })(),
+          ]);
+          loadedLabourRows = labourRows;
+          loadedDefects = defectsRows;
+          loadedMaterialBundles = bundleRows;
+          loadedDeliveries = deliveryRows;
 
-            const deliveryIds =
-              loadedDeliveries.map(
-                (delivery) =>
-                  delivery.id,
-              );
-
-            if (
-              deliveryIds.length > 0
-            ) {
-              for (const table of [
-                "tower_bundle_delivery_items",
-                "tower_delivery_items",
-                "tower_delivered_items",
-              ]) {
-                const {
-                  data,
-                  error,
-                } = await supabase
-                  .from(table)
-                  .select("*")
-                  .in(
-                    "delivery_id",
-                    deliveryIds,
-                  );
-
-                if (!error && data) {
-                  loadedDeliveryItems =
-                    data as DeliveryItemRow[];
-
-                  break;
-                }
+          const deliveryIds = loadedDeliveries.map((delivery) => delivery.id);
+          if (deliveryIds.length > 0) {
+            for (const table of ["tower_bundle_delivery_items", "tower_delivery_items", "tower_delivered_items"]) {
+              const { data, error } = await supabase.from(table)
+                .select("delivery_id,qty_delivered")
+                .in("delivery_id", deliveryIds);
+              if (!error && data) {
+                loadedDeliveryItems = data as DeliveryItemRow[];
+                break;
               }
             }
           }

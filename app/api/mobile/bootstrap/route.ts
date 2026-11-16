@@ -136,44 +136,7 @@ export async function GET(request: NextRequest) {
     };
 
     const docketProjects = capabilities.docketReviewerProjectIds;
-    const countsStartedAt = Date.now();
-    const [docketCountResult, expenseCountResult, invoiceCountResult] = await Promise.all([
-      docketProjects.length
-        ? service
-            .from("tower_daily_dockets")
-            .select("id", { count: "exact", head: true })
-            .in("project_id", docketProjects)
-            .in("approval_status", ["submitted_bc", "client_changes_requested"])
-        : Promise.resolve({ count: 0, error: null }),
-      capabilities.expense.canReviewEdit || capabilities.expense.canApprove
-        ? service
-            .from("financial_submissions")
-            .select("id", { count: "exact", head: true })
-            .eq("submission_type", "expense_claim")
-            .eq("status", "submitted")
-        : Promise.resolve({ count: 0, error: null }),
-      capabilities.invoice.canReviewEdit || capabilities.invoice.canApprove
-        ? service
-            .from("financial_submissions")
-            .select("id", { count: "exact", head: true })
-            .eq("submission_type", "invoice")
-            .eq("status", "submitted")
-        : Promise.resolve({ count: 0, error: null }),
-    ]);
-    mark("approval_counts", countsStartedAt);
-
-    if (docketCountResult.error) throw new Error(docketCountResult.error.message);
-    if (expenseCountResult.error) throw new Error(expenseCountResult.error.message);
-    if (invoiceCountResult.error) throw new Error(invoiceCountResult.error.message);
-
-    const approvalCounts = {
-      dailyDockets: docketCountResult.count ?? 0,
-      expenseClaims: expenseCountResult.count ?? 0,
-      invoices: invoiceCountResult.count ?? 0,
-    };
-
     const hasApprovals =
-      approvalCounts.dailyDockets + approvalCounts.expenseClaims + approvalCounts.invoices > 0 ||
       docketProjects.length > 0 ||
       capabilities.expense.canReviewEdit ||
       capabilities.expense.canApprove ||
@@ -236,7 +199,6 @@ export async function GET(request: NextRequest) {
         ...capabilities,
         hasApprovals,
       },
-      approvalCounts,
     });
     mark("serialize", serializeStartedAt);
     mark("total", startedAt);

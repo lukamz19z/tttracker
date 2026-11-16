@@ -24,6 +24,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
+import { getApiSessionUser } from "@/lib/api/client";
 
 type AssetType = "Vehicle" | "Plant";
 type FormStep = "details" | "checklist" | "review";
@@ -697,8 +698,7 @@ export default function PrestartsScreen() {
   );
 
   const loadIdentity = useCallback(async () => {
-    const { data } = await supabase.auth.getUser();
-    const user = data.user;
+    const user = await getApiSessionUser();
 
     setCurrentUserId(user?.id ?? "");
     setCurrentUserEmail(user?.email ?? "");

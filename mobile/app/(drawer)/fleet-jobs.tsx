@@ -22,6 +22,7 @@ import {
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
+import { getApiSessionUser } from "@/lib/api/client";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -664,12 +665,8 @@ export default function FleetJobsScreen() {
   );
 
   const loadNotificationPreferences = useCallback(async () => {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    const user = await getApiSessionUser();
+    if (!user) {
       setNotificationUserId("");
       setNotificationEmail("");
       setNotificationPreferences(defaultNotificationPreferences);

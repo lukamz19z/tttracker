@@ -42,12 +42,23 @@ export function apiUrl(input: string) {
 }
 
 let sessionPromise: Promise<Session | null> | null = null;
+let apiSession: Session | null = null;
+let apiSessionInitialized = false;
 const inFlightJson = new Map<string, Promise<unknown>>();
 const responseTrace = new WeakMap<Response, string>();
 export function apiRequestTrace(response: Response) { return responseTrace.get(response) ?? null; }
 let apiTraceSequence = 0;
 
+/** Keep API calls on the canonical AuthContext session until refresh is due. */
+export function setApiSession(session: Session | null) {
+  apiSession = session;
+  apiSessionInitialized = true;
+}
+
 function currentSession(): Promise<Session | null> {
+  if (apiSessionInitialized && (!apiSession || (apiSession.expires_at ?? 0) * 1000 > Date.now() + 30_000)) {
+    return Promise.resolve(apiSession);
+  }
   if (sessionPromise) return sessionPromise;
   const startedAt = Date.now();
 
@@ -56,6 +67,8 @@ function currentSession(): Promise<Session | null> {
     .then(({ data, error }) => {
       if (__DEV__) console.debug("TTTracker API session", { durationMs: Date.now() - startedAt, authenticated: Boolean(data.session) });
       if (error) throw error;
+      apiSession = data.session;
+      apiSessionInitialized = true;
       return data.session;
     });
 
@@ -67,6 +80,15 @@ function currentSession(): Promise<Session | null> {
 
   sessionPromise = tracked;
   return tracked;
+}
+
+export function getApiSession() {
+  return currentSession();
+}
+
+export async function getApiSessionUser() {
+  const session = await currentSession();
+  return session?.user ?? null;
 }
 
 async function performFetch(

@@ -8,11 +8,14 @@ const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 test("mobile access refresh uses one cached bootstrap rather than two duplicate authorization routes", async () => {
   const [provider, bootstrap] = await Promise.all([read("mobile/lib/access.tsx"), read("app/api/mobile/bootstrap/route.ts")]);
   const refresh = provider.slice(provider.indexOf("const runServerRefresh"), provider.indexOf("const refresh = useCallback"));
-  assert.match(refresh, /apiJson<BootstrapPayload>\("\/api\/mobile\/bootstrap"/);
+  assert.match(refresh, /getMobileBootstrap\(requestedUserId, forceBootstrap\)/);
   assert.doesNotMatch(refresh, /\/api\/access\/me/);
   assert.match(refresh, /applyAccess\(access\)/);
   assert.match(provider, /readAccessCache\(userId\)/);
   assert.match(provider, /refreshPromiseRef\.current/);
+  assert.match(provider, /api\/mobile\/bootstrap\/approval-counts/);
+  const authContext = await read("mobile/contexts/AuthContext.tsx");
+  assert.match(authContext, /getMobileBootstrap\(userId, force\)/);
   assert.match(bootstrap, /effectivePermissionsForUser\(service, identity\.userId\)/);
 });
 

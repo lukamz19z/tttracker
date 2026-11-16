@@ -1,4 +1,4 @@
-import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
+import { apiFetch, apiJson, getApiSessionUser, jsonBody } from "@/lib/api/client";
 import { supabase } from "@/lib/supabase";
 import type {
   FinanceAllocationInput,
@@ -30,12 +30,8 @@ function numberValue(value: unknown) {
 }
 
 async function currentUser() {
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
-
-  if (error || !user) {
+  const user = await getApiSessionUser();
+  if (!user) {
     throw new Error("Your TTTracker session has expired. Sign in again.");
   }
 

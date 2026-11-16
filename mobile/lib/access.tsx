@@ -14,6 +14,7 @@ import {
 
 import { useAuth } from "@/contexts/AuthContext";
 import { apiJson, apiUrl } from "@/lib/api/client";
+import { getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
 
 export type DynamicRole = {
   id: string;
@@ -277,10 +278,10 @@ export function AccessProvider({ children }: PropsWithChildren) {
     setNavigation(bootstrap.navigation ?? []);
     setAppConfig(bootstrap.app ?? DEFAULT_APP_CONFIG);
     setCapabilities(bootstrap.capabilities ?? EMPTY_CAPABILITIES);
-    setApprovalCounts(bootstrap.approvalCounts ?? EMPTY_COUNTS);
+    if (bootstrap.approvalCounts) setApprovalCounts(bootstrap.approvalCounts);
   }, []);
 
-  const runServerRefresh = useCallback(async () => {
+  const runServerRefresh = useCallback(async (forceBootstrap = false) => {
     const userId = session?.user.id ?? null;
 
     if (!userId) {
@@ -305,7 +306,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
     const requestedUserId = userId;
 
     try {
-      const bootstrap = await apiJson<BootstrapPayload>("/api/mobile/bootstrap", { timeoutMs: 15_000 });
+      const bootstrap = await getMobileBootstrap(requestedUserId, forceBootstrap) as BootstrapPayload;
 
       if (
         !mountedRef.current ||
@@ -317,6 +318,20 @@ export function AccessProvider({ children }: PropsWithChildren) {
       const access = accessFromBootstrap(bootstrap);
       applyAccess(access);
       applyBootstrap(bootstrap);
+
+      // Approval badges are secondary navigation decoration. Fetch them after
+      // the shell's permissions, projects and navigation have been applied.
+      void apiJson<ApprovalCounts>("/api/mobile/bootstrap/approval-counts")
+        .then((counts) => {
+          if (mountedRef.current && activeUserIdRef.current === requestedUserId) {
+            setApprovalCounts(counts);
+          }
+        })
+        .catch((countError) => {
+          if (__DEV__) console.debug("TTTracker approval counts unavailable", {
+            category: countError instanceof Error ? countError.name : "unknown",
+          });
+        });
 
       setStale(false);
       lastServerRefreshRef.current = Date.now();
@@ -347,12 +362,12 @@ export function AccessProvider({ children }: PropsWithChildren) {
     }
   }, [applyAccess, applyBootstrap, clear, session?.user.id]);
 
-  const refresh = useCallback((): Promise<void> => {
+  const refresh = useCallback((forceBootstrap = false): Promise<void> => {
     if (refreshPromiseRef.current) {
       return refreshPromiseRef.current;
     }
 
-    const task = runServerRefresh();
+    const task = runServerRefresh(forceBootstrap);
     const tracked = task.finally(() => {
       if (refreshPromiseRef.current === tracked) {
         refreshPromiseRef.current = null;
@@ -362,6 +377,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
     refreshPromiseRef.current = tracked;
     return tracked;
   }, [runServerRefresh]);
+
+  const refreshAccess = useCallback(() => refresh(true), [refresh]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -469,7 +486,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       appConfig,
       capabilities,
       approvalCounts,
-      refresh,
+      refresh: refreshAccess,
       can: (permissionCode) =>
         !permissionCode || permissions.has(permissionCode),
       hasRole: (roleCode) =>
@@ -496,7 +513,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       appConfig,
       capabilities,
       approvalCounts,
-      refresh,
+      refreshAccess,
     ],
   );
 
