@@ -206,6 +206,7 @@ async function performFetch(
         durationMs: Date.now() - startedAt,
         status: response.status,
         responseTrace: response.headers.get("x-tttracker-trace-id"),
+        responseAttempt: response.headers.get("x-tttracker-trace-attempt"),
         circuitState: response.headers.get("x-tttracker-circuit-state"),
         serverTiming: response.headers.get("server-timing"),
         timeoutMs,

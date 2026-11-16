@@ -32,7 +32,9 @@ test("client propagates one trace ID in the request header and server consumes t
   ]);
   assert.match(client, /headers\.set\("x-tttracker-trace-id", trace\)/);
   assert.match(server, /headers\.get\("x-tttracker-trace-id"\)/);
+  assert.match(server, /x-tttracker-trace-attempt/);
   assert.match(resilience, /get\("x-tttracker-trace-id"\)/);
+  assert.match(resilience, /x-tttracker-trace-attempt/);
 });
 
 test("trace logging never emits credential headers or request bodies", async () => {
@@ -65,8 +67,12 @@ test("production server trace requires its own flag and only accepts the Profile
 
 test("Profile route logs safe phases and returns the matching trace header", async () => {
   const route = await read("app/api/mobile/bootstrap/route.ts");
-  for (const phase of ["handler-start", "auth-session-validated", "profile-and-access-queries", "access-ok", "current-project-resolution", "response-serialization", "handler-end", "error"]) {
+  for (const phase of ["handler-start", "identity-ready", "parallel-bootstrap-queries", "access-ok", "current-project-resolution", "response-serialization", "handler-end", "error"]) {
     assert.ok(route.includes(`"${phase}"`), `missing trace phase ${phase}`);
   }
+  for (const query of ["effective_user_permissions", "user_role_assignments", "project_access", "mobile_navigation_items", "system_app_settings", "financial_access_rules", "project_docket_approval_users"]) {
+    assert.ok(route.includes(`"${query}"`), `missing query timing for ${query}`);
+  }
   assert.match(route, /set\("x-tttracker-trace-id", trace\.id\)/);
+  assert.match(route, /set\("x-tttracker-trace-attempt", trace\.attemptId\)/);
 });

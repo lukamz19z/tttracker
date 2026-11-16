@@ -16,8 +16,8 @@ test("daily docket writes bypass read circuits, have no retries, and use a mutat
     read("mobile/lib/api/daily-dockets.ts"),
   ]);
   assert.match(resilience, /circuitProtected = this\.circuitBreaker && safeRead && !authRequest/);
-  assert.match(resilience, /const retries = safeRead && !authRequest \? RETRY_DELAYS_MS\.length : 0/);
-  assert.match(resilience, /safeRead \? Math\.min\(MAX_ATTEMPT_TIMEOUT_MS, remainingMs\) : remainingMs/);
+  assert.match(resilience, /const retries = safeRead && !authRequest && !mobileBootstrap \? RETRY_DELAYS_MS\.length : 0/);
+  assert.match(resilience, /safeRead && !mobileBootstrap \? Math\.min\(MAX_ATTEMPT_TIMEOUT_MS, remainingMs\) : remainingMs/);
   assert.doesNotMatch(api, /timeoutMs:\s*60_000/);
   assert.match(api, /isAmbiguousDailyDocketMutationFailure/);
 });

@@ -14,7 +14,9 @@ test("mobile API has one resilience-owned timeout per request and separates read
   assert.match(client, /resilienceTimeoutMs: timeoutMs/);
   assert.match(resilience, /DEFAULT_TIMEOUT_MS = 15_000/);
   assert.match(resilience, /DEFAULT_MUTATION_TIMEOUT_MS = 30_000/);
-  assert.match(resilience, /const retries = safeRead && !authRequest \? RETRY_DELAYS_MS\.length : 0/);
+  assert.match(resilience, /const retries = safeRead && !authRequest && !mobileBootstrap \? RETRY_DELAYS_MS\.length : 0/);
+  assert.match(resilience, /safeRead && !mobileBootstrap \? Math\.min\(MAX_ATTEMPT_TIMEOUT_MS, remainingMs\) : remainingMs/);
+  assert.match(resilience, /mobileBootstrap = safeRead[\s\S]*MOBILE_BOOTSTRAP_PATH/);
   assert.match(resilience, /circuitProtected = this\.circuitBreaker && safeRead && !authRequest/);
 });
 

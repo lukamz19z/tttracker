@@ -1,6 +1,7 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 import type { NextRequest } from "next/server";
 import { mobilePerfTrace } from "@/lib/mobile/perf-trace";
+import { AuthProviderUnavailableError, classifySupabaseAuthFailure } from "@/lib/mobile/auth-validation";
 
 export type AccessService = SupabaseClient;
 
@@ -58,35 +59,89 @@ export function createServiceClient(): AccessService {
 }
 
 export async function getRequestUser(request: NextRequest) {
-  const authStartedAt = Date.now();
   const trace = mobilePerfTrace(request);
-  const token = (request.headers.get("authorization") ?? "")
+  const tokenStartedAt = Date.now();
+  const authorization = request.headers.get("authorization") ?? "";
+  const token = authorization
     .replace(/^Bearer\s+/i, "")
     .trim();
 
-  trace?.log("received", { hasAuthorization: Boolean(token), at: new Date().toISOString() });
+  trace?.log("received", { hasAuthorization: Boolean(authorization), at: new Date().toISOString() });
+  trace?.log("token-extracted", { hasAuthorization: Boolean(authorization), validBearerFormat: /^Bearer\s+\S+$/i.test(authorization), durationMs: Date.now() - tokenStartedAt });
   if (!token) {
-    trace?.log("auth-failed", { category: "missing_authorization", durationMs: Date.now() - authStartedAt });
+    trace?.log("auth-failed", { category: "missing_authorization", httpStatus: 401 });
     throw new Error("Missing authentication token.");
   }
 
+  const clientStartedAt = Date.now();
+  const tracedAuthFetch: typeof fetch = async (input, init) => {
+    if (!trace) return globalThis.fetch(input, init);
+    const inputUrl = input instanceof Request ? input.url : String(input);
+    const path = new URL(inputUrl, requiredEnv("NEXT_PUBLIC_SUPABASE_URL")).pathname;
+    const providerService = path.endsWith("/.well-known/jwks.json") ? "jwks" : "auth";
+    const networkStartedAt = Date.now();
+    trace?.log("auth-network-start", { service: providerService });
+    try {
+      const response = await globalThis.fetch(input, init);
+      trace?.log("auth-network-end", { service: providerService, httpStatus: response.status, durationMs: Date.now() - networkStartedAt });
+      return response;
+    } catch (error) {
+      trace?.log("auth-network-failed", {
+        service: providerService,
+        category: error instanceof TypeError ? "network" : "request_error",
+        durationMs: Date.now() - networkStartedAt,
+      });
+      throw error;
+    }
+  };
   const authClient = createClient(
     requiredEnv("NEXT_PUBLIC_SUPABASE_URL"),
     requiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
     {
-      global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: tracedAuthFetch },
     },
   );
+  trace?.log("auth-client-ready", { durationMs: Date.now() - clientStartedAt });
 
-  const { data, error } = await authClient.auth.getUser(token);
-  if (error || !data.user) {
-    trace?.log("auth-failed", { category: "invalid_session", errorCode: error?.code ?? null, httpStatus: error?.status ?? null, durationMs: Date.now() - authStartedAt });
+  const validationStartedAt = Date.now();
+  trace?.log("auth-validation-start", { method: "supabase_getClaims" });
+  let claimsResult: Awaited<ReturnType<typeof authClient.auth.getClaims>>;
+  try {
+    claimsResult = await authClient.auth.getClaims(token);
+  } catch (error) {
+    const failure = classifySupabaseAuthFailure(error);
+    trace?.log("auth-failed", { category: failure.category, errorCode: failure.errorCode, httpStatus: failure.status, durationMs: Date.now() - validationStartedAt });
+    if (failure.category === "invalid_session") throw new Error("You must be logged in.");
+    if (failure.category === "provider_forbidden") throw new Error("MOBILE_AUTH_PROVIDER_FORBIDDEN");
+    throw new AuthProviderUnavailableError(failure.status, failure.errorCode, error);
+  }
+  if (claimsResult.error) {
+    const failure = classifySupabaseAuthFailure(claimsResult.error);
+    trace?.log("auth-failed", { category: failure.category, errorCode: failure.errorCode, httpStatus: failure.status, durationMs: Date.now() - validationStartedAt });
+    if (failure.category === "invalid_session") throw new Error("You must be logged in.");
+    if (failure.category === "provider_forbidden") throw new Error("MOBILE_AUTH_PROVIDER_FORBIDDEN");
+    throw new AuthProviderUnavailableError(failure.status, failure.errorCode, claimsResult.error);
+  }
+
+  const verified = claimsResult.data;
+  const claims = verified?.claims;
+  if (!claims || typeof claims.sub !== "string" || !claims.sub) {
+    trace?.log("auth-failed", { category: "invalid_session", errorCode: "missing_subject", httpStatus: 401, durationMs: Date.now() - validationStartedAt });
     throw new Error("You must be logged in.");
   }
-  trace?.log("auth-ok", { userId: data.user.id, durationMs: Date.now() - authStartedAt });
+  trace?.log("auth-ok", {
+    userId: claims.sub,
+    method: "supabase_getClaims",
+    algorithm: verified.header.alg ?? null,
+    keyIdPresent: Boolean(verified.header.kid),
+    durationMs: Date.now() - validationStartedAt,
+  });
 
-  return data.user;
+  const userMetadata = claims.user_metadata && typeof claims.user_metadata === "object" && !Array.isArray(claims.user_metadata)
+    ? claims.user_metadata as User["user_metadata"]
+    : {};
+  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null, user_metadata: userMetadata };
 }
 
 export async function userHasAccess(

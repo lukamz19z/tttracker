@@ -342,6 +342,79 @@ test("a timed-out caller signal does not poison a later request with a fresh sig
   assert.equal(calls, 2);
 });
 
+test("mobile bootstrap accepts a response after 6.5 seconds within its single 15-second budget", async () => {
+  let now = 0;
+  let calls = 0;
+  const policy = new BackendResilience({
+    now: () => now,
+    fetchImpl: async () => { calls++; now += 6_500; return new Response("ok", { status: 200 }); },
+    log: () => {},
+  });
+  const response = await policy.fetch("https://tttracker.test/api/mobile/bootstrap", { headers: { Authorization: "Bearer opaque" } });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+});
+
+test("mobile bootstrap accepts a response after 10 seconds without starting retries", async () => {
+  let now = 0;
+  let calls = 0;
+  const policy = new BackendResilience({
+    now: () => now,
+    fetchImpl: async () => { calls++; now += 10_000; return new Response("ok", { status: 200 }); },
+    log: () => {},
+  });
+  const response = await policy.fetch("https://tttracker.test/api/mobile/bootstrap", { headers: { Authorization: "Bearer opaque" } });
+  assert.equal(response.status, 200);
+  assert.equal(calls, 1);
+});
+
+test("concurrent identical bootstrap GETs remain one server request while it is slow", async () => {
+  let calls = 0;
+  let finish;
+  const policy = new BackendResilience({
+    fetchImpl: async () => { calls++; return new Promise((resolve) => { finish = resolve; }); },
+    log: () => {},
+  });
+  const url = "https://tttracker.test/api/mobile/bootstrap";
+  const first = policy.fetch(url, { headers: { Authorization: "Bearer opaque" } });
+  await Promise.resolve();
+  const second = policy.fetch(url, { headers: { Authorization: "Bearer opaque" } });
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  finish(new Response("ok", { status: 200 }));
+  assert.equal((await first).status, 200);
+  assert.equal((await second).status, 200);
+  assert.equal(calls, 1);
+});
+
+test("mobile bootstrap still stops a genuinely hung request at the overall budget without retry", async () => {
+  let calls = 0;
+  const policy = new BackendResilience({
+    timeoutMs: 25,
+    fetchImpl: (_input, init) => {
+      calls++;
+      return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new TypeError("fetch failed")), { once: true }));
+    },
+    log: () => {},
+  });
+  await assert.rejects(
+    policy.fetch("https://tttracker.test/api/mobile/bootstrap"),
+    (error) => error instanceof BackendRequestTimeoutError && error.timeoutMs === 25,
+  );
+  assert.equal(calls, 1);
+});
+
+test("immediate eligible transport failures on other safe reads can still retry", async () => {
+  let calls = 0;
+  const policy = new BackendResilience({
+    fetchImpl: async () => { calls++; if (calls === 1) throw new TypeError("Failed to fetch"); return new Response("ok", { status: 200 }); },
+    sleep: async () => {},
+    log: () => {},
+  });
+  assert.equal((await policy.fetch("https://tttracker.test/api/mobile/other-read")).status, 200);
+  assert.equal(calls, 2);
+});
+
 test("mobile API diagnostics preserve authorization errors as HTTP outcomes instead of timeout errors", async () => {
   const client = fs.readFileSync(path.resolve("mobile/lib/api/client.ts"), "utf8");
   assert.match(client, /\[apiFetch\] response/);

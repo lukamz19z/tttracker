@@ -10,6 +10,7 @@ const CIRCUIT_COOLDOWN_MS = 20_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPT_TIMEOUT_MS = 6_000;
+const MOBILE_BOOTSTRAP_PATH = "/api/mobile/bootstrap";
 let traceSequence = 0;
 function nextTraceId() { return `m${Date.now().toString(36)}${(++traceSequence).toString(36)}`; }
 
@@ -153,6 +154,7 @@ export class BackendResilience {
     const url = input instanceof Request ? input.url : String(input);
     const safeRead = method === "GET" || method === "HEAD";
     const authRequest = /\/auth\/v1\//i.test(url);
+    const mobileBootstrap = safeRead && new URL(url, "https://tttracker.invalid").pathname === MOBILE_BOOTSTRAP_PATH;
     const circuitProtected = this.circuitBreaker && safeRead && !authRequest;
     const { resilienceTimeoutMs, ...nativeInit } = init;
     const requestTimeoutMs = Number.isFinite(resilienceTimeoutMs) && Number(resilienceTimeoutMs) > 0
@@ -163,7 +165,7 @@ export class BackendResilience {
     new Headers(init.headers).forEach((value, key) => requestHeaders.set(key, value));
     const trace = requestHeaders.get("x-tttracker-trace-id") || requestHeaders.get("x-tttracker-trace") || nextTraceId();
     const requestStartedAt = this.now();
-    this.log?.("backend_request_started", { trace, method, path, timeoutMs: requestTimeoutMs, maxAttempts: safeRead && !authRequest ? 4 : 1 });
+    this.log?.("backend_request_started", { trace, method, path, timeoutMs: requestTimeoutMs, maxAttempts: safeRead && !authRequest && !mobileBootstrap ? 4 : 1 });
     const circuitKey = `${safeOrigin(url)}${path}`;
     const circuit = circuitProtected
       ? this.circuitFor(circuitKey)
@@ -186,7 +188,7 @@ export class BackendResilience {
       this.log?.("backend_probe_started", { method, path, probe: "first real request after cooldown" });
     }
 
-    const retries = safeRead && !authRequest ? RETRY_DELAYS_MS.length : 0;
+    const retries = safeRead && !authRequest && !mobileBootstrap ? RETRY_DELAYS_MS.length : 0;
     let requestFailureRecorded = false;
     const deadline = this.now() + requestTimeoutMs;
     try {
@@ -199,13 +201,17 @@ export class BackendResilience {
         const onAbort = () => controller.abort();
         if (externalSignal?.aborted) throw new DOMException("Request aborted", "AbortError");
         externalSignal?.addEventListener("abort", onAbort, { once: true });
-        const attemptTimeoutMs = safeRead ? Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs) : remainingMs;
-        this.log?.("backend_attempt_started", { trace, method, path, attempt: attempt + 1, attemptTimeoutMs, remainingMs });
+        const attemptTimeoutMs = safeRead && !mobileBootstrap ? Math.min(MAX_ATTEMPT_TIMEOUT_MS, remainingMs) : remainingMs;
+        const attemptId = trace ? `${trace}:attempt-${attempt + 1}` : undefined;
+        this.log?.("backend_attempt_started", { trace, attemptId, method, path, attempt: attempt + 1, attemptTimeoutMs, remainingMs });
         const timer = setTimeout(() => { timedOut = true; controller.abort(); }, attemptTimeoutMs);
         try {
           const attemptStartedAt = this.now();
-          const response = await this.fetchImpl(input, { ...nativeInit, signal: controller.signal });
-          this.log?.("backend_attempt_response", { trace, method, path, attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
+          const attemptHeaders = new Headers(input instanceof Request ? input.headers : undefined);
+          new Headers(nativeInit.headers).forEach((value, key) => attemptHeaders.set(key, value));
+          if (attemptId) attemptHeaders.set("x-tttracker-trace-attempt", attemptId);
+          const response = await this.fetchImpl(input, { ...nativeInit, headers: attemptHeaders, signal: controller.signal });
+          this.log?.("backend_attempt_response", { trace, attemptId, method, path, attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
           if (response.status >= 400 || this.now() - attemptStartedAt >= 750) {
             this.log?.("backend_request_completed", { method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, status: response.status, durationMs: this.now() - attemptStartedAt });
           }
@@ -218,7 +224,7 @@ export class BackendResilience {
             if (attempt < retries) {
               const delayMs = retryDelayMs(attempt, this.random);
               if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs);
-              this.log?.("backend_request_retry", { trace, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind, status: failure.status, code: failure.code });
+              this.log?.("backend_request_retry", { trace, attemptId, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind, status: failure.status, code: failure.code });
               await this.sleep(delayMs, externalSignal ?? undefined);
               continue;
             }
@@ -236,12 +242,12 @@ export class BackendResilience {
           return response;
         } catch (error) {
           const failure = timedOut ? { transient: true, kind: "timeout" as const } : classifyBackendFailure(error);
-          if (timedOut) this.log?.("backend_request_timeout", { trace, method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, timeoutMs: attemptTimeoutMs, requestSent: true });
+          if (timedOut) this.log?.("backend_request_timeout", { trace, attemptId, method, path, requestType: safeRead ? "read" : "mutation", attempt: attempt + 1, timeoutMs: attemptTimeoutMs, requestSent: true });
           if (!failure.transient || externalSignal?.aborted) throw error;
           if (attempt < retries) {
             const delayMs = retryDelayMs(attempt, this.random);
             if (this.now() + delayMs >= deadline) throw new BackendRequestTimeoutError(requestTimeoutMs, error);
-            this.log?.("backend_request_retry", { trace, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind });
+            this.log?.("backend_request_retry", { trace, attemptId, method, path, attempt: attempt + 1, maxRetries: retries, delayMs, kind: failure.kind });
             await this.sleep(delayMs, externalSignal ?? undefined);
             continue;
           }

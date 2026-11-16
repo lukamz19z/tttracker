@@ -60,6 +60,41 @@ function applies(rule: FinanceRule, type: "expense_claim" | "invoice") {
   return rule.applies_to === "all" || rule.applies_to === type;
 }
 
+function resultRowCount(value: unknown) {
+  if (Array.isArray(value)) return value.length;
+  if (!value || typeof value !== "object") return 0;
+  const data = (value as { data?: unknown }).data;
+  if (Array.isArray(data)) return data.length;
+  return data == null ? 0 : 1;
+}
+
+function measuredBootstrapQuery<T>(trace: ReturnType<typeof mobilePerfTrace>, name: string, operation: () => PromiseLike<T> | Promise<T>) {
+  const startedAt = Date.now();
+  return Promise.resolve().then(operation).then((result) => {
+    const error = result && typeof result === "object" ? (result as { error?: { code?: unknown; status?: unknown } | null }).error : null;
+    trace?.log("db-query", {
+      query: name,
+      durationMs: Date.now() - startedAt,
+      rowCount: resultRowCount(result),
+      outcome: error ? "error" : "success",
+      errorCode: typeof error?.code === "string" ? error.code : null,
+      httpStatus: typeof error?.status === "number" ? error.status : null,
+    });
+    return result;
+  }).catch((error: unknown) => {
+    const value = error && typeof error === "object" ? error as { code?: unknown; status?: unknown } : {};
+    trace?.log("db-query", {
+      query: name,
+      durationMs: Date.now() - startedAt,
+      rowCount: 0,
+      outcome: "thrown",
+      errorCode: typeof value.code === "string" ? value.code : null,
+      httpStatus: typeof value.status === "number" ? value.status : null,
+    });
+    throw error;
+  });
+}
+
 export async function GET(request: NextRequest) {
   const startedAt = Date.now();
   const trace = mobilePerfTrace(request);
@@ -67,21 +102,8 @@ export async function GET(request: NextRequest) {
   trace?.log("handler-start", { at: new Date().toISOString() });
   try {
     const { service, identity } = await requireMobileUser(request);
-    mark("auth-session-validated", startedAt, { userId: identity.userId, currentProjectId: identity.currentProjectId });
+    mark("identity-ready", startedAt, { userId: identity.userId, currentProjectId: identity.currentProjectId });
     const configStartedAt = Date.now();
-    const projectAccessStartedAt = Date.now();
-    const projectAccessRead = service
-      .from("project_access")
-      .select("project_id,role,projects(id,name,project_number,status)")
-      .eq("user_id", identity.userId)
-      .then((result) => {
-        if (result.error) {
-          trace?.log("access-failed", { userId: identity.userId, category: "project_access_query", errorCode: result.error.code ?? null, durationMs: Date.now() - projectAccessStartedAt });
-        } else {
-          trace?.log("access-ok", { userId: identity.userId, authorizedProjectCount: result.data?.length ?? 0, durationMs: Date.now() - projectAccessStartedAt });
-        }
-        return result;
-      });
 
     const [
       permissionRows,
@@ -92,36 +114,45 @@ export async function GET(request: NextRequest) {
       financeResult,
       docketReviewerResult,
     ] = await Promise.all([
-      effectivePermissionsForUser(service, identity.userId),
-      service
+      measuredBootstrapQuery(trace, "effective_user_permissions", () => effectivePermissionsForUser(service, identity.userId)),
+      measuredBootstrapQuery(trace, "user_role_assignments", () => service
         .from("user_role_assignments")
         .select("role_id,roles(id,code,name,description)")
-        .eq("user_id", identity.userId),
-      projectAccessRead,
-      service
+        .eq("user_id", identity.userId)),
+      measuredBootstrapQuery(trace, "project_access", () => service
+        .from("project_access")
+        .select("project_id,role,projects(id,name,project_number,status)")
+        .eq("user_id", identity.userId)),
+      measuredBootstrapQuery(trace, "mobile_navigation_items", () => service
         .from("mobile_navigation_items")
         .select("code,section_code,section_label,section_sort_order,label,route,icon_key,permission_code,capability_key,requires_project,sort_order,active")
         .eq("active", true)
         .order("section_sort_order")
-        .order("sort_order"),
-      service
+        .order("sort_order")),
+      measuredBootstrapQuery(trace, "system_app_settings", () => service
         .from("system_app_settings")
         .select("product_name,software_owner_name,software_owner_abn,support_email,privacy_url,terms_url,footer_text,updated_at")
         .eq("id", true)
-        .maybeSingle(),
-      service
+        .maybeSingle()),
+      measuredBootstrapQuery(trace, "financial_access_rules", () => service
         .from("financial_access_rules")
         .select("applies_to,can_review_edit,can_approve,can_mark_paid,receives_email,receives_in_app,receives_push")
         .eq("principal_type", "user")
         .eq("user_id", identity.userId)
-        .eq("active", true),
-      service
+        .eq("active", true)),
+      measuredBootstrapQuery(trace, "project_docket_approval_users", () => service
         .from("project_docket_approval_users")
         .select("project_id")
         .eq("user_id", identity.userId)
-        .eq("receives_bc_review", true),
+        .eq("receives_bc_review", true)),
     ]);
-    mark("profile-and-access-queries", configStartedAt);
+    mark("parallel-bootstrap-queries", configStartedAt);
+
+    if (projectRows.error) {
+      trace?.log("access-failed", { userId: identity.userId, category: "project_access_query", errorCode: projectRows.error.code ?? null });
+    } else {
+      trace?.log("access-ok", { userId: identity.userId, authorizedProjectCount: projectRows.data?.length ?? 0 });
+    }
 
     for (const result of [roleRows, projectRows, navResult, settingsResult, financeResult, docketReviewerResult]) {
       if (result.error) throw new Error(result.error.message);
@@ -220,7 +251,10 @@ export async function GET(request: NextRequest) {
     });
     mark("response-serialization", serializeStartedAt);
     mark("handler-end", startedAt, { httpStatus: 200 });
-    if (trace) response.headers.set("x-tttracker-trace-id", trace.id);
+    if (trace) {
+      response.headers.set("x-tttracker-trace-id", trace.id);
+      if (trace.attemptId) response.headers.set("x-tttracker-trace-attempt", trace.attemptId);
+    }
     return response;
   } catch (error) {
     const apiError = mobileApiError(error);
@@ -231,7 +265,10 @@ export async function GET(request: NextRequest) {
     });
     trace?.log("handler-end", { httpStatus: apiError.status, durationMs: Date.now() - startedAt });
     const response = NextResponse.json({ error: apiError.message }, { status: apiError.status });
-    if (trace) response.headers.set("x-tttracker-trace-id", trace.id);
+    if (trace) {
+      response.headers.set("x-tttracker-trace-id", trace.id);
+      if (trace.attemptId) response.headers.set("x-tttracker-trace-attempt", trace.attemptId);
+    }
     return response;
   }
 }

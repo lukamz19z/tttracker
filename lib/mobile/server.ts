@@ -8,6 +8,7 @@ import {
   type AccessService,
 } from "@/lib/access/server";
 import { mobilePerfTrace } from "@/lib/mobile/perf-trace";
+import { mobileAuthErrorResponse } from "@/lib/mobile/auth-validation";
 
 export type MobileIdentity = {
   userId: string;
@@ -53,8 +54,10 @@ export async function mobileIdentityForUser(
   service: AccessService,
   userId: string,
   emailValue?: string | null,
+  trace?: ReturnType<typeof mobilePerfTrace>,
 ): Promise<MobileIdentity> {
   const email = clean(emailValue).toLowerCase();
+  const queryStartedAt = Date.now();
 
   const { data, error } = await service
     .from("employees")
@@ -69,6 +72,12 @@ export async function mobileIdentityForUser(
     .eq("user_id", userId)
     .maybeSingle();
 
+  trace?.log(error ? "profile-lookup-failed" : "profile-lookup", {
+    userId,
+    rowCount: data ? 1 : 0,
+    errorCode: error?.code ?? null,
+    durationMs: Date.now() - queryStartedAt,
+  });
   if (error) throw new Error(error.message);
 
   const employee = (data ?? null) as EmployeeRow | null;
@@ -90,10 +99,10 @@ export async function mobileIdentityForUser(
 export async function requireMobileUser(request: NextRequest) {
   const trace = mobilePerfTrace(request);
   const user = await getRequestUser(request);
-  const identityStartedAt = Date.now();
+  const serviceStartedAt = Date.now();
   const service = createServiceClient();
-  const identity = await mobileIdentityForUser(service, user.id, user.email);
-  trace?.log("profile-lookup", { userId: user.id, currentProjectId: identity.currentProjectId, durationMs: Date.now() - identityStartedAt });
+  trace?.log("service-client-ready", { durationMs: Date.now() - serviceStartedAt });
+  const identity = await mobileIdentityForUser(service, user.id, user.email, trace);
   return { user, service, identity };
 }
 
@@ -132,12 +141,8 @@ export async function mobilePermissions(service: AccessService, userId: string) 
 export function mobileApiError(error: unknown) {
   const message = error instanceof Error ? error.message : "Unexpected mobile API error.";
 
-  if (
-    message === "You must be logged in." ||
-    message === "Missing authentication token."
-  ) {
-    return { status: 401, message: "You must be signed in." };
-  }
+  const authResponse = mobileAuthErrorResponse(error);
+  if (authResponse) return authResponse;
 
   if (message === "MOBILE_PERMISSION_DENIED") {
     return { status: 403, message: "You do not have permission to use this mobile feature." };
