@@ -80,13 +80,13 @@ export async function getRequestUser(request: NextRequest) {
     const path = new URL(inputUrl, requiredEnv("NEXT_PUBLIC_SUPABASE_URL")).pathname;
     const providerService = path.endsWith("/.well-known/jwks.json") ? "jwks" : "auth";
     const networkStartedAt = Date.now();
-    trace?.log("auth-network-start", { service: providerService });
+    trace?.log(providerService === "jwks" ? "jwks/network-start" : "auth/network-start", { service: providerService });
     try {
       const response = await globalThis.fetch(input, init);
-      trace?.log("auth-network-end", { service: providerService, httpStatus: response.status, durationMs: Date.now() - networkStartedAt });
+      trace?.log(providerService === "jwks" ? "jwks/network-end" : "auth/network-end", { service: providerService, httpStatus: response.status, durationMs: Date.now() - networkStartedAt });
       return response;
     } catch (error) {
-      trace?.log("auth-network-failed", {
+      trace?.log(providerService === "jwks" ? "jwks/network-failed" : "auth/network-failed", {
         service: providerService,
         category: error instanceof TypeError ? "network" : "request_error",
         durationMs: Date.now() - networkStartedAt,
@@ -105,7 +105,7 @@ export async function getRequestUser(request: NextRequest) {
   trace?.log("auth-client-ready", { durationMs: Date.now() - clientStartedAt });
 
   const validationStartedAt = Date.now();
-  trace?.log("auth-validation-start", { method: "supabase_getClaims" });
+  trace?.log("claims-start", { method: "supabase_getClaims" });
   let claimsResult: Awaited<ReturnType<typeof authClient.auth.getClaims>>;
   try {
     claimsResult = await authClient.auth.getClaims(token);
@@ -133,6 +133,12 @@ export async function getRequestUser(request: NextRequest) {
   trace?.log("auth-ok", {
     userId: claims.sub,
     method: "supabase_getClaims",
+    algorithm: verified.header.alg ?? null,
+    keyIdPresent: Boolean(verified.header.kid),
+    durationMs: Date.now() - validationStartedAt,
+  });
+  trace?.log("claims-verified", {
+    userId: claims.sub,
     algorithm: verified.header.alg ?? null,
     keyIdPresent: Boolean(verified.header.kid),
     durationMs: Date.now() - validationStartedAt,

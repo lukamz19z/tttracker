@@ -73,6 +73,7 @@ export async function mobileIdentityForUser(
     .maybeSingle();
 
   trace?.log(error ? "profile-lookup-failed" : "profile-lookup", {
+    operation: "employees.by_user_id_with_crew_join",
     userId,
     rowCount: data ? 1 : 0,
     errorCode: error?.code ?? null,

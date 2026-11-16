@@ -40,13 +40,16 @@ test("authenticated V1 boundary verifies claims through Supabase JS and times se
   const [server, mobileServer, packageJson] = await Promise.all([
     read("lib/access/server.ts"),
     read("lib/mobile/server.ts"),
-    read("mobile/package.json"),
+    read("package.json"),
   ]);
   assert.match(server, /auth\.getClaims\(token\)/);
   assert.doesNotMatch(server, /auth\.getUser\(token\)/);
   assert.match(server, /token-extracted/);
   assert.match(server, /auth-client-ready/);
-  assert.match(server, /auth-validation-start/);
+  assert.match(server, /claims-start/);
+  assert.match(server, /claims-verified/);
+  assert.match(server, /jwks\/network-start/);
+  assert.match(server, /jwks\/network-end/);
   assert.match(mobileServer, /profile-lookup/);
-  assert.match(packageJson, /"@supabase\/supabase-js": "\^2\.110\.2"/);
+  assert.match(packageJson, /"@supabase\/supabase-js": "\^2\.99\.2"/);
 });

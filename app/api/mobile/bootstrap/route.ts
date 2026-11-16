@@ -73,6 +73,7 @@ function measuredBootstrapQuery<T>(trace: ReturnType<typeof mobilePerfTrace>, na
   return Promise.resolve().then(operation).then((result) => {
     const error = result && typeof result === "object" ? (result as { error?: { code?: unknown; status?: unknown } | null }).error : null;
     trace?.log("db-query", {
+      operation: name,
       query: name,
       durationMs: Date.now() - startedAt,
       rowCount: resultRowCount(result),
@@ -84,6 +85,7 @@ function measuredBootstrapQuery<T>(trace: ReturnType<typeof mobilePerfTrace>, na
   }).catch((error: unknown) => {
     const value = error && typeof error === "object" ? error as { code?: unknown; status?: unknown } : {};
     trace?.log("db-query", {
+      operation: name,
       query: name,
       durationMs: Date.now() - startedAt,
       rowCount: 0,

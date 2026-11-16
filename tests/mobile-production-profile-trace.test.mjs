@@ -73,6 +73,12 @@ test("Profile route logs safe phases and returns the matching trace header", asy
   for (const query of ["effective_user_permissions", "user_role_assignments", "project_access", "mobile_navigation_items", "system_app_settings", "financial_access_rules", "project_docket_approval_users"]) {
     assert.ok(route.includes(`"${query}"`), `missing query timing for ${query}`);
   }
+  assert.match(route, /trace\?\.log\("db-query"/);
+  assert.match(route, /operation: name/);
+  assert.match(route, /durationMs: Date\.now\(\) - startedAt,[\s\S]*rowCount: resultRowCount\(result\)/);
+  const profileServer = await read("lib/mobile/server.ts");
+  assert.match(profileServer, /operation: "employees\.by_user_id_with_crew_join"/);
+  assert.match(profileServer, /profile-lookup-failed/);
   assert.match(route, /set\("x-tttracker-trace-id", trace\.id\)/);
   assert.match(route, /set\("x-tttracker-trace-attempt", trace\.attemptId\)/);
 });
