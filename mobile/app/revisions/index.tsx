@@ -75,10 +75,10 @@ type FilterSelector = "tower" | "member" | "stage" | null;
 
 export default function RevisionsScreen() {
   const { data, loading: metadataLoading } = useQuality();
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const { online } = useSync();
 
-  const projectId = clean(data?.projectId || profile?.projectId);
+  const projectId = clean(currentProjectId || data?.projectId);
   const projectCode =
     clean(profile?.projectNumber) ||
     clean(profile?.projectName) ||

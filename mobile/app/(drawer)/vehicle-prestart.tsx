@@ -545,7 +545,7 @@ async function scheduleDailyReminders(
 }
 
 export default function VehiclePrestartScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
 
   const profileRecord = profile as unknown as
     | {
@@ -560,7 +560,7 @@ export default function VehiclePrestartScreen() {
       }
     | null;
 
-  const projectId = clean(profileRecord?.projectId);
+  const projectId = clean(currentProjectId);
   const projectName = clean(profileRecord?.projectName);
   const projectNumber = clean(profileRecord?.projectNumber);
 

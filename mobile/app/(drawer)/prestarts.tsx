@@ -605,7 +605,7 @@ async function scheduleDailyReminders(
 }
 
 export default function PrestartsScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const { can } = useAccess();
   const canVehiclePrestart = can("mobile.vehicle_prestarts");
   const canPlantPrestart = can("mobile.plant_prestarts");
@@ -623,7 +623,7 @@ export default function PrestartsScreen() {
       }
     | null;
 
-  const projectId = clean(profileRecord?.projectId);
+  const projectId = clean(currentProjectId);
   const projectName = clean(profileRecord?.projectName);
   const projectNumber = clean(profileRecord?.projectNumber);
 

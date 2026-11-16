@@ -228,7 +228,7 @@ function DynamicTitle({ code, fallback }: { code: string; fallback: string }) {
 function CustomDrawerContent(props: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { profile, signOut } = useAuth();
+  const { profile, currentProjectId, signOut } = useAuth();
   const { navigation, roles, can, hasCapability, appConfig, approvalCounts } = useAccess();
   const unreadCount = useUnreadNotificationCount();
 
@@ -238,7 +238,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         item.active !== false &&
         can(item.permission_code) &&
         hasCapability(item.capability_key) &&
-        (!item.requires_project || Boolean(profile?.projectId)),
+        (!item.requires_project || Boolean(currentProjectId)),
     );
 
     const vehiclePrestart = permitted.find(
@@ -271,7 +271,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         ),
       },
     ];
-  }, [navigation, can, hasCapability, profile?.projectId]);
+  }, [navigation, can, hasCapability, currentProjectId]);
 
   const sections = useMemo(() => {
     const map = new Map<

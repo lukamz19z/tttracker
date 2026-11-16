@@ -1,4 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AppState } from "react-native";
+import { ApiRequestError, apiJson } from "@/lib/api/client";
 import type { Session } from "@supabase/supabase-js";
 import {
   createContext,
@@ -14,6 +16,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { clearMobileBootstrapCache, getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
 import { setApiSession } from "@/lib/api/client";
+import { isCurrentProjectGeneration, resolveInitialProjectId } from "@/lib/project-context";
 import { isTransientBackendFailure } from "../../lib/backend-resilience";
 
 export type AvailableProject = {
@@ -46,6 +49,8 @@ type AuthContextValue = {
   profile: MobileProfile | null;
   profileLoading: boolean;
   profileError: string | null;
+  currentProjectId: string | null;
+  projectPersistencePending: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -60,6 +65,20 @@ type CachedProfile = {
 };
 
 const PROFILE_CACHE_PREFIX = "tttracker:mobile-profile:v2:";
+const SELECTED_PROJECT_PREFIX = "tttracker:mobile-selected-project:v1:";
+const PERSISTED_PROJECT_PREFIX = "tttracker:mobile-server-project:v1:";
+
+function selectedProjectKey(userId: string) {
+  return `${SELECTED_PROJECT_PREFIX}${userId}`;
+}
+
+function persistedProjectKey(userId: string) {
+  return `${PERSISTED_PROJECT_PREFIX}${userId}`;
+}
+
+function traceProject(stage: string, details: Record<string, unknown>) {
+  if (typeof __DEV__ !== "undefined" && __DEV__) console.debug(`[project-context] ${stage}`, details);
+}
 
 function profileCacheKey(userId: string) {
   return `${PROFILE_CACHE_PREFIX}${userId}`;
@@ -108,6 +127,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const authGenerationRef = useRef(0);
   const activeSessionRef = useRef<Session | null>(null);
   const profileRef = useRef<MobileProfile | null>(null);
+  const selectedProjectIdRef = useRef<string | null>(null);
+  const selectionGenerationRef = useRef(0);
+  const persistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastPersistenceTargetRef = useRef<string | null>(null);
   const profileRequestRef = useRef<{
     userId: string;
     promise: Promise<void>;
@@ -119,13 +142,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [profile, setProfile] = useState<MobileProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [projectPersistencePending, setProjectPersistencePending] = useState(false);
+  const [currentProjectId, setCurrentProjectIdState] = useState<string | null>(null);
 
   const applyProfile = useCallback((next: MobileProfile | null) => {
     profileRef.current = next;
+    selectedProjectIdRef.current = next?.projectId ?? null;
 
     if (!mountedRef.current) return;
 
     setProfile(next);
+    setCurrentProjectIdState(next?.projectId ?? null);
 
     if (next) {
       void writeCachedProfile(next);
@@ -134,12 +161,17 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const clearProfile = useCallback(() => {
     profileRef.current = null;
+    selectedProjectIdRef.current = null;
+    setCurrentProjectIdState(null);
+    selectionGenerationRef.current++;
+    lastPersistenceTargetRef.current = null;
 
     if (!mountedRef.current) return;
 
     setProfile(null);
     setProfileError(null);
     setProfileLoading(false);
+    setProjectPersistencePending(false);
   }, []);
 
   const fetchAndApplyProfile = useCallback(
@@ -150,6 +182,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return profileRequestRef.current.promise;
       }
 
+      const requestSelectionGeneration = selectionGenerationRef.current;
       const task = (async () => {
         const alreadyHaveProfile = profileRef.current?.userId === userId;
 
@@ -171,18 +204,64 @@ export function AuthProvider({ children }: PropsWithChildren) {
             status: project.status,
           }));
           const savedProjectId = employee?.currentProjectId ?? null;
-          const selectedProject =
-            availableProjects.find(
-              (project) => project.id === savedProjectId,
-            ) ??
-            availableProjects.find(
-              (project) =>
-                project.status?.trim().toLowerCase() === "active",
-            ) ??
-            availableProjects[0] ??
-            null;
+          const resolvedProjectId = resolveInitialProjectId(
+            availableProjects,
+            selectedProjectIdRef.current,
+            savedProjectId,
+          );
+          const selectedProject = availableProjects.find((project) => project.id === resolvedProjectId) ?? null;
+          traceProject("boot", {
+            projectId: selectedProject?.id ?? null,
+            projectNumber: selectedProject?.projectNumber ?? null,
+            generation: selectionGenerationRef.current,
+            source: selectedProject?.id === selectedProjectIdRef.current ? "local/runtime" : selectedProject?.id === savedProjectId ? "server" : "authorized fallback",
+          });
 
           if (!mountedRef.current || activeSessionRef.current?.user.id !== userId) return;
+
+          /* A profile request that began before a user switch cannot undo it. */
+          if (!isCurrentProjectGeneration(requestSelectionGeneration, selectionGenerationRef.current)) {
+            const currentSelection = availableProjects.find(
+              (project) => project.id === selectedProjectIdRef.current,
+            );
+            if (currentSelection) {
+              traceProject("stale profile selection ignored", {
+                projectId: currentSelection.id,
+                generation: selectionGenerationRef.current,
+              });
+              applyProfile({
+                userId,
+                email: currentSession.user.email ?? "",
+                employeeId: employee?.id ?? null,
+                fullName: employee?.fullName?.trim() || fallbackName(currentSession),
+                employeeRole: employee?.position ?? null,
+                crewId: employee?.crewId ?? null,
+                crewNumber: employee?.crewNumber ?? null,
+                crewName: employee?.crewName ?? null,
+                projectId: currentSelection.id,
+                projectName: currentSelection.name,
+                projectNumber: currentSelection.projectNumber,
+                projectStatus: currentSelection.status,
+                availableProjects,
+              });
+              return;
+            }
+          }
+
+          if (savedProjectId && savedProjectId === selectedProject?.id) {
+            void AsyncStorage.setItem(persistedProjectKey(userId), savedProjectId).catch(() => undefined);
+          } else if (!savedProjectId) {
+            void AsyncStorage.removeItem(persistedProjectKey(userId)).catch(() => undefined);
+          }
+
+          selectedProjectIdRef.current = selectedProject?.id ?? null;
+          if (
+            selectedProject &&
+            savedProjectId !== selectedProject.id &&
+            selectionGenerationRef.current === requestSelectionGeneration
+          ) {
+            setProjectPersistencePending(true);
+          }
 
           applyProfile({
             userId,
@@ -233,15 +312,42 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const hydrateThenRefresh = useCallback(
     async (currentSession: Session) => {
       const userId = currentSession.user.id;
+      if (profileRef.current?.userId && profileRef.current.userId !== userId) {
+        selectedProjectIdRef.current = null;
+        selectionGenerationRef.current = 0;
+        lastPersistenceTargetRef.current = null;
+        setProjectPersistencePending(false);
+      }
       const cached = await readCachedProfile(userId);
+      let locallySelectedId: string | null = null;
+      let lastPersistedId: string | null = null;
+      try {
+        locallySelectedId = await AsyncStorage.getItem(selectedProjectKey(userId));
+        lastPersistedId = await AsyncStorage.getItem(persistedProjectKey(userId));
+      } catch (error) {
+        if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[project-context] local selection could not be read", error instanceof Error ? error.message : "unknown");
+      }
 
       if (!mountedRef.current || activeSessionRef.current?.user.id !== userId) return;
 
       if (cached?.profile) {
-        applyProfile(cached.profile);
+        const cachedProjects = cached.profile.availableProjects ?? [];
+        const localChoice = cachedProjects.find((project) => project.id === locallySelectedId);
+        const cachedChoice = cachedProjects.find((project) => project.id === cached.profile.projectId);
+        const choice = localChoice ?? cachedChoice;
+        selectedProjectIdRef.current = choice?.id ?? null;
+        if (localChoice && lastPersistedId && localChoice.id !== lastPersistedId) {
+          setProjectPersistencePending(true);
+        }
+        if (choice) {
+          applyProfile({ ...cached.profile, projectId: choice.id, projectName: choice.name, projectNumber: choice.projectNumber, projectStatus: choice.status });
+        } else {
+          applyProfile(cached.profile);
+        }
         setProfileLoading(false);
       } else {
         setProfileLoading(true);
+        selectedProjectIdRef.current = locallySelectedId;
       }
 
       /* Revalidate quietly. Cached data stays on screen while this runs. */
@@ -257,6 +363,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     clearMobileBootstrapCache(session.user.id);
+    lastPersistenceTargetRef.current = null;
     await fetchAndApplyProfile(session, true);
   }, [clearProfile, fetchAndApplyProfile, session]);
 
@@ -278,6 +385,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
 
       const previous = currentProfile;
+      const generation = ++selectionGenerationRef.current;
+      const startedAt = Date.now();
+      selectedProjectIdRef.current = selectedProject.id;
+      lastPersistenceTargetRef.current = selectedProject.id;
       const next: MobileProfile = {
         ...currentProfile,
         projectId: selectedProject.id,
@@ -286,26 +397,87 @@ export function AuthProvider({ children }: PropsWithChildren) {
         projectStatus: selectedProject.status,
       };
 
-      /* Project switching is optimistic so the UI changes immediately. */
+      traceProject("select requested", { projectId, projectNumber: selectedProject.projectNumber, generation });
       applyProfile(next);
+      setProjectPersistencePending(true);
+      void AsyncStorage.setItem(selectedProjectKey(session.user.id), selectedProject.id).catch(() => undefined);
+      traceProject("local committed", { projectId, projectNumber: selectedProject.projectNumber, generation });
 
-      try {
-        const { error } = await supabase.rpc("set_my_current_project", {
-          selected_project_id: projectId,
-        });
+      const persist = async () => {
+        try {
+          const result = await apiJson<{
+            persisted: boolean;
+            project: { id: string; name: string; projectNumber: string | null; status: string | null };
+          }>("/api/mobile/project-selection", {
+            method: "POST",
+            body: JSON.stringify({ projectId: selectedProject.id }),
+            dedupe: false,
+          });
+          if (!isCurrentProjectGeneration(generation, selectionGenerationRef.current)) {
+            traceProject("stale switch response ignored", { projectId, generation, currentGeneration: selectionGenerationRef.current, durationMs: Date.now() - startedAt });
+            return;
+          }
+          if (!result.persisted || result.project.id !== selectedProject.id) throw new Error("The server did not confirm the selected project.");
+          clearMobileBootstrapCache(session.user.id);
+          selectedProjectIdRef.current = result.project.id;
+          applyProfile({ ...next, projectId: result.project.id, projectName: result.project.name, projectNumber: result.project.projectNumber, projectStatus: result.project.status });
+          setProjectPersistencePending(false);
+          lastPersistenceTargetRef.current = null;
+          void AsyncStorage.setItem(persistedProjectKey(session.user.id), result.project.id).catch(() => undefined);
+          void writeCachedProfile({ ...next, projectId: result.project.id, projectName: result.project.name, projectNumber: result.project.projectNumber, projectStatus: result.project.status });
+          traceProject("server persisted", { projectId: result.project.id, projectNumber: result.project.projectNumber, generation, durationMs: Date.now() - startedAt });
+        } catch (error) {
+          if (!isCurrentProjectGeneration(generation, selectionGenerationRef.current)) return;
+          const definiteRejection = error instanceof ApiRequestError && [400, 403, 404, 409].includes(error.status);
+          if (definiteRejection) {
+            const previousProject = previous.availableProjects.find((project) => project.id === previous.projectId);
+            selectedProjectIdRef.current = previousProject?.id ?? null;
+            lastPersistenceTargetRef.current = null;
+            applyProfile(previous);
+            if (previousProject) {
+              void AsyncStorage.setItem(selectedProjectKey(session.user.id), previousProject.id).catch(() => undefined);
+            } else {
+              void AsyncStorage.removeItem(selectedProjectKey(session.user.id)).catch(() => undefined);
+            }
+            setProjectPersistencePending(false);
+            throw error;
+          }
+          /* Timeout/network errors are ambiguous; keep local selection and retry on next boot. */
+          setProjectPersistencePending(true);
+          if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[project-context] persistence pending after ambiguous failure", { projectId, generation, durationMs: Date.now() - startedAt });
+        }
+      };
 
-        if (error) throw error;
-
-        /* No full profile reload is required; the selected project is known. */
-        clearMobileBootstrapCache(session.user.id);
-        await writeCachedProfile(next);
-      } catch (error) {
-        applyProfile(previous);
-        throw error;
-      }
+      const queued = persistenceQueueRef.current.catch(() => undefined).then(persist);
+      persistenceQueueRef.current = queued.then(() => undefined, () => undefined);
+      await queued;
     },
     [applyProfile, session],
   );
+
+  useEffect(() => {
+    const projectId = profile?.projectId;
+    if (!session || !projectId || !projectPersistencePending || lastPersistenceTargetRef.current === projectId) return;
+    void setCurrentProject(projectId).catch((error) => {
+      if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[project-context] pending project persistence retry failed", {
+        projectId,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    });
+  }, [profile?.projectId, projectPersistencePending, session, setCurrentProject]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || !session || !projectPersistencePending) return;
+      const projectId = profileRef.current?.projectId;
+      if (!projectId) return;
+      lastPersistenceTargetRef.current = null;
+      void setCurrentProject(projectId).catch((error) => {
+        if (typeof __DEV__ !== "undefined" && __DEV__) console.warn("[project-context] foreground persistence retry failed", { projectId, error: error instanceof Error ? error.message : "unknown" });
+      });
+    });
+    return () => subscription.remove();
+  }, [projectPersistencePending, session, setCurrentProject]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -437,6 +609,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     if (userId) {
       await AsyncStorage.removeItem(profileCacheKey(userId));
+      await AsyncStorage.removeItem(selectedProjectKey(userId));
+      await AsyncStorage.removeItem(persistedProjectKey(userId));
     }
 
     authGenerationRef.current++;
@@ -455,6 +629,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       profile,
       profileLoading,
       profileError,
+      currentProjectId,
+      projectPersistencePending,
       signIn,
       signOut,
       refreshProfile,
@@ -467,6 +643,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       profile,
       profileLoading,
       profileError,
+      currentProjectId,
+      projectPersistencePending,
       signIn,
       signOut,
       refreshProfile,

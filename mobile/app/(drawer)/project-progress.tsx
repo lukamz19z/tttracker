@@ -1,7 +1,7 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, type Href } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -432,13 +432,13 @@ function projectLabel(
 }
 
 export default function ProjectProgressScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const { can } = useAccess();
 
   const performanceVisible = can("mobile.projects");
 
-  const projectId =
-    profile?.projectId ?? null;
+  const projectId = currentProjectId;
+  const activeProjectIdRef = useRef(projectId);
   const cacheKey = profile?.userId && projectId ? `tttracker:project-progress:core:${profile.userId}:${projectId}` : null;
 
   const [project, setProject] =
@@ -480,6 +480,20 @@ export default function ProjectProgressScreen() {
     setErrorMessage,
   ] = useState<string | null>(null);
 
+  useLayoutEffect(() => {
+    activeProjectIdRef.current = projectId;
+    if (projectId) setLoading(true);
+    setErrorMessage(null);
+    setProject(null);
+    setTowers([]);
+    setDockets([]);
+    setLabourRows([]);
+    setDefects([]);
+    setDeliveries([]);
+    setDeliveryItems([]);
+    setMaterialBundles([]);
+  }, [projectId]);
+
   const loadProjectProgress =
     useCallback(
       async (
@@ -512,6 +526,7 @@ export default function ProjectProgressScreen() {
           if (!isRefresh && cacheKey) {
             try {
               const raw = await AsyncStorage.getItem(cacheKey);
+              if (activeProjectIdRef.current !== projectId) return;
               if (raw) {
                 const cached = JSON.parse(raw) as { project?: ProjectRow; towers?: Tower[]; dockets?: DocketRow[] };
                 if (cached.project?.id === projectId && Array.isArray(cached.towers) && Array.isArray(cached.dockets)) {
@@ -553,6 +568,8 @@ export default function ProjectProgressScreen() {
               )
               .is("deleted_at", null),
           ]);
+
+          if (activeProjectIdRef.current !== projectId) return;
 
           if (projectResult.error) {
             throw projectResult.error;
@@ -639,6 +656,7 @@ export default function ProjectProgressScreen() {
               return [] as DeliveryRow[];
             })(),
           ]);
+          if (activeProjectIdRef.current !== projectId) return;
           loadedLabourRows = labourRows;
           loadedDefects = defectsRows;
           loadedMaterialBundles = bundleRows;
@@ -656,6 +674,8 @@ export default function ProjectProgressScreen() {
               }
             }
           }
+
+          if (activeProjectIdRef.current !== projectId) return;
 
           loadedTowers.sort(
             (a, b) =>
@@ -688,6 +708,7 @@ export default function ProjectProgressScreen() {
             loadedMaterialBundles,
           );
         } catch (error) {
+          if (activeProjectIdRef.current !== projectId) return;
           console.error(
             "Project progress load failed:",
             error,
@@ -706,8 +727,10 @@ export default function ProjectProgressScreen() {
 
           setErrorMessage(message);
         } finally {
-          setLoading(false);
-          setRefreshing(false);
+          if (activeProjectIdRef.current === projectId) {
+            setLoading(false);
+            setRefreshing(false);
+          }
         }
       },
       [cacheKey, projectId],

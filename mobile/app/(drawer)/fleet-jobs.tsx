@@ -560,7 +560,7 @@ type DispatchFleetNotificationResult = {
 };
 
 export default function FleetJobsScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const profileRecord = profile as unknown as
     | {
         fullName?: string | null;
@@ -572,7 +572,7 @@ export default function FleetJobsScreen() {
       }
     | null;
 
-  const projectId = clean(profileRecord?.projectId);
+  const projectId = clean(currentProjectId);
   const projectName = clean(profileRecord?.projectName);
   const projectNumber = clean(profileRecord?.projectNumber);
 

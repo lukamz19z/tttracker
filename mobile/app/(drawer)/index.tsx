@@ -363,6 +363,7 @@ export default function HomeScreen() {
     profileLoading,
     profileError,
     refreshProfile,
+    currentProjectId,
   } = useAuth();
   const { can, roles } = useAccess();
 
@@ -405,7 +406,7 @@ export default function HomeScreen() {
 
   const selectedProject =
     profile?.availableProjects.find(
-      (project) => project.id === profile.projectId,
+      (project) => project.id === currentProjectId,
     ) ?? null;
 
   const roleLabel =
@@ -570,7 +571,7 @@ export default function HomeScreen() {
   }, [canSeeMyDay, canUseTraining, canUseVehiclePrestarts, fullName, session?.user.id]);
 
   const loadProjectDashboard = useCallback(async (force = false) => {
-    const projectId = profile?.projectId;
+    const projectId = currentProjectId;
     const userId = profile?.userId;
     const requestVersion = ++projectRequestVersion.current;
 
@@ -624,7 +625,7 @@ export default function HomeScreen() {
       const summary = await apiJson<ProjectDashboardData>(
         `/api/mobile/dashboard-summary?projectId=${encodeURIComponent(projectId)}`,
       );
-      if (requestVersion !== projectRequestVersion.current || profile?.projectId !== projectId || profile?.userId !== userId) return;
+      if (requestVersion !== projectRequestVersion.current || currentProjectId !== projectId || profile?.userId !== userId) return;
       setProjectDashboard(summary);
       setProjectDashboardLoaded(true);
       loadedDashboardProjectId.current = cacheIdentity;
@@ -651,7 +652,7 @@ export default function HomeScreen() {
     }
   }, [
     canSeeProjectSnapshot,
-    profile?.projectId,
+    currentProjectId,
     profile?.userId,
   ]);
 

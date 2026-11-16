@@ -39,6 +39,8 @@ export function ProjectSelector({
 }: ProjectSelectorProps) {
   const {
     profile,
+    currentProjectId,
+    projectPersistencePending,
     setCurrentProject,
   } = useAuth();
 
@@ -56,7 +58,7 @@ export function ProjectSelector({
   const selectedProject =
     projects.find(
       (project) =>
-        project.id === profile?.projectId,
+        project.id === currentProjectId,
     ) ?? null;
 
   const canChange =
@@ -67,27 +69,20 @@ export function ProjectSelector({
   ) {
     if (
       project.id ===
-      profile?.projectId
+      currentProjectId
     ) {
       setModalOpen(false);
       return;
     }
 
     setChangingProjectId(project.id);
-
-    try {
-      await setCurrentProject(project.id);
-      setModalOpen(false);
-    } catch (error) {
+    setModalOpen(false);
+    void setCurrentProject(project.id).catch((error) => {
       Alert.alert(
         "Unable to change project",
-        error instanceof Error
-          ? error.message
-          : "Please try again.",
+        error instanceof Error ? error.message : "Please try again.",
       );
-    } finally {
-      setChangingProjectId(null);
-    }
+    }).finally(() => setChangingProjectId((current) => current === project.id ? null : current));
   }
 
   return (
@@ -153,6 +148,9 @@ export function ProjectSelector({
             No project access has been
             assigned to this account.
           </Text>
+        ) : null}
+        {projectPersistencePending ? (
+          <Text style={styles.projectStatus}>Project selection is saved on this device and waiting to sync.</Text>
         ) : null}
       </View>
 
@@ -221,8 +219,7 @@ export function ProjectSelector({
             >
               {projects.map((project) => {
                 const selected =
-                  project.id ===
-                  profile?.projectId;
+                  project.id === currentProjectId;
 
                 const changing =
                   changingProjectId ===
@@ -231,10 +228,6 @@ export function ProjectSelector({
                 return (
                   <Pressable
                     key={project.id}
-                    disabled={
-                      changingProjectId !==
-                      null
-                    }
                     onPress={() =>
                       void handleSelect(
                         project,

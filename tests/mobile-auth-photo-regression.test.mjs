@@ -111,9 +111,14 @@ function loadAuthProvider({ getSession, cachedProfile = null, queriesFail = fals
   new Function("require", "exports", compiled)((name) => {
     if (name === "react") return harness.react;
     if (name === "react/jsx-runtime") return { jsx: (type, props) => ({ type, props }) };
+    if (name === "react-native") return { AppState: { addEventListener: () => ({ remove() {} }) } };
     if (name === "@react-native-async-storage/async-storage") return storage;
     if (name === "@/lib/supabase") return { supabase };
-    if (name === "@/lib/api/client") return { setApiSession() {} };
+    if (name === "@/lib/api/client") return { ApiRequestError: class ApiRequestError extends Error { constructor(message, status) { super(message); this.status = status; } }, setApiSession() {}, apiJson: async () => ({ persisted: true, project: { id: "project-1", name: "Project", projectNumber: "P-1", status: "Active" } }) };
+    if (name === "@/lib/project-context") return {
+      resolveInitialProjectId: (projects, localId, serverId) => projects.find((row) => row.id === localId)?.id ?? projects.find((row) => row.id === serverId)?.id ?? projects.find((row) => row.status?.toLowerCase() === "active")?.id ?? projects[0]?.id ?? null,
+      isCurrentProjectGeneration: (response, current) => response === current,
+    };
     if (name === "@/lib/api/mobile-bootstrap") return {
       clearMobileBootstrapCache() {},
       getMobileBootstrap: async () => {

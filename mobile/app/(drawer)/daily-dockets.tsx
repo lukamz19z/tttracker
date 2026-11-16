@@ -6,6 +6,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -322,12 +323,11 @@ export default function DailyDocketScreen() {
   const routeDocketId = clean(firstParam(routeParams.docketId));
   const routeSource = clean(firstParam(routeParams.source));
 
-  const { profile, session, status: authStatus } = useAuth();
+  const { profile, session, status: authStatus, currentProjectId } = useAuth();
   const { loading: accessLoading, can: canAccess } = useAccess();
   const userProfile = profile;
 
-  const projectId =
-    routeProjectId || clean(userProfile?.projectId);
+  const projectId = clean(currentProjectId) || routeProjectId;
   const projectName = clean(userProfile?.projectName);
   const projectNumber = clean(userProfile?.projectNumber);
 
@@ -336,6 +336,21 @@ export default function DailyDocketScreen() {
   const [selectedTowerId, setSelectedTowerId] = useState(
     routeTowerId,
   );
+  const previousProjectId = useRef(projectId);
+  useLayoutEffect(() => {
+    if (previousProjectId.current !== projectId) {
+      previousProjectId.current = projectId;
+      listGeneration.current += 1;
+      setSelectedTowerId("");
+      setTowers([]);
+      setDockets([]);
+    }
+  }, [projectId]);
+  useEffect(() => {
+    if (selectedTowerId && !towers.some((tower) => tower.id === selectedTowerId)) {
+      setSelectedTowerId("");
+    }
+  }, [selectedTowerId, towers]);
   const [towerPickerOpen, setTowerPickerOpen] = useState(false);
   const [towerSearch, setTowerSearch] = useState("");
   const [search, setSearch] = useState("");

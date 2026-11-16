@@ -5,7 +5,7 @@ import { towerWeightTonnes } from "@/lib/dockets/productivity";
 import type { ResolvedMobileTowerProgress } from "@/types/daily-dockets";
 import { Ionicons } from "@expo/vector-icons";
 import { router, type Href } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -69,6 +69,7 @@ type SelectorOption = {
 };
 
 const progressCacheKey = (projectId: string) => `tttracker:tower-progress:${projectId}`;
+const EMPTY_PROGRESS: Record<string, ResolvedMobileTowerProgress> = {};
 
 function safeString(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
@@ -252,21 +253,22 @@ async function safeSelect<T>(
 }
 
 export default function TowerProgressScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const { can } = useAccess();
 
   const canOpenDockets = can("mobile.daily_dockets");
 
-  const projectId = profile?.projectId ?? "";
-
-  const [towers, setTowers] = useState<Tower[]>([]);
-  const [dockets, setDockets] = useState<DocketRow[]>([]);
+  const projectId = currentProjectId ?? "";
+  const activeProjectIdRef = useRef(projectId);
+  const [projectDataId, setProjectDataId] = useState("");
+  const [towerRows, setTowers] = useState<Tower[]>([]);
+  const [docketRows, setDockets] = useState<DocketRow[]>([]);
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] =
     useState<StatusFilter>("All");
 
-  const [resolvedProgress, setResolvedProgress] = useState<Record<string, ResolvedMobileTowerProgress>>({});
+  const [progressRows, setResolvedProgress] = useState<Record<string, ResolvedMobileTowerProgress>>({});
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -281,15 +283,27 @@ export default function TowerProgressScreen() {
 
   const [overviewVisible, setOverviewVisible] =
     useState(false);
-  const [selectedTower, setSelectedTower] =
+  const [selectedTowerState, setSelectedTower] =
     useState<Tower | null>(null);
+  const selectedTowerIdRef = useRef<string | null>(null);
   const [overviewLoading, setOverviewLoading] =
     useState(false);
 
-  const [towerDockets, setTowerDockets] = useState<
+  const [towerDocketRows, setTowerDockets] = useState<
     DocketRow[]
   >([]);
-  const [defects, setDefects] = useState<DefectRow[] | null>(null);
+  const [defectRows, setDefects] = useState<DefectRow[] | null>(null);
+  const projectDataIsCurrent = projectDataId === projectId;
+  const towers = useMemo(() => projectDataIsCurrent ? towerRows : [], [projectDataIsCurrent, towerRows]);
+  const dockets = useMemo(() => projectDataIsCurrent ? docketRows : [], [projectDataIsCurrent, docketRows]);
+  const resolvedProgress = useMemo(() => projectDataIsCurrent ? progressRows : EMPTY_PROGRESS, [projectDataIsCurrent, progressRows]);
+  const selectedTower = projectDataIsCurrent && selectedTowerState?.project_id === projectId ? selectedTowerState : null;
+  const towerDockets = useMemo(() => projectDataIsCurrent ? towerDocketRows : [], [projectDataIsCurrent, towerDocketRows]);
+  const defects = projectDataIsCurrent ? defectRows : null;
+  useLayoutEffect(() => {
+    activeProjectIdRef.current = projectId;
+    selectedTowerIdRef.current = selectedTower?.id ?? null;
+  }, [projectId, selectedTower?.id]);
 
   const loadProject = useCallback(
     async (
@@ -302,9 +316,13 @@ export default function TowerProgressScreen() {
         setStatusFilter("All");
         setOverviewVisible(false);
         setSelectedTower(null);
+    selectedTowerIdRef.current = null;
+        setTowerDockets([]);
+        setDefects(null);
       }
 
       if (!selectedProjectId) {
+        setProjectDataId("");
         setTowers([]);
         setDockets([]);
         return;
@@ -315,9 +333,11 @@ export default function TowerProgressScreen() {
       if (!silent) {
         try {
           const cached = await AsyncStorage.getItem(progressCacheKey(selectedProjectId));
+          if (activeProjectIdRef.current !== selectedProjectId) return;
           if (cached) {
             const snapshot = JSON.parse(cached) as { towers?: Tower[]; dockets?: DocketRow[]; progress?: Record<string, ResolvedMobileTowerProgress> };
             if (snapshot.towers && snapshot.dockets && snapshot.progress) {
+              setProjectDataId(selectedProjectId);
               setTowers(snapshot.towers);
               setDockets(snapshot.dockets);
               setResolvedProgress(snapshot.progress);
@@ -329,11 +349,14 @@ export default function TowerProgressScreen() {
 
       try {
         const result = await getTowerProgress(selectedProjectId);
+        if (activeProjectIdRef.current !== selectedProjectId) return;
+        setProjectDataId(selectedProjectId);
         setResolvedProgress(result.progress);
         setTowers((result.towers as Tower[]).sort(naturalTowerSort));
         setDockets(result.dockets as DocketRow[]);
         void AsyncStorage.setItem(progressCacheKey(selectedProjectId), JSON.stringify({ towers: result.towers, dockets: result.dockets, progress: result.progress })).catch(() => undefined);
       } catch (error) {
+        if (activeProjectIdRef.current !== selectedProjectId) return;
         Alert.alert("Could not load tower progress", error instanceof Error ? error.message : "Please try again.");
         setLoading(false); return;
       }
@@ -490,6 +513,7 @@ export default function TowerProgressScreen() {
     tower: Tower,
   ) {
     setSelectedTower(tower);
+    selectedTowerIdRef.current = tower.id;
     setOverviewVisible(true);
     setOverviewLoading(true);
 
@@ -508,6 +532,8 @@ export default function TowerProgressScreen() {
           },
         ],
       );
+
+    if (activeProjectIdRef.current !== projectId || selectedTowerIdRef.current !== towerId) return;
 
     const sortedDockets = [...(docketsByTower[towerId] ?? [])].sort(
       (a, b) => new Date(b.docket_date ?? 0).getTime() - new Date(a.docket_date ?? 0).getTime(),

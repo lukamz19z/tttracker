@@ -138,9 +138,8 @@ function localBundleStatus(
 }
 
 export function MaterialsProvider({ children }: PropsWithChildren) {
-  const { profile } = useAuth();
+  const { currentProjectId: projectId } = useAuth();
   const { online, recoveryVersion, setMaterialPendingCount, registerMaterialSync } = useSync();
-  const projectId = profile?.projectId ?? null;
 
   const [data, setData] = useState<MaterialPayload | null>(null);
   const [loading, setLoading] = useState(false);

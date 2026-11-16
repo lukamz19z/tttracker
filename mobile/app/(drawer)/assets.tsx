@@ -767,10 +767,10 @@ function emptyEquipment(kind: EquipmentForm["kind"], assetNumber = ""): Equipmen
 }
 
 export default function AssetsScreen() {
-  const { profile } = useAuth();
+  const { profile, currentProjectId } = useAuth();
   const profileRecord = profile as unknown as ProfileRecord | null;
 
-  const projectId = clean(profileRecord?.projectId);
+  const projectId = clean(currentProjectId);
   const projectName = clean(profileRecord?.projectName);
   const projectNumber = clean(profileRecord?.projectNumber);
   const profileCrew = clean(profileRecord?.crew);

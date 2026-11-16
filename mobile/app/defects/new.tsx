@@ -94,12 +94,10 @@ const BLANK: FormState = {
 
 function NewDefectContent() {
   const { data } = useQuality();
-  const { profile } = useAuth();
+  const { currentProjectId } = useAuth();
   const { online, syncNow } = useSync();
 
-  const projectId =
-    clean(data?.projectId) ||
-    clean(profile?.projectId);
+  const projectId = clean(currentProjectId) || clean(data?.projectId);
 
   const [form, setForm] = useState<FormState>(BLANK);
   const [members, setMembers] = useState<

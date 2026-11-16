@@ -45,9 +45,8 @@ function ageMs(value: string | null) {
 export function QualityProvider({
   children,
 }: PropsWithChildren) {
-  const { profile } = useAuth();
+  const { currentProjectId: projectId } = useAuth();
   const { online, recoveryVersion, syncNow } = useSync();
-  const projectId = profile?.projectId ?? null;
 
   useEffect(() => { if (projectId && online) void syncNow({ manual: false }); }, [online, projectId, syncNow]);
 

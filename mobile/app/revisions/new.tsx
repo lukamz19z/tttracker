@@ -75,10 +75,10 @@ function australianDateToIso(value: string) {
 
 export default function NewRevisionScreen() {
   const { data } = useQuality();
-  const { profile } = useAuth();
+  const { currentProjectId } = useAuth();
   const { online } = useSync();
 
-  const projectId = clean(profile?.projectId);
+  const projectId = clean(currentProjectId);
   const [draft, setDraft] = useState<RevisionWorkingDraft | null>(null);
   const [inspectionDateInput, setInspectionDateInput] = useState("");
   const [towerPickerOpen, setTowerPickerOpen] = useState(false);
