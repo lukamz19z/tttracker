@@ -8,6 +8,14 @@ export function shouldTraceMobileRequest(
   return development || (flag === "1" && pathname === PROFILE_MOBILE_TRACE_PATH);
 }
 
+/** Client production diagnostics are opt-in and cover every mobile request. */
+export function shouldTraceMobileClientRequest(
+  development: boolean,
+  flag: string | undefined,
+) {
+  return development || flag === "1";
+}
+
 export function isSafeMobileTraceId(value: string) {
   return /^[a-zA-Z0-9_-]{8,120}$/.test(value);
 }

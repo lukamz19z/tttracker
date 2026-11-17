@@ -93,10 +93,12 @@ export async function GET(request: Request) {
     const kind = requestedKind(url.searchParams.get("kind"));
     const memberField = requestedMemberField(url.searchParams.get("memberField"));
     const requestedLimit = Number(url.searchParams.get("limit") ?? 60);
+    const requestedOffset = Number(url.searchParams.get("offset") ?? 0);
     const limit = Math.max(
       1,
       Math.min(Number.isFinite(requestedLimit) ? requestedLimit : 60, 80),
     );
+    const offset = Math.max(0, Math.min(Number.isFinite(requestedOffset) ? Math.floor(requestedOffset) : 0, 1_000_000));
 
     if (!projectId) {
       return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
@@ -109,6 +111,8 @@ export async function GET(request: Request) {
         towerId: requestedTowerId,
         memberField,
         results: [],
+        nextOffset: null,
+        hasMore: false,
       });
     }
 
@@ -145,6 +149,8 @@ export async function GET(request: Request) {
         towerId: requestedTowerId,
         memberField,
         results: [],
+        nextOffset: null,
+        hasMore: false,
       });
     }
 
@@ -164,7 +170,9 @@ export async function GET(request: Request) {
             )
             .in("tower_id", towerIds)
             .or(memberFilterExpression(pattern, memberField).join(","))
-            .limit(perKindLimit)
+            .order("mark_no", { ascending: true })
+            .order("id", { ascending: true })
+            .range(offset, offset + perKindLimit - 1)
         : Promise.resolve({ data: [], error: null });
 
     const bundlePromise =
@@ -176,7 +184,9 @@ export async function GET(request: Request) {
             )
             .in("tower_id", towerIds)
             .or([`bundle_no.ilike.${pattern}`, `section.ilike.${pattern}`].join(","))
-            .limit(perKindLimit)
+            .order("bundle_no", { ascending: true })
+            .order("id", { ascending: true })
+            .range(offset, offset + perKindLimit - 1)
         : Promise.resolve({ data: [], error: null });
 
     const boltPromise =
@@ -195,7 +205,8 @@ export async function GET(request: Request) {
                 `tower_segment.ilike.${pattern}`,
               ].join(","),
             )
-            .limit(perKindLimit)
+            .order("id", { ascending: true })
+            .range(offset, offset + perKindLimit - 1)
         : Promise.resolve({ data: [], error: null });
 
     const [members, bundles, bolts] = await Promise.all([
@@ -315,12 +326,15 @@ export async function GET(request: Request) {
       return a.title.localeCompare(b.title, undefined, { numeric: true });
     });
 
+    const hasMore = [members.data, bundles.data, bolts.data].some((rows) => (rows?.length ?? 0) === perKindLimit);
     return NextResponse.json({
       query: rawQuery,
       kind,
       towerId: requestedTowerId,
       memberField,
       results: results.slice(0, limit),
+      nextOffset: hasMore ? offset + perKindLimit : null,
+      hasMore,
     });
   } catch (error) {
     const apiError = mobileMaterialApiError(error);

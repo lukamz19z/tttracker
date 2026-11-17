@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState, Platform } from "react-native";
 import { createClient } from "@supabase/supabase-js";
 import { resilientFetch } from "../../lib/backend-resilience";
+import { tracedMobileFetch } from "@/lib/perf-trace";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -17,7 +18,7 @@ if (!supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  global: { fetch: resilientFetch },
+  global: { fetch: (input, init) => tracedMobileFetch(resilientFetch, input, init) },
   auth: {
     storage: Platform.OS === "web" ? undefined : AsyncStorage,
     autoRefreshToken: true,

@@ -1,6 +1,6 @@
 import { compareBundles } from "@/lib/materials-sort";
 import { Search, X } from "lucide-react-native";
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -17,12 +17,15 @@ import {
 } from "@/components/materials/MaterialsShell";
 import { TowerPicker } from "@/components/materials/TowerPicker";
 import { useMaterials } from "@/contexts/MaterialsContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { matchesMaterialTower } from "@/lib/materials/tower-filter";
 import {
   type MaterialMemberSearchField,
+  type MaterialSearchPayload,
   type MaterialSearchKind,
   type MaterialSearchResult,
 } from "@/lib/api/materials-search";
+import { cachedMaterialSearch, searchMaterials } from "@/lib/api/materials-search";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
@@ -266,6 +269,9 @@ export function MaterialLiveSearch({
   showKind?: boolean;
 }) {
   const { data, online, towerName } = useMaterials();
+  const { currentProjectId } = useAuth();
+  const projectId = currentProjectId ?? "";
+  const scopedData = data?.projectId === projectId ? data : null;
 
   const [query, setQuery] = useState("");
   const [towerId, setTowerId] = useState("");
@@ -273,21 +279,96 @@ export function MaterialLiveSearch({
   const [memberField, setMemberField] =
     useState<MaterialMemberSearchField>("all");
   const deferredQuery = useDeferredValue(query);
-  const searching = false;
   const message = !online ? "Offline - searching cached project materials." : null;
 
-  const towers = useMemo(() => data?.towers ?? [], [data?.towers]);
+  const towers = useMemo(() => scopedData?.towers ?? [], [scopedData?.towers]);
   const effectiveKind = kind === "all" ? kindFilter : kind;
   const effectiveMemberField =
     effectiveKind === "member" ? memberField : "all";
+  const normalizedQuery = deferredQuery.trim().replace(/\s+/g, " ");
+  const searchIdentity = [projectId, effectiveKind, towerId || "all-towers", effectiveMemberField, normalizedQuery.toLowerCase()].join("|");
+  const [serverSearch, setServerSearch] = useState<{ identity: string; payload: MaterialSearchPayload } | null>(null);
+  const [searchState, setSearchState] = useState<{ identity: string; loading: boolean; error: string | null }>({ identity: "", loading: false, error: null });
+  const requestGeneration = useRef(0);
+  const loadMoreInFlight = useRef(false);
+  const activeIdentity = useRef(searchIdentity);
+  activeIdentity.current = searchIdentity;
 
   const indexed = useMemo(() => ({
-    ...data,
-    members: (data?.members || []).map((row) => ({ ...row, search_text: [row.mark_no, row.pn_final, row.bundle_reference, row.drawing_number, row.section, row.tower_segment].map(clean).join(" ").toLowerCase() })),
-    bundles: [...(data?.bundles || [])].sort(compareBundles),
-    bolts: data?.bolts || [],
-  }), [data]);
-  const results = useMemo(() => localResults(effectiveKind, indexed as NonNullable<typeof data>, deferredQuery, limit, towerName, towerId, effectiveMemberField), [indexed, deferredQuery, effectiveKind, limit, towerName, towerId, effectiveMemberField]);
+    ...scopedData,
+    members: (scopedData?.members || []).map((row) => ({ ...row, search_text: [row.mark_no, row.pn_final, row.bundle_reference, row.drawing_number, row.section, row.tower_segment].map(clean).join(" ").toLowerCase() })),
+    bundles: [...(scopedData?.bundles || [])].sort(compareBundles),
+    bolts: scopedData?.bolts || [],
+  }), [scopedData]);
+  const localMatches = useMemo(() => localResults(effectiveKind, indexed as NonNullable<typeof data>, deferredQuery, limit, towerName, towerId, effectiveMemberField), [indexed, deferredQuery, effectiveKind, limit, towerName, towerId, effectiveMemberField]);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    let active = true;
+    const isCurrent = () => active && generation === requestGeneration.current;
+    if (!projectId || normalizedQuery.length < 2) {
+      setSearchState({ identity: searchIdentity, loading: false, error: null });
+      return () => { active = false; };
+    }
+
+    const filters = { towerId, memberField: effectiveMemberField };
+    setSearchState({ identity: searchIdentity, loading: online, error: null });
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const cached = await cachedMaterialSearch(projectId, normalizedQuery, effectiveKind, filters);
+          if (isCurrent() && cached) setServerSearch({ identity: searchIdentity, payload: cached.value });
+        } catch {
+          // Local results remain available if the optional search cache is unreadable.
+        }
+        if (!online || !isCurrent()) {
+          if (isCurrent()) setSearchState({ identity: searchIdentity, loading: false, error: null });
+          return;
+        }
+        try {
+          const payload = await searchMaterials(projectId, normalizedQuery, effectiveKind, limit, filters);
+          if (!isCurrent()) return;
+          setServerSearch({ identity: searchIdentity, payload });
+          setSearchState({ identity: searchIdentity, loading: false, error: null });
+        } catch (error) {
+          if (!isCurrent()) return;
+          setSearchState({ identity: searchIdentity, loading: false, error: error instanceof Error ? error.message : "Material search could not be loaded." });
+        }
+      })();
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [projectId, normalizedQuery, effectiveKind, effectiveMemberField, towerId, online, limit, searchIdentity]);
+
+  const currentPayload = serverSearch?.identity === searchIdentity ? serverSearch.payload : null;
+  const results = online
+    ? currentPayload?.results ?? []
+    : currentPayload?.results ?? localMatches;
+  const searching = searchState.identity === searchIdentity && searchState.loading;
+  const searchError = searchState.identity === searchIdentity ? searchState.error : null;
+
+  const loadMore = async () => {
+    const offset = currentPayload?.nextOffset;
+    if (!online || !projectId || offset == null || loadMoreInFlight.current) return;
+    const identity = searchIdentity;
+    loadMoreInFlight.current = true;
+    setSearchState({ identity, loading: true, error: null });
+    try {
+      const payload = await searchMaterials(projectId, normalizedQuery, effectiveKind, limit, { towerId, memberField: effectiveMemberField }, offset);
+      if (identity !== activeIdentity.current) return;
+      setServerSearch((current) => current?.identity === identity
+        ? { identity, payload: { ...payload, results: [...current.payload.results, ...payload.results] } }
+        : { identity, payload });
+      setSearchState({ identity, loading: false, error: null });
+    } catch (error) {
+      if (identity === activeIdentity.current) setSearchState({ identity, loading: false, error: error instanceof Error ? error.message : "More material results could not be loaded." });
+    } finally {
+      loadMoreInFlight.current = false;
+    }
+  };
 
   return (
     <MaterialsShell title={title} subtitle={subtitle} items={results.map((result, index) => (
@@ -371,7 +452,9 @@ export function MaterialLiveSearch({
 
       {message ? <Text style={styles.message}>{message}</Text> : null}
 
-      {!searching && query.trim().length >= 2 && results.length === 0 ? (
+      {searchError ? <Text style={styles.message}>{searchError}{currentPayload ? " Showing cached results." : ""}</Text> : null}
+
+      {!searching && !searchError && query.trim().length >= 2 && results.length === 0 ? (
         <Text style={styles.empty}>No matches for the selected filters.</Text>
       ) : null}
 
@@ -379,6 +462,12 @@ export function MaterialLiveSearch({
         <Text style={styles.resultCount}>
           {results.length} {results.length === 1 ? "result" : "results"}
         </Text>
+      ) : null}
+
+      {currentPayload?.hasMore && online ? (
+        <Pressable style={styles.loadMore} onPress={() => void loadMore()} disabled={searching}>
+          {searching ? <ActivityIndicator size="small" /> : <Text style={styles.loadMoreText}>Load more results</Text>}
+        </Pressable>
       ) : null}
 
     </MaterialsShell>
@@ -394,6 +483,8 @@ const styles = StyleSheet.create({
     padding: 11,
     gap: 10,
   },
+  loadMore: { minHeight: 42, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 10, backgroundColor: "#fff", marginTop: 8 },
+  loadMoreText: { color: "#334155", fontSize: 13, fontWeight: "700" },
   filterBlock: {
     gap: 6,
   },

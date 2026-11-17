@@ -1,4 +1,5 @@
 import { apiFetch, apiJson, jsonBody } from "@/lib/api/client";
+import { logMobilePerf } from "@/lib/perf-trace";
 import { File as ExpoFile } from "expo-file-system";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
@@ -26,12 +27,19 @@ async function readJson<T>(response: Response, fallback: string) { return jsonBo
 
 export async function refreshMaterials(projectId: string, onSnapshot?: (data: MaterialPayload) => void) {
   const started = Date.now();
-  const raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 20_000 });
+  let raw: MaterialPayload;
+  try {
+    raw = await apiJson<MaterialPayload>(`/api/mobile/materials/bootstrap?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 20_000 });
+  } catch (error) {
+    logMobilePerf("materials-bootstrap", { module: "materials", operation: "bundles.load", projectId, durationMs: Date.now() - started, outcome: "failure", category: error instanceof Error && /timed? ?out|timeout/i.test(error.name) ? "timeout" : "network_or_http" });
+    throw error;
+  }
   const cached = await getCache<MaterialPayload>(materialCacheKey(projectId));
   const snapshot = { ...raw, members: cached?.value.members || [], bolts: cached?.value.bolts || [] };
   await setCache(materialCacheKey(projectId), snapshot);
   onSnapshot?.(snapshot);
   if (__DEV__) console.debug("Materials useful snapshot", { durationMs: Date.now() - started, bundles: raw.bundles.length });
+  logMobilePerf("materials-bootstrap", { module: "materials", operation: "bundles.load", projectId, durationMs: Date.now() - started, outcome: "success", resultCount: raw.bundles.length });
   return snapshot;
 }
 export async function cachedMaterials(projectId: string) {

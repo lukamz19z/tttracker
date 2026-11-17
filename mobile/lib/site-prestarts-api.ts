@@ -1,5 +1,6 @@
 import { getCache, setCache } from "@/lib/offline/db";
 import { getApiSession } from "@/lib/api/client";
+import { tracedMobileFetch } from "@/lib/perf-trace";
 
 const WEB_BASE_URL = (
   process.env.EXPO_PUBLIC_TTTRACKER_WEB_URL ||
@@ -56,7 +57,7 @@ export async function sitePrestartApi(
     headers.set("Content-Type", "application/json");
   }
 
-  return fetch(`${WEB_BASE_URL}${path}`, {
+  return tracedMobileFetch(fetch, `${WEB_BASE_URL}${path}`, {
     ...init,
     headers,
   });

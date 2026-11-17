@@ -2,7 +2,8 @@ import { manuallyOffline } from "@/lib/offline/connectivity";
 import type { Session } from "@supabase/supabase-js";
 import { classifyBackendFailure, resilientFetch } from "../../../lib/backend-resilience";
 import { createClientId } from "@/lib/client-id";
-import { shouldTraceMobileRequest } from "../../../lib/mobile/perf-trace-policy";
+import { shouldTraceMobileClientRequest } from "../../../lib/mobile/perf-trace-policy";
+import { logMobilePerf, safeMobilePathname, setMobilePerfContext } from "@/lib/perf-trace";
 
 import { supabase } from "@/lib/supabase";
 
@@ -53,6 +54,7 @@ let apiProjectContext: { projectId: string | null; generation: number } = { proj
 
 export function setApiProjectContext(projectId: string | null, generation: number) {
   apiProjectContext = { projectId, generation };
+  setMobilePerfContext(projectId, generation);
 }
 
 function requestTraceId() {
@@ -64,8 +66,8 @@ function safeProjectId(input: string) {
   catch { return null; }
 }
 
-function shouldTraceRequest(input: string) {
-  try { return shouldTraceMobileRequest(__DEV__, process.env.EXPO_PUBLIC_TTTRACKER_PERF_TRACE, new URL(apiUrl(input)).pathname); }
+function shouldTraceRequest() {
+  try { return shouldTraceMobileClientRequest(__DEV__, process.env.EXPO_PUBLIC_TTTRACKER_PERF_TRACE); }
   catch { return false; }
 }
 
@@ -131,11 +133,11 @@ async function performFetch(
   const url = apiUrl(input);
   const startedAt = Date.now();
   if (manuallyOffline()) {
-    if (__DEV__) console.warn("[apiFetch] blocked", { trace, path: new URL(url).pathname, projectId: safeProjectId(input), reason: "manual-offline" });
+    if (__DEV__) console.warn("[apiFetch] blocked", { trace, path: safeMobilePathname(new URL(url).pathname), projectId: safeProjectId(input), reason: "manual-offline" });
     throw new Error("This action requires a connection.");
   }
   const headers = new Headers(requestInit.headers);
-  const traceEnabled = shouldTraceRequest(input);
+  const traceEnabled = shouldTraceRequest();
   if (traceEnabled) headers.set("x-tttracker-trace-id", trace);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (timeZone) headers.set("X-TTTracker-Timezone", timeZone);
@@ -153,14 +155,16 @@ async function performFetch(
 
   if (traceEnabled) console.debug("[apiFetch] network", {
     trace,
-    path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+    path: safeMobilePathname(new URL(url).pathname),
     projectId: safeProjectId(input),
     method,
     hasAuthorization: Boolean(session?.access_token),
     userId: session?.user.id ?? null,
     tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null,
     projectGeneration: apiProjectContext.generation,
+    module: classifyApiModule(new URL(url).pathname),
   });
+  if (traceEnabled) logMobilePerf("api-network-start", { traceId: trace, module: classifyApiModule(new URL(url).pathname), operation: `${method} ${safeMobilePathname(new URL(url).pathname)}`, projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation, authenticated: Boolean(session?.access_token) });
   const options: RequestInit & { resilienceTimeoutMs: number } = {
     ...requestInit,
     headers,
@@ -199,7 +203,7 @@ async function performFetch(
     }
     if (traceEnabled) {
       console.debug("[apiFetch] response", {
-        path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        path: safeMobilePathname(new URL(url).pathname),
         trace,
         method,
         requestType: isRead ? "read" : "mutation",
@@ -210,10 +214,12 @@ async function performFetch(
         circuitState: response.headers.get("x-tttracker-circuit-state"),
         serverTiming: response.headers.get("server-timing"),
         timeoutMs,
+        module: classifyApiModule(new URL(url).pathname),
       });
+      logMobilePerf("api-response", { traceId: trace, module: classifyApiModule(new URL(url).pathname), operation: `${method} ${safeMobilePathname(new URL(url).pathname)}`, projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation, durationMs: Date.now() - startedAt, outcome: response.ok ? "success" : "http_failure", status: response.status });
       if (!response.ok) console.warn("[apiFetch] failure", {
         trace,
-        path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        path: safeMobilePathname(new URL(url).pathname),
         status: response.status,
         category: response.headers.get("x-tttracker-circuit-state") ? "circuit_open" : "http",
         durationMs: Date.now() - startedAt,
@@ -224,7 +230,7 @@ async function performFetch(
   } catch (error) {
     if (traceEnabled) {
       console.warn("[apiFetch] failure", {
-        path: new URL(url).pathname.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]"),
+        path: safeMobilePathname(new URL(url).pathname),
         trace,
         method,
         requestType: isRead ? "read" : "mutation",
@@ -239,25 +245,42 @@ async function performFetch(
   }
 }
 
+function classifyApiModule(pathname: string) {
+  if (pathname.includes("daily-dockets")) return "daily-dockets";
+  if (pathname.includes("materials")) return "materials";
+  if (pathname.includes("quality") || pathname.includes("defect") || pathname.includes("revision")) return "quality";
+  if (pathname.includes("tower-progress")) return "tower-progress";
+  if (pathname.includes("project-progress") || pathname.includes("dashboard")) return "project-progress";
+  if (pathname.includes("notifications")) return "notifications";
+  if (pathname.includes("training")) return "training";
+  if (pathname.includes("asset") || pathname.includes("fleet") || pathname.includes("prestart")) return "assets-fleet";
+  if (pathname.includes("bootstrap") || pathname.includes("profile")) return "app-context";
+  return "mobile-api";
+}
+
 export async function apiFetch(
   input: string,
   init: ApiRequestInit = {},
 ): Promise<Response> {
   const sessionStartedAt = Date.now();
-  const traceEnabled = shouldTraceRequest(input);
+  const traceEnabled = shouldTraceRequest();
   const trace = traceEnabled ? requestTraceId() : "";
-  if (traceEnabled) console.debug("[apiFetch] start", { trace, path: new URL(apiUrl(input)).pathname, projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation });
+  if (traceEnabled) console.debug("[apiFetch] start", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation });
+  if (traceEnabled) logMobilePerf("api-start", { traceId: trace, module: classifyApiModule(new URL(apiUrl(input)).pathname), operation: `${String(init.method ?? "GET").toUpperCase()} ${safeMobilePathname(new URL(apiUrl(input)).pathname)}`, projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation });
   if (manuallyOffline()) {
-    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: new URL(apiUrl(input)).pathname, projectId: safeProjectId(input), category: "manual_offline" });
+    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), category: "manual_offline" });
+    if (traceEnabled) logMobilePerf("api-failure", { traceId: trace, module: classifyApiModule(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation, outcome: "failure", category: "manual_offline" });
     throw new Error("This action requires a connection.");
   }
   let session: Session | null;
   try { session = await currentSession(); }
   catch (error) {
-    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt, category: "session", error: error instanceof Error ? error.name : "unknown" });
+    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), durationMs: Date.now() - sessionStartedAt, category: "session", error: error instanceof Error ? error.name : "unknown" });
+    if (traceEnabled) logMobilePerf("api-failure", { traceId: trace, module: classifyApiModule(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation, durationMs: Date.now() - sessionStartedAt, outcome: "failure", category: "session", errorName: error instanceof Error ? error.name : "unknown" });
     throw error;
   }
-  if (traceEnabled) console.debug("[apiFetch] session", { trace, path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt, authenticated: Boolean(session?.access_token), userId: session?.user.id ?? null, tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null });
+  if (traceEnabled) console.debug("[apiFetch] session", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), durationMs: Date.now() - sessionStartedAt, authenticated: Boolean(session?.access_token), userId: session?.user.id ?? null, tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null });
+  if (traceEnabled) logMobilePerf("api-session-ready", { traceId: trace, module: classifyApiModule(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation, durationMs: Date.now() - sessionStartedAt, authenticated: Boolean(session?.access_token), userId: session?.user.id ?? null, tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null });
   return performFetch(input, init, session, trace);
 }
 
@@ -339,6 +362,8 @@ export async function jsonBody<T>(
     }
 
     if (__DEV__) console.debug("TTTracker mobile JSON parsed", { trace: responseTrace.get(value) ?? null, path: value.url ? new URL(value.url).pathname : null, durationMs: Date.now() - parseStartedAt });
+    const traceId = responseTrace.get(value);
+    if (traceId) logMobilePerf("api-json-parsed", { traceId, module: value.url ? classifyApiModule(new URL(value.url).pathname) : "mobile-api", durationMs: Date.now() - parseStartedAt, outcome: "success", status: value.status });
     return payload as T;
   }
 
@@ -382,11 +407,11 @@ export async function apiJson<T>(
     );
   }
 
-  const traceEnabled = shouldTraceRequest(input);
+  const traceEnabled = shouldTraceRequest();
   const initialTrace = traceEnabled ? requestTraceId() : "";
-  if (traceEnabled) console.debug("[apiFetch] start", { trace: initialTrace, path: new URL(apiUrl(input)).pathname, projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation });
+  if (traceEnabled) console.debug("[apiFetch] start", { trace: initialTrace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), projectGeneration: apiProjectContext.generation });
   if (manuallyOffline()) {
-    if (traceEnabled) console.warn("[apiFetch] failure", { trace: initialTrace, path: new URL(apiUrl(input)).pathname, projectId: safeProjectId(input), category: "manual_offline", projectGeneration: apiProjectContext.generation });
+    if (traceEnabled) console.warn("[apiFetch] failure", { trace: initialTrace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input), category: "manual_offline", projectGeneration: apiProjectContext.generation });
     throw new Error("This action requires a connection.");
   }
   const sessionStartedAt = Date.now();
@@ -394,10 +419,10 @@ export async function apiJson<T>(
   let session: Session | null;
   try { session = await currentSession(); }
   catch (error) {
-    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt, category: "session", error: error instanceof Error ? error.name : "unknown" });
+    if (traceEnabled) console.warn("[apiFetch] failure", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), durationMs: Date.now() - sessionStartedAt, category: "session", error: error instanceof Error ? error.name : "unknown" });
     throw error;
   }
-  if (traceEnabled) console.debug("[apiFetch] session", { trace, path: new URL(apiUrl(input)).pathname, durationMs: Date.now() - sessionStartedAt, authenticated: Boolean(session?.access_token), userId: session?.user.id ?? null, tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null });
+  if (traceEnabled) console.debug("[apiFetch] session", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), durationMs: Date.now() - sessionStartedAt, authenticated: Boolean(session?.access_token), userId: session?.user.id ?? null, tokenExpiryDeltaSeconds: session?.expires_at ? Math.round(session.expires_at - Date.now() / 1000) : null });
   const tokenTail = session?.access_token.slice(-12) ?? "anon";
   const key = [
     session?.user.id ?? "anon",
@@ -409,7 +434,7 @@ export async function apiJson<T>(
 
   const existing = inFlightJson.get(key);
   if (existing) {
-    if (traceEnabled) console.debug("[apiFetch] deduped", { trace, path: new URL(apiUrl(input)).pathname, projectId: safeProjectId(input) });
+    if (traceEnabled) console.debug("[apiFetch] deduped", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), projectId: safeProjectId(input) });
     return existing as Promise<T>;
   }
 
@@ -422,7 +447,7 @@ export async function apiJson<T>(
     if (inFlightJson.get(key) === tracked) {
       inFlightJson.delete(key);
     }
-    if (traceEnabled) console.debug("[apiFetch] cleanup", { trace, path: new URL(apiUrl(input)).pathname, inFlight: inFlightJson.has(key) });
+    if (traceEnabled) console.debug("[apiFetch] cleanup", { trace, path: safeMobilePathname(new URL(apiUrl(input)).pathname), inFlight: inFlightJson.has(key) });
   });
 
   inFlightJson.set(key, tracked);

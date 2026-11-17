@@ -1,5 +1,6 @@
 import { apiJson } from "@/lib/api/client";
 import { getCache, setCache } from "@/lib/offline/db";
+import { logMobilePerf } from "@/lib/perf-trace";
 
 export type MaterialSearchKind = "all" | "member" | "bundle" | "bolt";
 export type MaterialMemberSearchField =
@@ -32,6 +33,8 @@ export type MaterialSearchPayload = {
   towerId: string;
   memberField: MaterialMemberSearchField;
   results: MaterialSearchResult[];
+  nextOffset?: number | null;
+  hasMore?: boolean;
 };
 
 function normaliseQuery(value: string) {
@@ -47,6 +50,7 @@ function searchCacheKey(
   query: string,
   kind: MaterialSearchKind,
   filters: MaterialSearchFilters = {},
+  offset = 0,
 ) {
   const towerId = clean(filters.towerId) || "all-towers";
   const memberField = filters.memberField ?? "all";
@@ -58,6 +62,7 @@ function searchCacheKey(
     memberField,
     towerId,
     encodeURIComponent(normaliseQuery(query)),
+    String(offset),
   ].join(":");
 }
 
@@ -66,11 +71,12 @@ export async function cachedMaterialSearch(
   query: string,
   kind: MaterialSearchKind = "all",
   filters: MaterialSearchFilters = {},
+  offset = 0,
 ) {
   if (!projectId || normaliseQuery(query).length < 2) return null;
 
   return getCache<MaterialSearchPayload>(
-    searchCacheKey(projectId, query, kind, filters),
+    searchCacheKey(projectId, query, kind, filters, offset),
   );
 }
 
@@ -80,7 +86,9 @@ export async function searchMaterials(
   kind: MaterialSearchKind = "all",
   limit = 60,
   filters: MaterialSearchFilters = {},
+  offset = 0,
 ): Promise<MaterialSearchPayload> {
+  const startedAt = Date.now();
   const cleaned = query.trim().replace(/\s+/g, " ");
   const towerId = clean(filters.towerId);
   const memberField = filters.memberField ?? "all";
@@ -94,6 +102,8 @@ export async function searchMaterials(
       towerId,
       memberField,
       results: [],
+      nextOffset: null,
+      hasMore: false,
     };
   }
 
@@ -102,6 +112,7 @@ export async function searchMaterials(
     q: cleaned,
     kind,
     limit: String(Math.max(1, Math.min(limit, 80))),
+    offset: String(Math.max(0, Math.floor(offset))),
   });
 
   if (towerId) params.set("towerId", towerId);
@@ -109,11 +120,18 @@ export async function searchMaterials(
     params.set("memberField", memberField);
   }
 
-  const payload = await apiJson<MaterialSearchPayload>(
-    `/api/mobile/materials/search?${params.toString()}`,
-    { timeoutMs: 12_000 },
-  );
-
-  await setCache(searchCacheKey(projectId, cleaned, kind, filters), payload);
-  return payload;
+  try {
+    const payload = await apiJson<MaterialSearchPayload>(
+      `/api/mobile/materials/search?${params.toString()}`,
+      { timeoutMs: 12_000 },
+    );
+    await setCache(searchCacheKey(projectId, cleaned, kind, filters, offset), payload);
+    logMobilePerf("materials-search", { module: "materials", operation: kind === "member" ? "members.search" : "materials.search", projectId, durationMs: Date.now() - startedAt, outcome: "success", resultCount: payload.results.length, offset, hasMore: Boolean(payload.hasMore) });
+    return payload;
+  } catch (error) {
+    const value = error && typeof error === "object" ? error as { status?: unknown; code?: unknown } : {};
+    const code = typeof value.code === "string" && /^[A-Z0-9_]{2,24}$/.test(value.code) ? value.code : undefined;
+    logMobilePerf("materials-search", { module: "materials", operation: kind === "member" ? "members.search" : "materials.search", projectId, durationMs: Date.now() - startedAt, outcome: "failure", category: Number.isInteger(value.status) ? "http" : "network_or_timeout", ...(Number.isInteger(value.status) ? { status: value.status } : {}), ...(code ? { errorCode: code } : {}), offset });
+    throw error;
+  }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { isSafeMobileTraceId, PROFILE_MOBILE_TRACE_PATH, shouldTraceMobileRequest } from "../lib/mobile/perf-trace-policy.ts";
+import { isSafeMobileTraceId, PROFILE_MOBILE_TRACE_PATH, shouldTraceMobileClientRequest, shouldTraceMobileRequest } from "../lib/mobile/perf-trace-policy.ts";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -16,6 +16,30 @@ test("production trace flag does not trace ordinary mobile API requests", () => 
     assert.equal(shouldTraceMobileRequest(false, "1", path), false);
   }
   assert.equal(shouldTraceMobileRequest(true, undefined, "/api/mobile/materials/bootstrap"), true, "development keeps broader diagnostics");
+});
+
+test("production client trace flag covers all mobile API routes while default remains off", () => {
+  assert.equal(shouldTraceMobileClientRequest(false, undefined), false);
+  assert.equal(shouldTraceMobileClientRequest(false, "0"), false);
+  assert.equal(shouldTraceMobileClientRequest(false, "1"), true);
+  assert.equal(shouldTraceMobileClientRequest(true, undefined), true);
+});
+
+test("mobile Supabase and legacy fetch transports share sanitized opt-in tracing", async () => {
+  const [transport, supabase, legacy] = await Promise.all([
+    read("mobile/lib/perf-trace.ts"), read("mobile/lib/supabase.ts"), read("mobile/lib/site-prestarts-api.ts"),
+  ]);
+  assert.match(transport, /EXPO_PUBLIC_TTTRACKER_PERF_TRACE === "1"/);
+  assert.match(transport, /request-start/);
+  assert.match(transport, /request-complete/);
+  assert.match(transport, /request-failed/);
+  assert.match(supabase, /tracedMobileFetch\(resilientFetch/);
+  assert.match(legacy, /tracedMobileFetch\(fetch/);
+  for (const source of [transport, supabase, legacy]) {
+    assert.doesNotMatch(source, /console\.(?:debug|info|warn|error)\([^;\n]*(?:Authorization|access_token|refresh_token|body|signatureStrokes)/i);
+  }
+  assert.match(transport, /content-range/);
+  assert.doesNotMatch(transport, /url\.searchParams\.toString|console\.[^(]+\([^\n]*url\.href/);
 });
 
 test("trace IDs use a safe portable character set", () => {
