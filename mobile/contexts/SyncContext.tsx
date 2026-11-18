@@ -159,26 +159,37 @@ export function SyncProvider({ children }: PropsWithChildren) {
       const ordered = [...rows].sort((a, b) => {
         return qualityQueuePriority(a.kind) - qualityQueuePriority(b.kind) || a.createdAt.localeCompare(b.createdAt);
       });
-      for (const record of ordered) {
-        if (manuallyOffline()) break;
-        if (!manual && !automaticRetryDue(record)) continue;
+      const processOne = async (record: QueueRecord) => {
         try {
           await updateQueueStatus(record.id, "syncing", null);
           await processRecord(record);
           await removeQueueRecord(record.id);
           if (record.kind.startsWith("quality_")) await cleanupQualityRecord(record);
         } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : "Offline item could not be synced.";
-
+          const message = error instanceof Error ? error.message : "Offline item could not be synced.";
           await updateQueueStatus(record.id, classifySyncError(error), message);
-
-          if (mountedRef.current) {
-            setLastError(safeSyncMessage(message));
-          }
+          if (mountedRef.current) setLastError(safeSyncMessage(message));
         }
+      };
+
+      for (let index = 0; index < ordered.length; index++) {
+        const record = ordered[index];
+        if (manuallyOffline()) break;
+        if (!manual && !automaticRetryDue(record)) continue;
+        if (record.kind === "quality_revision_evidence_upload") {
+          // Only independent photo-only records are grouped. Workflow edits,
+          // creates, deletes and submissions retain their established order.
+          const batch = [record];
+          while (batch.length < 3 && index + 1 < ordered.length && ordered[index + 1].kind === "quality_revision_evidence_upload") {
+            const candidate = ordered[index + 1];
+            if (!manual && !automaticRetryDue(candidate)) break;
+            batch.push(candidate);
+            index++;
+          }
+          await Promise.all(batch.map(processOne));
+          continue;
+        }
+        await processOne(record);
       }
       if (!manuallyOffline()) await materialSyncRef.current?.();
     } finally {

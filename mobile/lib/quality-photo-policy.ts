@@ -1,0 +1,1 @@
+export const QUALITY_EVIDENCE_JPEG_QUALITY = 0.88;

@@ -18,6 +18,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -40,6 +41,7 @@ import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useQuality } from "@/contexts/QualityContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSync } from "@/contexts/SyncContext";
+import { logMobilePerf } from "@/lib/perf-trace";
 import {
   cachedQualityDefectList,
   cachedQualityMemberCatalog,
@@ -88,6 +90,11 @@ export default function DefectsScreen() {
     useState(false);
   const [error, setError] =
     useState<string | null>(null);
+  const loadedScope=useRef("");
+  const loadedProject=useRef(projectId);
+  const listScopeKey=JSON.stringify([projectId,debouncedQuery,status,urgency,towerId,memberNumber,issueTypeId]);
+
+  useEffect(()=>{if(loadedProject.current!==projectId){loadedProject.current=projectId;loadedScope.current="";setRows([]);setNextOffset(null);}},[projectId]);
 
   useEffect(() => {
     const timer = setTimeout(
@@ -257,6 +264,7 @@ export default function DefectsScreen() {
 
     setLoading(true);
     setError(null);
+    const startedAt=Date.now();
 
     let hadCache = false;
 
@@ -307,7 +315,9 @@ export default function DefectsScreen() {
 
       setRows(merge(live.rows ?? []));
       setNextOffset(live.nextOffset ?? null);
+      logMobilePerf("quality.list.refresh",{module:"quality",operation:"quality.list.refresh",projectId,durationMs:Date.now()-startedAt,outcome:"success",rowCount:live.rows?.length||0,listType:"defects"});
     } catch (loadError) {
+      logMobilePerf("quality.list.refresh",{module:"quality",operation:"quality.list.refresh",projectId,durationMs:Date.now()-startedAt,outcome:"failure",errorCategory:"list_load_failed",listType:"defects"});
       if (!hadCache) {
         setError(
           loadError instanceof Error
@@ -330,8 +340,10 @@ export default function DefectsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if(!syncing) void loadFirstPage();
-    }, [loadFirstPage,syncing]),
+      if(syncing||loadedScope.current===listScopeKey)return;
+      loadedScope.current=listScopeKey;
+      void loadFirstPage();
+    }, [loadFirstPage,listScopeKey,syncing]),
   );
 
   const loadMore = useCallback(async () => {
@@ -420,6 +432,8 @@ export default function DefectsScreen() {
     <QualityShell
       permission="mobile.defects"
       root
+      listPositionKey={`quality:mobile:list:${projectId}:defects`}
+      listScopeKey={listScopeKey}
       title="Defects"
       subtitle="Search the controlled Defect register without downloading the full project history."
     >

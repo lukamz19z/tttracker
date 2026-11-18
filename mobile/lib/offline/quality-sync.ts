@@ -1,7 +1,7 @@
 import type { DetailValues } from "../../../lib/quality/operational-details";
+import { mapWithConcurrency } from "../../../lib/quality/bounded-concurrency";
 import { syncQualityPhotoDelete } from "./quality-photo-deletion";
 import { photoDeleted, withoutDeletedPhotos } from "./quality-photo-tombstones";
-import { annotateQualityPhoto, photoContext, persistEvidencePhoto } from "@/lib/quality-evidence";
 import { DependencyBlockedError } from "./sync-errors";
 import { withQualityOperation } from "./quality-operation-lock";
 import { revisionDeletion } from "./revision-deletions";
@@ -9,6 +9,7 @@ import { createClientId } from "@/lib/client-id";
 import { listRevisionWorkspaces, saveRevisionWorkspace } from "./revision-workspaces";
 import { queueRows, getCache, setCache,removeCache } from "./db";
 import { apiJson } from "@/lib/api/client";
+import { logMobilePerf } from "@/lib/perf-trace";
 import { enqueue, type QueueRecord } from "@/lib/offline/db";
 import { removeOfflineFile, offlineFileExists } from "@/lib/offline/files";
 import { uploadQualityPhoto, refreshQualityRevisionDetail, refreshQualityDefectDetail, updateDefect } from "@/lib/api/quality";
@@ -46,8 +47,12 @@ export type OfflineDefectCreate = {
   photos: LocalQualityPhoto[];
 };
 export type OfflineDefectUpdate = {projectId:string;towerId:string;defectId:string;photos:LocalQualityPhoto[];patch?:Parameters<typeof updateDefect>[1]};
+export type OfflineRevisionEvidenceUpload = {projectId:string;towerId:string;revisionId:string;itemId:string;role:"before_photo"|"after_photo";photos:LocalQualityPhoto[]};
 export async function enqueueDefectUpdate(input:OfflineDefectUpdate) {
-  return enqueue("quality_defect_update",{...input,photos:await Promise.all(input.photos.map(photo=>annotateQualityPhoto(photo,photoContext({...photo.watermarkContext,kind:"defect"},String(photo.watermarkContext?.phase || "AFTER"),photo.capturedAt))))});
+  return enqueue("quality_defect_update",input);
+}
+export async function enqueueRevisionEvidenceUpload(input:OfflineRevisionEvidenceUpload) {
+  return enqueue("quality_revision_evidence_upload",input);
 }
 
 export type OfflineRevisionCreate = {
@@ -142,7 +147,7 @@ export async function enqueueDefectCreate(
 
   await enqueue(
     "quality_defect_create",
-    { ...input, photos: await Promise.all(input.photos.map(photo=>annotateQualityPhoto(photo,photoContext({...photo.watermarkContext,kind:"defect"},"BEFORE",photo.capturedAt)))), clientMutationId },
+    { ...input, clientMutationId },
     clientMutationId,
   );
 
@@ -155,10 +160,6 @@ async function enqueueRectOperation<T extends {projectId:string;revisionId?:stri
     if(kind==="quality_revision_item_create" && (await listRevisionWorkspaces(payload.projectId)).some(row=>(row.routeKey===payload.revisionId || row.serverRevisionId===payload.revisionId) && row.reconciledFindingIds?.includes(payload.clientMutationId || "")))return;
     await enqueue(kind,payload,id);
   });
-}
-
-async function prepareEvidence(photos: LocalQualityPhoto[], phase: "BEFORE" | "AFTER") {
-  return Promise.all(photos.map(photo => annotateQualityPhoto(photo,photoContext(photo.watermarkContext || {},phase,photo.capturedAt))));
 }
 
 export async function enqueueRevisionCreate(
@@ -179,7 +180,7 @@ export async function enqueueRevisionCreate(
     ...finding,
     clientMutationId:
       finding.clientMutationId || mutationId("revision-item"),
-    beforePhotos: await prepareEvidence(finding.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(finding.afterPhotos,"AFTER"),
+    beforePhotos: finding.beforePhotos, afterPhotos: finding.afterPhotos,
   })));
 
   await enqueueRectOperation("quality_revision_create",
@@ -208,7 +209,7 @@ export async function enqueueRevisionItemCreate(
   await enqueueRectOperation("quality_revision_item_create",
     {
       ...input,
-      beforePhotos: await prepareEvidence(input.beforePhotos,"BEFORE"), afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
+      beforePhotos: input.beforePhotos, afterPhotos: input.afterPhotos,
       clientMutationId,
     },
     clientMutationId,
@@ -225,8 +226,8 @@ export async function enqueueRevisionItemUpdate(
   await enqueueRectOperation("quality_revision_item_update",
     {
       ...input,
-      beforePhotos: await prepareEvidence(input.beforePhotos || [],"BEFORE"),
-      afterPhotos: await prepareEvidence(input.afterPhotos,"AFTER"),
+      beforePhotos: input.beforePhotos || [],
+      afterPhotos: input.afterPhotos,
       clientMutationId,
     },
     clientMutationId,
@@ -265,25 +266,16 @@ async function uploadPhotos({
   photos: LocalQualityPhoto[];
 }) {
   if (!photos.length) return;
-  let context: Record<string,unknown> | null = null;
-  if (revisionId && revisionItemId) {
-    const response = await apiJson<{ evidenceContext: Record<string,unknown> }>(`/api/mobile/quality/revisions/${encodeURIComponent(revisionId)}/items/${encodeURIComponent(revisionItemId)}`, {
-      qualityDiagnostic: { operation: "quality_evidence_context", stage: role, clientMutationId: photos[0]?.id },
-    });
-    context = response.evidenceContext;
-  } else if(defectId) {
-    const response=await apiJson<{evidenceContext:Record<string,unknown>}>(`/api/mobile/quality/details/defects/${encodeURIComponent(defectId)}?projectId=${encodeURIComponent(projectId)}`);
-    context=response.evidenceContext;
-  }
-  for (const photo of photos) {
-    if(await photoDeleted(photo.id))continue;
-    const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
-    if (await getCache<{ id: string }>(receiptKey)) continue;
-    if (context) Object.assign(photo,await annotateQualityPhoto(photo,photoContext(context,role === "after_photo" || photo.watermarkContext?.phase === "AFTER" ? "AFTER" : "BEFORE",photo.capturedAt)));
-    if (context) await persistEvidencePhoto(projectId,photo);
-    if (!offlineFileExists(photo.originalUri || photo.uri)) throw new Error("Local evidence file could not be found.");
-    if (__DEV__) console.debug("Quality sync stage", { stage: role, clientMutationId: photo.id, serverRevisionId: revisionId, serverItemId: revisionItemId });
-    const uploaded = await uploadQualityPhoto({
+  const concurrency=3;
+  const failures:string[]=[];
+  await mapWithConcurrency(photos,concurrency,async photo=>{
+      const startedAt=Date.now();
+    try {
+      if(await photoDeleted(photo.id))return;
+      const receiptKey = `quality:evidence-receipt:${projectId}:${revisionItemId || defectId}:${role}:${photo.id}`;
+      if (await getCache<{ id: string }>(receiptKey)) return;
+      if (!offlineFileExists(photo.originalUri || photo.uri)) throw new Error("Local evidence file could not be found.");
+      const uploaded = await uploadQualityPhoto({
       projectId,
       towerId,
       revisionId,
@@ -291,18 +283,23 @@ async function uploadPhotos({
       defectId,
       fileRole: role,
       uri: photo.originalUri || photo.uri,
-      annotatedUri: photo.annotatedUri,
       name: photo.name,
       mimeType: photo.mimeType,
       capturedAt: photo.capturedAt,
       clientMutationId: photo.id,
       watermarkPosition: photo.watermarkPosition,
-      evidencePhase: String(photo.watermarkContext?.phase || "BEFORE"),
-    });
-    if (!uploaded.file?.id) throw new Error("Evidence upload returned no server file ID.");
-    await setCache(receiptKey, uploaded.file);
-    await setCache(`quality:photo-server:${photo.id}`,{...uploaded.file,project_id:projectId,revision_id:revisionId,revision_item_id:revisionItemId});
-  }
+      evidencePhase: role === "after_photo" ? "AFTER" : String(photo.watermarkContext?.phase || "BEFORE"),
+      });
+      if (!uploaded.file?.id) throw new Error("Evidence upload returned no server file ID.");
+      await setCache(receiptKey, uploaded.file);
+      await setCache(`quality:photo-server:${photo.id}`,{...uploaded.file,project_id:projectId,revision_id:revisionId,revision_item_id:revisionItemId});
+      logMobilePerf("quality.photo.upload",{module:"quality",operation:"quality.photo.upload",projectId,recordId:revisionItemId||defectId||null,phase:role,durationMs:Date.now()-startedAt,outcome:"success"});
+    }catch{
+      failures.push(photo.id);
+      logMobilePerf("quality.photo.upload",{module:"quality",operation:"quality.photo.upload",projectId,recordId:revisionItemId||defectId||null,phase:role,durationMs:Date.now()-startedAt,outcome:"failure",errorCategory:"upload_failed"});
+    }
+  });
+  if(failures.length)throw new Error(`${failures.length} of ${photos.length} Quality photos failed. Successful photos remain saved; retry the failed queue item.`);
 
   // Cleanup happens only after the whole operation and workspace reconciliation.
 }
@@ -484,6 +481,11 @@ async function applyQualityQueueRecord(record: QueueRecord) {
   else if (record.kind === "quality_revision_create") { await syncRevision(record.payload as OfflineRevisionCreate); return; }
   else if (record.kind === "quality_revision_item_create") await createRevisionItem(payload);
   else if (record.kind === "quality_revision_item_update") await syncRevisionItemUpdate(payload);
+  else if (record.kind === "quality_revision_evidence_upload") {
+    const evidence = record.payload as OfflineRevisionEvidenceUpload;
+    await uploadPhotos({projectId:evidence.projectId,towerId:evidence.towerId,revisionId:evidence.revisionId,revisionItemId:evidence.itemId,role:evidence.role,photos:evidence.photos});
+    return;
+  }
   else throw new Error(`Unsupported Quality queue item: ${record.kind}`);
   if (workspace) await saveRevisionWorkspace({ ...workspace,
     reconciledFindingIds: [...(workspace.reconciledFindingIds || []), payload.clientMutationId],
@@ -524,7 +526,11 @@ export async function cleanupQualityRecord(record: QueueRecord) {
 }
 
 export async function syncQualityQueueRecord(record: QueueRecord) {
-  return withQualityOperation(()=>syncQualityRecord(record));
+  // Photo-only uploads do not mutate workflow state and must be able to use
+  // the bounded upload pool instead of being serialized by the mutation lock.
+  return record.kind === "quality_revision_evidence_upload"
+    ? syncQualityRecord(record)
+    : withQualityOperation(()=>syncQualityRecord(record));
 }
 async function syncQualityRecord(record:QueueRecord) {
   const payload = record.payload as Partial<OfflineRevisionItemUpdate>;
@@ -538,7 +544,7 @@ async function syncQualityRecord(record:QueueRecord) {
     await applyQualityQueueRecord(record);
     const current = (await listRevisionWorkspaces(payload.projectId || "")).find(row => row.routeKey === payload.revisionId || row.serverRevisionId === payload.revisionId || row.clientMutationId === payload.clientMutationId);
     const revisionId = current?.serverRevisionId || payload.revisionId;
-    if (payload.projectId && revisionId && !revisionId.startsWith("local-")) {
+    if (record.kind !== "quality_revision_evidence_upload" && payload.projectId && revisionId && !revisionId.startsWith("local-")) {
       try { await refreshQualityRevisionDetail(payload.projectId, revisionId); }
       catch (error) { if (__DEV__) console.warn("Quality sync confirmed; detail refresh deferred", error instanceof Error ? error.message : "Refresh unavailable"); }
     }

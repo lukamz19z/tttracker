@@ -32,6 +32,7 @@ import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuality } from "@/contexts/QualityContext";
 import { useSync } from "@/contexts/SyncContext";
+import { logMobilePerf } from "@/lib/perf-trace";
 import {
   cachedQualityMemberCatalog,
   cachedQualityRevisionList,
@@ -103,6 +104,11 @@ export default function RevisionsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [offlinePackProgress,setOfflinePackProgress]=useState<{current:number;total:number;findings:number;cached:number;previews:number}|null>(null);
   const offlineStarted=useRef(new Set<string>());
+  const loadedScope=useRef("");
+  const loadedProject=useRef(projectId);
+  const listScopeKey=JSON.stringify([projectId,debouncedQuery,status,towerId,memberNumber,inspectionStage]);
+
+  useEffect(()=>{if(loadedProject.current!==projectId){loadedProject.current=projectId;loadedScope.current="";setRows([]);setLocalRevisions([]);setNextOffset(null);}},[projectId]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -292,6 +298,7 @@ export default function RevisionsScreen() {
 
     setLoading(true);
     setError(null);
+    const startedAt=Date.now();
 
     let hadCache = false;
     let baseRows: QualityRevisionListRow[] = [];
@@ -338,7 +345,9 @@ export default function RevisionsScreen() {
       setRows(baseRows);
       setNextOffset(live.nextOffset ?? null);
       await loadLocal(baseRows);
+      logMobilePerf("quality.list.refresh",{module:"quality",operation:"quality.list.refresh",projectId,durationMs:Date.now()-startedAt,outcome:"success",rowCount:baseRows.length,listType:"revisions"});
     } catch (loadError) {
+      logMobilePerf("quality.list.refresh",{module:"quality",operation:"quality.list.refresh",projectId,durationMs:Date.now()-startedAt,outcome:"failure",errorCategory:"list_load_failed",listType:"revisions"});
       if (!hadCache) {
         await loadLocal([]);
         setError(
@@ -363,8 +372,10 @@ export default function RevisionsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if(loadedScope.current===listScopeKey)return;
+      loadedScope.current=listScopeKey;
       void loadFirstPage();
-    }, [loadFirstPage]),
+    }, [loadFirstPage,listScopeKey]),
   );
 
   useEffect(()=>{
@@ -461,6 +472,8 @@ export default function RevisionsScreen() {
     <QualityShell
       permission="mobile.rectifications"
       root
+      listPositionKey={`quality:mobile:list:${projectId}:revisions`}
+      listScopeKey={listScopeKey}
       title="Revisions / Rectifications"
       subtitle="Filter by tower, member and inspection stage. Record text is searched separately."
     >

@@ -2,6 +2,7 @@ import { FieldFindingCard } from "@/components/quality/FieldFindingCard";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
 import { QualitySwipeViewer, QualityFindingEvidenceViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { fieldListRows, filterFieldRows, groupFieldRows, fieldStateKey } from "../../../lib/quality/field-list";
+import { buildProjectRevisionStats, type RevisionStatRow } from "../../../lib/quality/revision-stats";
 import { materialRequirements, operationalDetailSummary, validateDetailValues, EMPTY_DETAIL_SCHEMA, type DetailValues } from "../../../lib/quality/operational-details";
 import { OperationalDetailFields } from "@/components/quality/OperationalDetailFields";
 import { FieldListControls } from "@/components/quality/FieldListControls";
@@ -14,7 +15,7 @@ import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { QualityLegField } from "@/components/quality/QualityLegField";
 import { nextFindingLocation, savedFindingLocation } from "@/lib/offline/revision-location";
-import { enqueue, queueRows,getCache } from "@/lib/offline/db";
+import { enqueue, queueRows,getCache,retryQueueRecords,type QueueRecord } from "@/lib/offline/db";
 
 import { useLocalSearchParams, router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -63,9 +64,12 @@ import {
   type QualityMemberCatalogRow,
 } from "@/lib/api/quality";
 import {
+  enqueueRevisionEvidenceUpload,
   enqueueRevisionItemCreate,
+  type OfflineRevisionEvidenceUpload,
   type OfflineRevisionItemUpdate,
 } from "@/lib/offline/quality-sync";
+import { logMobilePerf } from "@/lib/perf-trace";
 import {
   clientMutationIdFromRouteKey,
   createPendingFinding,
@@ -194,6 +198,17 @@ export default function RevisionDetailScreen() {
   const [offlinePackBusy,setOfflinePackBusy]=useState(false);
   const [offlineOptionsExpanded,setOfflineOptionsExpanded]=useState(false);
   const [offlineStorageOpen,setOfflineStorageOpen]=useState(false);
+  const [statsOpen,setStatsOpen]=useState(false);
+  const [bulkEvidenceOpen,setBulkEvidenceOpen]=useState(false);
+  const [bulkIndex,setBulkIndex]=useState(0);
+  const [bulkPhase,setBulkPhase]=useState<"before_photo"|"after_photo">("before_photo");
+  const [bulkAutoAdvance,setBulkAutoAdvance]=useState(true);
+  const [bulkPickerPhotos,setBulkPickerPhotos]=useState<LocalQualityPhoto[]>([]);
+  const [bulkQueue,setBulkQueue]=useState<QueueRecord<OfflineRevisionEvidenceUpload>[]>([]);
+  const [bulkCaptured,setBulkCaptured]=useState(0);
+  const [bulkBusy,setBulkBusy]=useState(false);
+  const [bulkError,setBulkError]=useState<string|null>(null);
+  const bulkCaptureLock=useRef(false);
 
   const serverRevision = detail?.revision ?? null;
 
@@ -254,11 +269,64 @@ export default function RevisionDetailScreen() {
     () => (detail?.items ?? []).filter(item=>!workspace?.findings.some(finding=>item.mobile_client_mutation_id===finding.clientMutationId || workspace.serverItems?.[finding.clientMutationId]?.id===item.id)),
     [detail?.items,workspace],
   );
+  const canonicalRevisionId =
+    isLocalRevisionRouteKey(routeRevisionId)
+      ? clean(workspace?.serverRevisionId)
+      : routeRevisionId;
 
   const revisionFiles = useMemo(
     () => detail?.files ?? [],
     [detail?.files],
   );
+
+  const refreshBulkQueue=useCallback(async()=>{
+    const rows=await queueRows();
+    setBulkQueue(rows.filter(row=>row.kind==="quality_revision_evidence_upload"&&(row.payload as OfflineRevisionEvidenceUpload).projectId===projectId&&(row.payload as OfflineRevisionEvidenceUpload).revisionId===canonicalRevisionId) as QueueRecord<OfflineRevisionEvidenceUpload>[]);
+  },[canonicalRevisionId,projectId]);
+
+  useEffect(()=>{
+    if(!bulkEvidenceOpen)return;
+    void refreshBulkQueue();
+    const timer=setInterval(()=>void refreshBulkQueue(),1000);
+    return()=>clearInterval(timer);
+  },[bulkEvidenceOpen,refreshBulkQueue]);
+
+  const acceptBulkCapture=useCallback(async(photos:LocalQualityPhoto[])=>{
+    if(!photos.length||bulkCaptureLock.current||!projectId||!towerId||!canonicalRevisionId)return;
+    bulkCaptureLock.current=true;setBulkBusy(true);setBulkError(null);
+    const item=revisionItems[bulkIndex];
+    if(!item){bulkCaptureLock.current=false;setBulkBusy(false);return;}
+    try{
+      const startedAt=Date.now();
+      for(const photo of photos){
+        const id=await enqueueRevisionEvidenceUpload({projectId,towerId,revisionId:canonicalRevisionId,itemId:item.id,role:bulkPhase,photos:[photo]});
+        if(!id)throw new Error("Evidence queue did not return a local queue ID.");
+      }
+      setBulkCaptured(value=>value+photos.length);
+      setBulkPickerPhotos([]);
+      await refreshBulkQueue();
+      logMobilePerf("quality.photo.prepare",{module:"quality",operation:"quality.photo.prepare",projectId,recordId:item.id,phase:bulkPhase,durationMs:Date.now()-startedAt,outcome:"queued_locally",photoCount:photos.length});
+      // Uploading proceeds in the background. Auto-advance waits only for the
+      // durable SQLite queue write, not Storage, Graph, or watermark processing.
+      void syncNow({manual:false});
+      if(bulkAutoAdvance){
+        if(bulkPhase==="before_photo")setBulkPhase("after_photo");
+        else {setBulkPhase("before_photo");setBulkIndex(index=>Math.min(index+1,Math.max(0,revisionItems.length-1)));}
+      }
+    }catch(error){
+      setBulkError(error instanceof Error?error.message:"Photo was not added to the local queue.");
+    }finally{
+      bulkCaptureLock.current=false;setBulkBusy(false);
+    }
+  },[bulkAutoAdvance,bulkIndex,bulkPhase,canonicalRevisionId,projectId,refreshBulkQueue,revisionItems,syncNow,towerId]);
+
+  const retryBulkFailures=useCallback(async()=>{
+    const failed=bulkQueue.filter(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status)).map(row=>row.id);
+    if(!failed.length)return;
+    await retryQueueRecords(failed);
+    await refreshBulkQueue();
+    void syncNow({manual:false});
+  },[bulkQueue,refreshBulkQueue,syncNow]);
 
   const fieldState = useQualityFieldState(fieldStateKey(profile?.userId || "", projectId, routeRevisionId));
   const pendingFieldItems = useMemo(() => (workspace?.findings || []).map(finding => ({
@@ -272,6 +340,9 @@ export default function RevisionDetailScreen() {
     const localFiles = [...(workspace?.findings || []).flatMap(finding=>[...finding.beforePhotos.map(()=>({revision_item_id:finding.clientMutationId,file_role:"before_photo"})),...finding.afterPhotos.map(()=>({revision_item_id:finding.clientMutationId,file_role:"after_photo"}))]), ...queuedEdits.flatMap(edit=>[...(edit.beforePhotos || []).map(()=>({revision_item_id:edit.itemId,file_role:"before_photo"})),...edit.afterPhotos.map(()=>({revision_item_id:edit.itemId,file_role:"after_photo"}))])];
     return fieldListRows([...items, ...pendingFieldItems], data?.issueTypes || [], [...revisionFiles, ...localFiles]);
   }, [revisionItems, data?.issueTypes, revisionFiles, pendingFieldItems, workspace, queuedEdits]);
+  const statsProjectId = serverRevision?.project_id || workspace?.projectId;
+  const currentStatsProjectId = data?.projectId;
+  const revisionStats = useMemo(() => buildProjectRevisionStats(fieldRows.map(row=>row.item),statsProjectId,currentStatsProjectId,data?.issueTypes || []), [fieldRows,data?.issueTypes,statsProjectId,currentStatsProjectId]);
   const filteredRows = useMemo(() => filterFieldRows(fieldRows, fieldState.state), [fieldRows, fieldState.state]);
   const fieldGroups = useMemo(() => groupFieldRows(filteredRows.filter(row=>!pendingFieldItems.some(item=>item.id===row.item.id)), fieldState.state.group), [filteredRows, fieldState.state.group, pendingFieldItems]);
   const requirements = useMemo(() => materialRequirements(filteredRows.map(row => row.item), data?.issueTypes || []), [filteredRows, data?.issueTypes]);
@@ -306,11 +377,6 @@ export default function RevisionDetailScreen() {
         option.id ===
         (findingForm.issueTypeId ?? "__other__"),
     )?.label ?? "Select flagged issue";
-
-  const canonicalRevisionId =
-    isLocalRevisionRouteKey(routeRevisionId)
-      ? clean(workspace?.serverRevisionId)
-      : routeRevisionId;
 
   const reloadDetail = useCallback(
     async () => {
@@ -1091,7 +1157,45 @@ export default function RevisionDetailScreen() {
           {serverRevision&&!['Ready for Review','Closed'].includes(serverRevision.status)?<Pressable accessibilityRole="button" disabled={submitBusy} style={[styles.compactAction,{backgroundColor:"#eff6ff",borderColor:"#bfdbfe",opacity:submitBusy?0.65:1}]} onPress={()=>void submit()}><Text style={{fontSize:11,fontWeight:"800",color:"#1d4ed8"}}>{submitBusy?"Sending…":"Submit Review"}</Text></Pressable>:null}
           <Pressable accessibilityRole="button" style={[styles.compactAction,{backgroundColor:"#f1f5f9",borderColor:"#e2e8f0"}]} onPress={()=>Alert.alert("Rectification actions",workspace?.finalisedAt||serverRevision?.finalised_at?"This Rectification is finalised.":"Finalise the Rectification when field work is complete.",[{text:"Cancel",style:"cancel"},{text:workspace?.finalisedAt||serverRevision?.finalised_at?"Done":"Finalise",onPress:()=>{if(!workspace?.finalisedAt&&!serverRevision?.finalised_at)void finalise();}}])}><Text style={{fontSize:11,fontWeight:"800",color:"#475569"}}>More</Text></Pressable>
         </View>
+        {can("mobile.rectifications")&&!workspace?.finalisedAt&&!serverRevision?.finalised_at?<Pressable accessibilityRole="button" style={[styles.compactAction,{alignSelf:"flex-start",backgroundColor:"#ecfdf5",borderColor:"#a7f3d0"}]} onPress={()=>{setBulkIndex(0);setBulkPhase("before_photo");setBulkEvidenceOpen(true);}}><Text style={{fontSize:11,fontWeight:"800",color:"#047857"}}>Bulk Evidence Upload</Text></Pressable>:null}
       </View>
+
+      <Modal visible={bulkEvidenceOpen} animationType="slide" onRequestClose={()=>setBulkEvidenceOpen(false)}>
+        <SafeAreaView style={{flex:1,backgroundColor:"#f8fafc"}}>
+          <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between",padding:16,borderBottomWidth:1,borderColor:"#e2e8f0",backgroundColor:"white"}}>
+            <View style={{flex:1}}><Text style={{fontSize:18,fontWeight:"900",color:"#0f172a"}}>Bulk Evidence Upload</Text><Text style={styles.meta}>{qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel)} · {rectCode}</Text></View>
+            <Pressable accessibilityLabel="Close bulk evidence" onPress={()=>setBulkEvidenceOpen(false)} style={{minWidth:44,minHeight:44,alignItems:"center",justifyContent:"center"}}><X size={22} color="#334155"/></Pressable>
+          </View>
+          {revisionItems.length? <ScrollView contentContainerStyle={{padding:16,gap:12}}>
+            <View style={[styles.card,{gap:10}]}>
+              <View style={styles.head}><View style={styles.grow}><Text style={styles.fli}>{revisionItems[bulkIndex]?.fli_number||`FLI · ${bulkIndex+1}`}</Text><Text style={styles.meta}>{bulkIndex+1} of {revisionItems.length} · {revisionItems[bulkIndex]?.finding||"Finding"}</Text></View><QualityStatusPill value={revisionItems[bulkIndex]?.status||"Open"}/></View>
+              <Text style={styles.meta}>Existing evidence · Before {revisionFiles.filter(file=>file.revision_item_id===revisionItems[bulkIndex]?.id&&file.file_role==="before_photo").length} · After {revisionFiles.filter(file=>file.revision_item_id===revisionItems[bulkIndex]?.id&&file.file_role==="after_photo").length}</Text>
+              <View style={{flexDirection:"row",gap:8}}>
+                <Pressable accessibilityRole="button" onPress={()=>setBulkPhase("before_photo")} style={[styles.compactAction,{backgroundColor:bulkPhase==="before_photo"?"#dbeafe":"white",borderColor:bulkPhase==="before_photo"?"#93c5fd":"#cbd5e1"}]}><Text style={{fontWeight:"800"}}>Before</Text></Pressable>
+                <Pressable accessibilityRole="button" onPress={()=>setBulkPhase("after_photo")} style={[styles.compactAction,{backgroundColor:bulkPhase==="after_photo"?"#dbeafe":"white",borderColor:bulkPhase==="after_photo"?"#93c5fd":"#cbd5e1"}]}><Text style={{fontWeight:"800"}}>After</Text></Pressable>
+              </View>
+              <QualityPhotoPicker label={bulkPhase==="before_photo"?"Take Before photo":"Take After photo"} photos={bulkPickerPhotos} onChange={photos=>void acceptBulkCapture(photos)} prefix={`revision-${revisionItems[bulkIndex]?.fli_number||bulkIndex+1}`} context={{projectId,project:projectCode,tower:qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel),recordId:revisionItems[bulkIndex]?.id,reference:rectCode,phase:bulkPhase==="before_photo"?"BEFORE":"AFTER",segment:revisionItems[bulkIndex]?.tower_segment,leg:revisionItems[bulkIndex]?.leg,member:revisionItems[bulkIndex]?.member_number,drawing:revisionItems[bulkIndex]?.drawing_number,issue:revisionItems[bulkIndex]?.finding,timeZone:data?.project?.timezone}} />
+              {bulkError?<Text style={styles.error}>{bulkError}</Text>:null}
+              <View style={styles.head}>
+                <Pressable accessibilityRole="checkbox" accessibilityState={{checked:bulkAutoAdvance}} onPress={()=>setBulkAutoAdvance(value=>!value)} style={{flex:1,minHeight:44,justifyContent:"center"}}><Text style={styles.meta}>{bulkAutoAdvance?"✓":"□"} Auto advance after local queue</Text></Pressable>
+                <Pressable disabled={bulkIndex===0||bulkBusy} onPress={()=>{setBulkIndex(index=>Math.max(0,index-1));setBulkPhase("before_photo");}} style={[styles.compactAction,{opacity:bulkIndex===0?0.4:1}]}><Text>Previous</Text></Pressable>
+                <Pressable disabled={bulkIndex>=revisionItems.length-1||bulkBusy} onPress={()=>{setBulkIndex(index=>Math.min(revisionItems.length-1,index+1));setBulkPhase("before_photo");}} style={[styles.compactAction,{opacity:bulkIndex>=revisionItems.length-1?0.4:1}]}><Text>Next</Text></Pressable>
+              </View>
+            </View>
+            <View style={[styles.card,{gap:8}]}>
+              <Text style={styles.issueName}>Upload queue · concurrency 3</Text>
+              <View style={{flexDirection:"row",flexWrap:"wrap",gap:12}}>
+                <Text style={styles.meta}>Completed this session {Math.max(0,bulkCaptured-bulkQueue.reduce((sum,row)=>sum+row.payload.photos.length,0))}</Text>
+                <Text style={styles.meta}>Uploading {bulkQueue.filter(row=>row.status==="syncing").length}</Text>
+                <Text style={styles.meta}>Queued {bulkQueue.filter(row=>row.status==="pending").length}</Text>
+                <Text style={styles.meta}>Failed {bulkQueue.filter(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status)).length}</Text>
+              </View>
+              {bulkQueue.filter(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status)).map(row=><Text key={row.id} style={styles.error}>{row.payload.itemId===revisionItems[bulkIndex]?.id?(revisionItems[bulkIndex]?.fli_number||"Finding")+" · ":"Evidence"}Upload failed · retry available</Text>)}
+              {bulkQueue.some(row=>["failed","retryable_failure","requires_reconciliation"].includes(row.status))?<Pressable accessibilityRole="button" disabled={bulkBusy||syncing} onPress={()=>void retryBulkFailures()} style={[styles.addFinding,{opacity:bulkBusy||syncing?0.5:1}]}><Text style={styles.addFindingText}>Retry failed</Text></Pressable>:null}
+            </View>
+          </ScrollView>:<View style={{padding:20}}><Text>No server findings are available in this Rectification.</Text></View>}
+        </SafeAreaView>
+      </Modal>
 
       {workspace?.findings.filter(finding=>serverRevision?.source_type!=="punchlist" || filteredRows.some(row=>row.item.id===finding.clientMutationId)).map(
         (finding) => (
@@ -1200,7 +1304,21 @@ export default function RevisionDetailScreen() {
           <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between"}}><Pressable onPress={()=>setOfflineOptionsExpanded(value=>!value)}><Text style={{fontSize:10,fontWeight:"700",color:"#64748b"}}>Offline settings {offlineOptionsExpanded?"⌃":"⌄"}</Text></Pressable><Pressable disabled={!online||offlinePackBusy} onPress={()=>void prepareOfflinePack(true)}><Text style={{fontSize:10,fontWeight:"800",color:online?"#1d4ed8":"#94a3b8"}}>{offlinePack?.status==="ready"?"Refresh":"Download"}</Text></Pressable></View>
           {offlineOptionsExpanded&&offlineSettings?<View style={{gap:3,borderTopWidth:1,borderTopColor:"#e2e8f0",paddingTop:5}}><View style={styles.head}><Text style={styles.meta}>Auto-cache on open</Text><Switch value={offlineSettings.autoCacheOnOpen&&!offlineSettings.manualOnly} onValueChange={value=>{const next={autoCacheOnOpen:value,manualOnly:!value};setOfflineSettings({...offlineSettings,...next});void saveQualityOfflineSettings(projectId,next);}}/></View><View style={styles.head}><Text style={styles.meta}>Wi-Fi only</Text><Switch value={offlineSettings.wifiOnly} onValueChange={value=>{setOfflineSettings({...offlineSettings,wifiOnly:value});void saveQualityOfflineSettings(projectId,{wifiOnly:value});}}/></View><Pressable onPress={()=>setOfflineStorageOpen(true)}><Text style={styles.meta}>Storage · {offlineStorage.packs.length} cached Punchlists · {offlineStorage.megabytes} MB · Manage</Text></Pressable></View>:null}
         </View> : null}
-        <FieldListControls rows={fieldRows} state={fieldState.state} onChange={fieldState.update} disabled={!fieldState.ready} sections={Array.from(new Set([...memberCatalog.map(member=>member.towerSegment || ""),...fieldRows.map(row=>row.section)].filter(Boolean)))} issueTypes={(data?.issueTypes || []).filter(issue=>["revision","both"].includes(issue.applies_to))}/>
+        <FieldListControls rows={fieldRows} state={fieldState.state} onChange={fieldState.update} onStats={()=>setStatsOpen(true)} disabled={!fieldState.ready} sections={Array.from(new Set([...memberCatalog.map(member=>member.towerSegment || ""),...fieldRows.map(row=>row.section)].filter(Boolean)))} issueTypes={(data?.issueTypes || []).filter(issue=>["revision","both"].includes(issue.applies_to))}/>
+        <Modal visible={statsOpen} transparent animationType="slide" onRequestClose={()=>setStatsOpen(false)}>
+          <SafeAreaView style={{flex:1,justifyContent:"flex-end",backgroundColor:"rgba(15,23,42,0.55)"}}>
+            <View style={[styles.card,{maxHeight:"88%",borderBottomLeftRadius:0,borderBottomRightRadius:0}]}>
+              <View style={styles.head}><View style={styles.grow}><Text style={styles.issueName}>Revision Stats</Text><Text style={styles.meta}>{rectCode} · whole revision, independent of search and list filters</Text></View><Pressable accessibilityLabel="Close stats" onPress={()=>setStatsOpen(false)} style={{padding:8}}><X size={20} color="#475569"/></Pressable></View>
+              <ScrollView contentContainerStyle={{gap:14,paddingBottom:10}}>
+                <View style={styles.statsGrid}><StatsValue label="Total issues" value={revisionStats.total}/><StatsValue label="Open" value={revisionStats.open}/><StatsValue label="Completed" value={revisionStats.completed}/><StatsValue label="Most common" value={revisionStats.mostCommonIssue?`${revisionStats.mostCommonIssue.label} · ${formatPercent(revisionStats.mostCommonIssue.percent)}`:"—"}/></View>
+                <StatsBreakdown title="Issue type" rows={revisionStats.issueTypes} total={revisionStats.total}/>
+                <StatsBreakdown title="Tower section" rows={revisionStats.sections} total={revisionStats.total}/>
+                <StatsBreakdown title="Status" rows={revisionStats.statuses} total={revisionStats.total}/>
+              </ScrollView>
+              <Pressable style={styles.addFinding} onPress={()=>setStatsOpen(false)}><Text style={styles.addFindingText}>Close</Text></Pressable>
+            </View>
+          </SafeAreaView>
+        </Modal>
         {fieldState.error ? <Text style={styles.notes}>{fieldState.error}</Text> : null}
         <View style={[styles.card,{padding:9,gap:4}]}>
           <View style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between",gap:8}}><Text style={styles.issueName}>Materials · {filteredRows.length} filtered FLIs</Text><Text style={styles.meta}>{revisionItems.filter(item=>["Rectified","Verified"].includes(item.status)).length}/{revisionItems.length} rectified</Text></View>
@@ -1603,7 +1721,13 @@ function KeepLocationControl({label,checked,onChange}:{label:string;checked:bool
   </Pressable>;
 }
 
+function formatPercent(value:number){return `${Number.isInteger(value)?value:value.toFixed(1)}%`;}
+function StatsValue({label,value}:{label:string;value:string|number}){return <View style={{flexGrow:1,flexBasis:"46%",padding:10,borderRadius:12,backgroundColor:"#f1f5f9"}}><Text style={styles.meta}>{label}</Text><Text style={[styles.issueName,{marginTop:3}]}>{value}</Text></View>;}
+function StatsBreakdown({title,rows,total}:{title:string;rows:RevisionStatRow[];total:number}){return <View style={{gap:6}}><Text style={[styles.meta,{textTransform:"uppercase"}]}>{title}</Text>{rows.length?rows.map(row=><View key={row.label} style={[styles.head,{alignItems:"center",paddingVertical:5,borderBottomWidth:1,borderBottomColor:"#f1f5f9"}]}><Text style={[styles.issueName,{flex:1}]}>{row.label}</Text><Text style={styles.meta}>{row.count} / {total} · {formatPercent(row.percent)}</Text></View>):<Text style={styles.meta}>No records</Text>}</View>;}
+
 const styles = StyleSheet.create({
+  error: { backgroundColor: "#fff1f2", color: "#be123c", padding: 10, borderRadius: 9, fontWeight: "700" },
+  statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   grow: { flex: 1, minWidth: 0, flexShrink: 1 },
   revisionCard: {
     backgroundColor: "#fff",

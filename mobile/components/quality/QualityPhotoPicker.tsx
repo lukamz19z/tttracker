@@ -2,10 +2,12 @@ import { useNavigation } from "@react-navigation/native";
 import { QualitySwipeViewer } from "./QualityEvidenceGallery";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
 import { Image } from "expo-image";
+import { File } from "expo-file-system";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useEffect, useRef, useState } from "react";
 import { captureTimeFromExif, projectLocalCaptureTime, qualityCaptureLabel, qualityTimeZone } from "../../../lib/quality/date-time";
-import { annotateQualityPhoto, photoContext } from "@/lib/quality-evidence";
+import { logMobilePerf } from "@/lib/perf-trace";
+import { QUALITY_EVIDENCE_JPEG_QUALITY } from "@/lib/quality-photo-policy";
 import * as ImagePicker from "expo-image-picker";
 import { Camera, ImagePlus, Trash2 } from "lucide-react-native";
 import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -13,22 +15,30 @@ import { Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from "reac
 import { persistOfflineFile } from "@/lib/offline/files";
 import type { LocalQualityPhoto } from "@/types/quality";
 
+
 function id() {
   return `photo-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-async function persistAsset(asset: ImagePicker.ImagePickerAsset, prefix: string, capturedAt: string): Promise<LocalQualityPhoto> {
+async function persistAsset(asset: ImagePicker.ImagePickerAsset, prefix: string, capturedAt: string, phase: string): Promise<{photo:LocalQualityPhoto;beforeBytes:number;afterBytes:number}> {
+  const beforeBytes=asset.fileSize||new File(asset.uri).size||0;
+  // ImagePicker applies its existing native JPEG quality control. Keep the
+  // selected/captured dimensions and avoid introducing another native module.
   const uri = await persistOfflineFile(asset.uri, prefix);
-  const name = asset.fileName || `${prefix}-${Date.now()}.jpg`;
-  return {
+  const mimeType=asset.mimeType||"image/jpeg";
+  const extension=mimeType==="image/png"?".png":".jpg";
+  const name = `${(asset.fileName||prefix).replace(/\.[^.]+$/,"" )}-${Date.now()}${extension}`;
+  const photo:LocalQualityPhoto = {
     width: asset.width, height: asset.height,
     watermarkPosition: "bottom-left",
     id: id(),
     uri, originalUri: uri,
     name,
-    mimeType: asset.mimeType || "image/jpeg",
+    mimeType,
     capturedAt,
+    watermarkContext: { phase },
   };
+  return {photo,beforeBytes,afterBytes:new File(uri).size||0};
 }
 
 export function QualityPhotoPicker({
@@ -64,42 +74,34 @@ export function QualityPhotoPicker({
   }
   function cancelCaptureTime() {captureReply.current?.reject(new Error("Photo capture date/time was not supplied."));captureReply.current=null;setCapturePrompt(null);}
   function requestCaptureTime(name:string) {setCaptureInput("");setCapturePrompt(name);return new Promise<string>((resolve,reject)=>{captureReply.current={resolve,reject};});}
-  const contextKey = JSON.stringify(context || {});
   const phase = String(context?.phase || (label.toLowerCase().includes("after") ? "AFTER" : "BEFORE"));
-  const collectAnnotation = (photo: LocalQualityPhoto) => context || prefix.startsWith("revision")
-    ? annotateQualityPhoto(photo, photoContext(JSON.parse(contextKey),phase,photo.capturedAt)) : Promise.resolve(photo);
-  useEffect(() => {
-    if (!photos.length || (!contextKey || contextKey === "{}") && !prefix.startsWith("revision")) return;
-    let active = true;
-    void Promise.all(photos.map(photo => annotateQualityPhoto(photo,photoContext(JSON.parse(contextKey),phase,photo.capturedAt))))
-      .then(next => { if (active && !busyRef.current && next.some((photo,index)=>photo.annotationKey !== photos[index].annotationKey || photo.annotatedUri !== photos[index].annotatedUri)) onChange(next); })
-      .catch(error => { if (active) setError(error instanceof Error ? error.message : "Evidence annotation failed."); });
-    return () => { active = false; };
-  },[photos,contextKey,phase,prefix,onChange]);
   async function capture(action: () => Promise<void>) {
     if(busyRef.current)return;busyRef.current=true;setBusy(true);setError(null);
-    try { await action(); } catch(error) { const message=error instanceof Error ? error.message : "Evidence annotation failed.";if(mounted.current){setError(message);Alert.alert("Photo could not be prepared",message);} }
+    try { await action(); } catch(error) { const message=error instanceof Error ? error.message : "Evidence preparation failed.";if(mounted.current){setError(message);Alert.alert("Photo could not be prepared",message);} }
     finally { busyRef.current=false;if(mounted.current)setBusy(false); }
   }
   function previewPhoto(photo: LocalQualityPhoto) {setPreview(photos.findIndex(row=>row.id===photo.id));}
   async function camera() {
+    const startedAt=Date.now();
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {Alert.alert("Photo permission required","Enable camera or photo access in Settings.");return;}
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1, exif:true });
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: QUALITY_EVIDENCE_JPEG_QUALITY, exif:true });
     if (result.canceled || !result.assets[0]) return;
     // Record immediately on camera return, before copying/rasterising/queueing.
     const capturedAt=captureTimeFromExif(result.assets[0].exif,Intl.DateTimeFormat().resolvedOptions().timeZone) || new Date().toISOString();
-    const original=await persistAsset(result.assets[0],prefix,capturedAt);
-    try { onChange([...photos,await collectAnnotation(original)]); }
-    catch(error) { onChange([...photos,{...original,watermarkContext:photoContext(JSON.parse(contextKey),phase,original.capturedAt)}]);throw error; }
+    const prepared=await persistAsset(result.assets[0],prefix,capturedAt,phase);
+    logMobilePerf("quality.photo.compress",{module:"quality",operation:"quality.photo.compress",projectId:typeof context?.projectId==="string"?context.projectId:null,recordId:typeof context?.recordId==="string"?context.recordId:null,phase,durationMs:Date.now()-startedAt,outcome:"success",quality:QUALITY_EVIDENCE_JPEG_QUALITY,fileSizeBeforeBytes:prepared.beforeBytes,fileSizeAfterBytes:prepared.afterBytes,width:prepared.photo.width,height:prepared.photo.height});
+    logMobilePerf("quality.photo.prepare",{module:"quality",operation:"quality.photo.prepare",projectId:typeof context?.projectId==="string"?context.projectId:null,recordId:typeof context?.recordId==="string"?context.recordId:null,phase,durationMs:Date.now()-startedAt,outcome:"success",fileSizeBeforeBytes:prepared.beforeBytes,fileSizeAfterBytes:prepared.afterBytes});
+    onChange([...photos,prepared.photo]);
   }
 
   async function library() {
+    const startedAt=Date.now();
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {Alert.alert("Photo permission required","Enable camera or photo access in Settings.");return;}
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
-      quality: 1,
+      quality: QUALITY_EVIDENCE_JPEG_QUALITY,
       allowsMultipleSelection: true,
       selectionLimit: 6,
       exif:true,
@@ -108,11 +110,12 @@ export function QualityPhotoPicker({
     const next: LocalQualityPhoto[] = [];
     for (const asset of result.assets) {
       const capturedAt=captureTimeFromExif(asset.exif,zone) || await requestCaptureTime(asset.fileName || "Selected photo");
-      const original=await persistAsset(asset,prefix,capturedAt);
-      try { next.push(await collectAnnotation(original)); }
-      catch(error) { onChange([...photos,...next,{...original,watermarkContext:photoContext(JSON.parse(contextKey),phase,original.capturedAt)}]);throw error; }
+      const prepared=await persistAsset(asset,prefix,capturedAt,phase);
+      next.push(prepared.photo);
     }
     onChange([...photos, ...next]);
+    logMobilePerf("quality.photo.compress",{module:"quality",operation:"quality.photo.compress",projectId:typeof context?.projectId==="string"?context.projectId:null,recordId:typeof context?.recordId==="string"?context.recordId:null,phase,durationMs:Date.now()-startedAt,outcome:"success",quality:QUALITY_EVIDENCE_JPEG_QUALITY,fileCount:next.length});
+    logMobilePerf("quality.photo.prepare",{module:"quality",operation:"quality.photo.prepare",projectId:typeof context?.projectId==="string"?context.projectId:null,recordId:typeof context?.recordId==="string"?context.recordId:null,phase,durationMs:Date.now()-startedAt,outcome:"success",photoCount:next.length,fileSizeBytes:next.reduce((sum,photo)=>sum+(new File(photo.uri).size||0),0)});
   }
 
   function remove(photo:LocalQualityPhoto) {

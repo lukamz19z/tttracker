@@ -171,3 +171,16 @@ export async function resetQueueFailures() {
   const db = await database();
   await db.runAsync("UPDATE sync_queue SET attempts=0, status='pending', last_error=NULL WHERE status IN ('failed','retryable_failure','requires_reconciliation')");
 }
+
+export async function retryQueueRecords(ids: string[]) {
+  if (!ids.length) return;
+  const db = await database();
+  await db.withTransactionAsync(async () => {
+    for (const id of ids) {
+      await db.runAsync(
+        "UPDATE sync_queue SET attempts=0,status='pending',last_error=NULL,updated_at=? WHERE id=? AND status IN ('failed','retryable_failure','requires_reconciliation')",
+        new Date().toISOString(), id,
+      );
+    }
+  });
+}

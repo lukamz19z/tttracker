@@ -11,6 +11,7 @@ import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
 import { ApiRequestError, apiFetch, apiJson } from "@/lib/api/client";
+import { logMobilePerf } from "@/lib/perf-trace";
 import { getCache, setCache } from "@/lib/offline/db";
 import type {
   DefectAssignee,
@@ -488,14 +489,17 @@ export async function uploadQualityPhoto(input: {
   const dimensions = await new Promise<{width:number;height:number}>((resolve,reject) => NativeImage.getSize(input.uri,(width,height)=>resolve({width,height}),reject));
   const annotatedSize = input.annotatedUri && new File(input.annotatedUri).exists ? new File(input.annotatedUri).size : null;
   if (__DEV__) console.debug("Quality upload payload", { operation: "quality_evidence_upload", method: "PUT", endpoint: "scoped SharePoint upload session", contentType: input.mimeType, transport: "binary chunks", originalBytes: original.size, localAnnotatedBytes: annotatedSize, uploadBytes: original.size, ...dimensions, clientMutationId });
+  const sessionStarted=Date.now();
   const session = await apiJson<{uploadUrl?:string;ticket?:string;file?:{id:string}}>("/api/quality/files/upload-session", {
     method: "POST", body: JSON.stringify({ ...input, uri: undefined, annotatedUri: undefined, size: original.size, clientMutationId }),
     qualityDiagnostic: { operation: "quality_evidence_upload_session", stage: input.fileRole, clientMutationId },
   });
+  logMobilePerf("quality.photo.metadata",{module:"quality",operation:"quality.photo.metadata",projectId:input.projectId,recordId:input.revisionItemId||input.defectId||null,phase:input.fileRole,durationMs:Date.now()-sessionStarted,outcome:"success"});
   if (session.file) return {file:session.file};
   if (!session.uploadUrl || !session.ticket) throw new Error("Evidence upload session did not return its scoped capability.");
   if (!session.uploadUrl.startsWith("https://")) throw new Error("Invalid evidence upload destination.");
   const handle=original.open();
+  const transferStarted=Date.now();
   // Graph ranges (except the final range) must be multiples of 320 KiB.
   const chunkSize=320*1024*5;
   try {
@@ -515,7 +519,11 @@ export async function uploadQualityPhoto(input: {
       if(offset+bytes.length===original.size && ![200,201].includes(response.status)) throw new Error("Quality evidence upload is not complete. Retry this photo.");
     }
   } finally {handle.close();}
-  return apiJson<{file:{id:string}}>("/api/quality/files/upload",{method:"POST",body:JSON.stringify({ticket:session.ticket}),timeoutMs:120_000,qualityDiagnostic:{operation:"quality_evidence_associate",stage:input.fileRole,clientMutationId}});
+  logMobilePerf("quality.photo.sharepoint",{module:"quality",operation:"quality.photo.sharepoint",projectId:input.projectId,recordId:input.revisionItemId||input.defectId||null,phase:input.fileRole,durationMs:Date.now()-transferStarted,outcome:"success",fileSizeBytes:original.size});
+  const finalizeStarted=Date.now();
+  const result=await apiJson<{file:{id:string}}>("/api/quality/files/upload",{method:"POST",body:JSON.stringify({ticket:session.ticket}),timeoutMs:120_000,qualityDiagnostic:{operation:"quality_evidence_associate",stage:input.fileRole,clientMutationId}});
+  logMobilePerf("quality.photo.finalize",{module:"quality",operation:"quality.photo.finalize",projectId:input.projectId,recordId:input.revisionItemId||input.defectId||null,phase:input.fileRole,durationMs:Date.now()-finalizeStarted,outcome:"success"});
+  return result;
 }
 
 export async function shareQualityFile(

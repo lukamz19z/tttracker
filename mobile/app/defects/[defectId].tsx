@@ -571,9 +571,8 @@ function DefectDetailContent() {
     setLifecycleSaving(true);
     try {
       await enqueueDefectUpdate({projectId,towerId,defectId,photos:lifecyclePhotos,patch:{status:targetStatus,...(mode!=="reopen"?{resolutionNotes:comment}:{})}});
-      if(online) await syncNow({manual:false});
+      if(online) void syncNow({manual:false});
       setLifecycleMode(null);setLifecyclePhotos([]);setLifecycleComment("");
-      if(online) await reloadDetail();
       Alert.alert("Saved for sync","Evidence is uploaded before the controlled status change. Pending work is retained until the server confirms it.");
     }catch(error){Alert.alert("Changes remain pending",error instanceof Error?error.message:"Tap Sync now to retry.");}
     finally{setLifecycleSaving(false);}
@@ -610,10 +609,10 @@ function DefectDetailContent() {
     setPhotoSaving(true);
     try {
       await enqueueDefectUpdate({projectId,towerId,defectId,photos:newPhotos});
-      if(online) await syncNow({manual:false});
+      if(online) void syncNow({manual:false});
       setNewPhotos([]);
       setPhotoModalOpen(false);
-      await reloadDetail();
+      Alert.alert("Evidence queued","Photos are saved on this device and will upload in the background. You can continue working.");
     } catch (error) {
       Alert.alert(
         "Photos could not be uploaded",

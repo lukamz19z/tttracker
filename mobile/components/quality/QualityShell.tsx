@@ -1,13 +1,17 @@
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { ArrowLeft } from "lucide-react-native";
-import type { PropsWithChildren, ReactNode } from "react";
+import { useCallback, useEffect, useRef, type PropsWithChildren, type ReactNode } from "react";
 import {
   FlatList,
   View,
   Pressable,
   RefreshControl,
   ScrollView,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  type ViewToken,
   StyleSheet,
   Text,
 } from "react-native";
@@ -18,6 +22,9 @@ import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useAuth } from "@/contexts/AuthContext";
 import { useQuality } from "@/contexts/QualityContext";
 import { formatQualityDateTime } from "../../../lib/quality/date-time";
+import { logQualityListRestore, qualityListAnchor, qualityListPosition, saveQualityListAnchor, saveQualityListPosition } from "@/lib/quality-list-position";
+
+const qualityListViewability = { itemVisiblePercentThreshold: 1 };
 
 export function QualityShell({
   permission,
@@ -27,6 +34,8 @@ export function QualityShell({
   compactHeader = false,
   children,
   virtualRows,
+  listPositionKey,
+  listScopeKey,
 }: PropsWithChildren<{
   permission: "mobile.defects" | "mobile.rectifications";
   title: string;
@@ -34,9 +43,51 @@ export function QualityShell({
   root?: boolean;
   compactHeader?: boolean;
   virtualRows?: {id:string;content:ReactNode}[];
+  listPositionKey?: string;
+  listScopeKey?: string;
 }>) {
   const { profile } = useAuth();
   const { refreshing, refresh, cachedAt, error, data } = useQuality();
+  const scrollRef=useRef<ScrollView>(null);
+  const flatListRef=useRef<FlatList<{id:string;content:ReactNode}> | null>(null);
+  const restoreTarget=useRef(0);
+  const restorePending=useRef(false);
+  const virtualRowsRef=useRef(virtualRows);
+  useEffect(()=>{virtualRowsRef.current=virtualRows;},[virtualRows]);
+  const handleViewableChanged=useCallback(({viewableItems}:{viewableItems:ViewToken[]})=>{
+    const row=viewableItems.find(token=>token.isViewable&&token.item&&typeof (token.item as {id?:unknown}).id==="string");
+    if(row?.item&&typeof (row.item as {id?:unknown}).id==="string"&&typeof row.index==="number"&&listPositionKey&&listScopeKey){
+      saveQualityListAnchor(listPositionKey,listScopeKey,String((row.item as {id:string}).id),row.index,restoreTarget.current);
+    }
+  },[listPositionKey,listScopeKey]);
+  const handleScrollToIndexFailed=useCallback(()=>{
+    setTimeout(()=>flatListRef.current?.scrollToOffset({offset:restoreTarget.current,animated:false}),100);
+  },[]);
+
+  const restorePosition=useCallback(()=>{
+    if(!listPositionKey||!listScopeKey)return;
+    const offset=qualityListPosition(listPositionKey,listScopeKey);
+    const anchor=qualityListAnchor(listPositionKey,listScopeKey);
+    const anchorIndex=anchor?.anchorId?virtualRowsRef.current?.findIndex(row=>row.id===anchor.anchorId)??-1:-1;
+    restoreTarget.current=offset;restorePending.current=offset>0&&anchorIndex<0;
+    if(anchorIndex>=0)flatListRef.current?.scrollToIndex({index:anchorIndex,viewPosition:0,animated:false});
+    else flatListRef.current?.scrollToOffset({offset,animated:false});
+    scrollRef.current?.scrollTo({y:offset,animated:false});
+    logQualityListRestore({projectId:listPositionKey.split(":")[3]||"",module:listPositionKey.split(":").at(-1)||"quality",offset,outcome:offset?"restored":"top"});
+    if(offset>0)setTimeout(()=>{scrollRef.current?.scrollTo({y:restoreTarget.current,animated:false});if(anchorIndex>=0)flatListRef.current?.scrollToIndex({index:anchorIndex,viewPosition:0,animated:false});else flatListRef.current?.scrollToOffset({offset:restoreTarget.current,animated:false});},180);
+  },[listPositionKey,listScopeKey]);
+
+  useFocusEffect(useCallback(()=>{restorePosition();return()=>undefined;},[restorePosition]));
+
+  const handleScroll=useCallback((event:NativeSyntheticEvent<NativeScrollEvent>)=>{
+    const offset=event.nativeEvent.contentOffset.y;
+    restoreTarget.current=offset;
+    if(listPositionKey&&listScopeKey)saveQualityListPosition(listPositionKey,listScopeKey,offset);
+  },[listPositionKey,listScopeKey]);
+
+  const handleContentSizeChange=useCallback((_width:number,height:number)=>{
+    if(restorePending.current&&height>=restoreTarget.current){scrollRef.current?.scrollTo({y:restoreTarget.current,animated:false});restorePending.current=false;}
+  },[]);
 
   const content=<View style={{gap:compactHeader?5:10}}>
           {!root ? (
@@ -59,7 +110,7 @@ export function QualityShell({
           {children}
   </View>;
   return <PermissionScreen permission={permission}><SafeAreaView style={styles.safe}>
-    {virtualRows?<FlatList data={virtualRows} keyExtractor={row=>row.id} renderItem={({item})=><View style={{marginBottom:compactHeader?4:8}}>{item.content}</View>} contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} ListHeaderComponent={content} ListFooterComponent={<AppFooter/>} initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>}/>:<ScrollView contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} keyboardShouldPersistTaps="handled">{content}<AppFooter/></ScrollView>}
+    {virtualRows?<FlatList ref={flatListRef} data={virtualRows} keyExtractor={row=>row.id} renderItem={({item})=><View style={{marginBottom:compactHeader?4:8}}>{item.content}</View>} onViewableItemsChanged={handleViewableChanged} viewabilityConfig={qualityListViewability} onScroll={handleScroll} scrollEventThrottle={100} onContentSizeChange={handleContentSizeChange} onScrollToIndexFailed={handleScrollToIndexFailed} contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} ListHeaderComponent={content} ListFooterComponent={<AppFooter/>} initialNumToRender={8} maxToRenderPerBatch={6} windowSize={5} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>}/>:<ScrollView ref={scrollRef} onScroll={handleScroll} scrollEventThrottle={100} onContentSizeChange={handleContentSizeChange} contentContainerStyle={[styles.content,compactHeader&&styles.compactContent]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={()=>void refresh()}/>} keyboardShouldPersistTaps="handled">{content}<AppFooter/></ScrollView>}
   </SafeAreaView></PermissionScreen>;
 }
 
