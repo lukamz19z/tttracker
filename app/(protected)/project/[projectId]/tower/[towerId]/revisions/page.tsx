@@ -12,6 +12,7 @@ import { populatedDetailEntries, type DetailSchema, type DetailValues } from "@/
 
 import {
   Camera,
+  BarChart3,
   ChevronDown,
   ChevronUp,
   ClipboardCheck,
@@ -31,6 +32,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import PunchlistImport from "@/components/quality/PunchlistImport";
 import { useAccess } from "@/components/access/access-provider";
 import { qualityItemMatches } from "@/lib/quality/punchlist";
+import { buildRevisionStats, keepAvailableOptions, type RevisionStatRow } from "@/lib/quality/revision-stats";
+import { punchlistFilterSection } from "@/lib/quality/punchlist";
 import IssueTypeManager from "@/components/quality/IssueTypeManager";
 import RevisionNotificationManager from "@/components/quality/RevisionNotificationManager";
 import TowerMemberFields, { type TowerMaterialMember } from "@/components/quality/TowerMemberFields";
@@ -292,7 +295,9 @@ export default function TowerRevisionsPage() {
   const [evidenceItem, setEvidenceItem] = useState<RevisionItem | null>(null);
   const { can } = useAccess();
   const [importOpen,setImportOpen]=useState(false);
-  const [itemSearch,setItemSearch]=useState(""),[itemStatus,setItemStatus]=useState("All"),[itemSource,setItemSource]=useState("All");
+  const [itemSearch,setItemSearch]=useState(""),[itemStatus,setItemStatus]=useState("All"),[itemSource,setItemSource]=useState("All"),[itemSection,setItemSection]=useState(""),[itemIssue,setItemIssue]=useState("");
+  const [statsOpen,setStatsOpen]=useState(false);
+  const [statsRevisionId,setStatsRevisionId]=useState("");
   const [additionalConfirmed,setAdditionalConfirmed]=useState(false);
   const [evidenceViews, setEvidenceViews] = useState<EvidenceView[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -300,6 +305,7 @@ export default function TowerRevisionsPage() {
   const [capture,setCapture]=useState(emptyCaptureDetails);
   const [actionComment,setActionComment]=useState("");
   const [preview, setPreview] = useState<EvidenceView | null>(null);
+  const [fullPreviewUrl,setFullPreviewUrl]=useState("");
 
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -399,6 +405,26 @@ export default function TowerRevisionsPage() {
       "Other",
     [issueTypes],
   );
+
+  const towerItems = useMemo(() => items.filter(item => item.tower_id === towerId), [items,towerId]);
+  const sectionOptions = useMemo(() => {
+    const base=towerItems.filter(item=>qualityItemMatches(item,itemSearch,itemStatus,itemSource) && (!itemIssue || item.issue_type_id===itemIssue));
+    const counts=new Map<string,number>();for(const item of base){const section=punchlistFilterSection(item);if(section)counts.set(section,(counts.get(section)||0)+1);}
+    const values=new Set([...towerItems.map(punchlistFilterSection).filter(Boolean),...(itemSection?[itemSection]:[])]);
+    return keepAvailableOptions([...values].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})).map(value=>({value,label:value,count:counts.get(value)||0})),itemSection);
+  },[towerItems,itemSearch,itemStatus,itemSource,itemIssue,itemSection]);
+  const issueOptions = useMemo(() => {
+    const base=towerItems.filter(item=>qualityItemMatches(item,itemSearch,itemStatus,itemSource) && (!itemSection || punchlistFilterSection(item)===itemSection));
+    const counts=new Map<string,number>();for(const item of base){const key=item.issue_type_id||`text:${item.other_issue_text?.trim()||"Other"}`;counts.set(key,(counts.get(key)||0)+1);}
+    const labels=new Map<string,string>();for(const type of issueTypes.filter(type=>["revision","both"].includes(type.applies_to)))labels.set(type.id,type.name);for(const item of towerItems){if(!item.issue_type_id)labels.set(`text:${item.other_issue_text?.trim()||"Other"}`,item.other_issue_text?.trim()||"Other");else if(!labels.has(item.issue_type_id))labels.set(item.issue_type_id,issueName(item.issue_type_id,item.other_issue_text));}
+    if(itemIssue&&!labels.has(itemIssue))labels.set(itemIssue,itemIssue);
+    return keepAvailableOptions([...labels].map(([value,label])=>({value,label,count:counts.get(value)||0})).sort((a,b)=>a.label.localeCompare(b.label,undefined,{numeric:true})),itemIssue);
+  },[towerItems,itemSearch,itemStatus,itemSource,itemSection,itemIssue,issueTypes,issueName]);
+  const statsRevisionItems = useMemo(() => items.filter(item=>item.tower_id===towerId && item.revision_id===statsRevisionId), [items,towerId,statsRevisionId]);
+  const statsRevision = revisions.find(revision=>revision.id===statsRevisionId) || null;
+  const revisionStats = useMemo(() => buildRevisionStats(statsRevisionItems, issueTypes), [statsRevisionItems,issueTypes]);
+
+  const itemMatchesFilters = useCallback((item:RevisionItem) => qualityItemMatches(item,itemSearch,itemStatus,itemSource) && (!itemSection || punchlistFilterSection(item)===itemSection) && (!itemIssue || (item.issue_type_id || `text:${item.other_issue_text?.trim()||"Other"}`)===itemIssue),[itemSearch,itemStatus,itemSource,itemSection,itemIssue]);
 
   const itemsByRevision = useMemo(() => {
     const map = new Map<string, RevisionItem[]>();
@@ -994,7 +1020,8 @@ export default function TowerRevisionsPage() {
             </div>
           ) : null}
 
-          <div className="flex flex-wrap gap-2"><input className="input max-w-xs" placeholder="Search FLI, reference, member, segment, leg" value={itemSearch} onChange={e=>setItemSearch(e.target.value)}/><select className="input max-w-40" value={itemStatus} onChange={e=>setItemStatus(e.target.value)}>{["All","Open","Rectified"].map(value=><option key={value}>{value}</option>)}</select><select className="input max-w-40" value={itemSource} onChange={e=>setItemSource(e.target.value)}>{["All","Imported","Manual"].map(value=><option key={value}>{value}</option>)}</select></div>
+          <div className="flex flex-wrap gap-2"><input aria-label="Search findings" className="input max-w-xs" placeholder="Search FLI, reference, member, segment, leg" value={itemSearch} onChange={e=>setItemSearch(e.target.value)}/><select aria-label="Filter by status" className="input max-w-40" value={itemStatus} onChange={e=>setItemStatus(e.target.value)}>{["All","Open","Rectified"].map(value=><option key={value}>{value}</option>)}</select><select aria-label="Filter by source" className="input max-w-40" value={itemSource} onChange={e=>setItemSource(e.target.value)}>{["All","Imported","Manual"].map(value=><option key={value}>{value}</option>)}</select><select aria-label="Filter by section" className="input max-w-48" value={itemSection} onChange={e=>setItemSection(e.target.value)}><option value="">All sections</option>{sectionOptions.map(option=><option key={option.value} value={option.value}>{option.label} {option.count}</option>)}</select><select aria-label="Filter by issue type" className="input max-w-48" value={itemIssue} onChange={e=>setItemIssue(e.target.value)}><option value="">All issue types</option>{issueOptions.map(option=><option key={option.value} value={option.value}>{option.label} {option.count}</option>)}</select><button type="button" disabled={!revisions.length} onClick={()=>{setStatsRevisionId([...expanded].find(id=>revisions.some(revision=>revision.id===id)) || revisions[0]?.id || "");setStatsOpen(true);}} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 disabled:opacity-50"><BarChart3 size={16}/> Stats</button></div>
+          {statsOpen?<Modal title="Revision / Rectification Stats" subtitle={`${statsRevision?rectCode(statsRevision):"Select a revision"} · independent of search and list filters.`} onClose={()=>setStatsOpen(false)}><label className="mb-4 block max-w-sm text-xs font-bold text-slate-600">Revision<select className="input mt-1" value={statsRevisionId} onChange={event=>setStatsRevisionId(event.target.value)}>{revisions.map(revision=><option key={revision.id} value={revision.id}>{rectCode(revision)}</option>)}</select></label><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"><Stat label="Total issues" value={revisionStats.total}/><Stat label="Open" value={revisionStats.open} tone="rose"/><Stat label="Completed" value={revisionStats.completed} tone="green"/><Stat label="Most common issue" value={revisionStats.mostCommonIssue?`${revisionStats.mostCommonIssue.label} · ${formatStatPercent(revisionStats.mostCommonIssue.percent)}`:"—"}/></div><div className="mt-5 grid gap-6 md:grid-cols-2"><StatsTable title="Issue type" rows={revisionStats.issueTypes} total={revisionStats.total}/><StatsTable title="Tower section" rows={revisionStats.sections} total={revisionStats.total}/><StatsTable title="Status" rows={revisionStats.statuses} total={revisionStats.total}/></div></Modal>:null}
           {revisions.map((revision) => {
             const revisionItems = itemsByRevision.get(revision.id) ?? [];
             const completeCount = revisionItems.filter((item) => completeness(item).state === "complete").length;
@@ -1061,7 +1088,7 @@ export default function TowerRevisionsPage() {
                     </div>
 
                     <div className="space-y-3">
-                      {revisionItems.filter(item=>qualityItemMatches(item,itemSearch,itemStatus,itemSource)).map((item) => {
+                      {revisionItems.filter(itemMatchesFilters).map((item) => {
                         const complete = completeness(item);
                         const beforeCount = complete.beforeCount;
                         const afterCount = complete.afterCount;
@@ -1069,6 +1096,7 @@ export default function TowerRevisionsPage() {
                           <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                               <div className="min-w-0 flex-1">
+                                {(()=>{const thumb=files.find(file=>file.revision_item_id===item.id&&(file.file_role==="before_photo"||file.file_role==="after_photo")&&!file.deletion_pending&&!file.is_outdated);return thumb?<img loading="lazy" decoding="async" src={`/api/quality/files/${encodeURIComponent(thumb.id)}/content?variant=thumbnail`} alt={`${fliCode(item)} thumbnail`} className="mb-2 h-14 w-14 rounded-lg bg-slate-100 object-contain"/>:null;})()}
                                 <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-blue-700">{fliCode(item)}</span>{item.source_type==="punchlist"?<span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs">Punchlist</span>:null}{item.external_reference?<span className="text-xs text-slate-500">{item.external_reference}</span>:null}<span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${itemStatusClasses(item.status)}`}>{item.status}</span>{item.status === "Open" ? <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${complete.state === "complete" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{complete.label}</span> : null}<span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px]">{complete.state === "complete"?"Photos Complete":"Photos Incomplete"}</span></div>
                                 <div className="mt-1 font-bold text-slate-900">{issueName(item.issue_type_id,item.other_issue_text)}</div>
                                 {item.source_type==="punchlist"?<div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500"><span>Inspector: {item.inspector_name || "Not supplied"}</span>{item.source_date?<span>Source Date: {sourceDateDisplay(item.source_date)}</span>:null}<span>Imported By: {qualityDisplayName(item.imported_by_label)}</span></div>:null}
@@ -1281,7 +1309,7 @@ export default function TowerRevisionsPage() {
         </Modal>
       ) : null}
 
-      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => setPreview(null)}><div onClick={(event) => event.stopPropagation()}><div className="flex justify-between text-white"><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i>0)setPreview(ordered[i-1]);}}>Previous</button><button onClick={()=>setPreview(null)}>Close</button><button onClick={()=>{const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i<ordered.length-1)setPreview(ordered[i+1]);}}>Next</button></div>{preview.url?<img src={preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" />:<div className="flex min-h-48 min-w-72 items-center justify-center rounded-xl bg-slate-800 p-8 text-center text-sm text-white">{preview.missingMessage || "Evidence file missing from SharePoint"}</div>}<div className="mt-2 text-center text-sm text-white">{preview.role === "before_photo" ? "Before" : "After"} · {preview.name}</div></div></div> : null}
+      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => {setPreview(null);setFullPreviewUrl("");}}><div onClick={(event) => event.stopPropagation()}><div className="flex justify-between text-white"><button onClick={()=>{setFullPreviewUrl("");const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i>0)setPreview(ordered[i-1]);}}>Previous</button><button onClick={()=>{setPreview(null);setFullPreviewUrl("");}}>Close</button><button onClick={()=>{setFullPreviewUrl("");const ordered=[...evidenceViews.filter(v=>v.role==="before_photo"),...evidenceViews.filter(v=>v.role==="after_photo")];const i=ordered.findIndex(v=>v.id===preview.id);if(i<ordered.length-1)setPreview(ordered[i+1]);}}>Next</button></div>{preview.url?<img onClick={()=>{if(!fullPreviewUrl)void apiFetch(`/api/quality/files/${encodeURIComponent(preview.id)}/content`).then(async response=>{if(response.ok)setFullPreviewUrl(URL.createObjectURL(await response.blob()));});}} src={fullPreviewUrl||preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" />:<div className="flex min-h-48 min-w-72 items-center justify-center rounded-xl bg-slate-800 p-8 text-center text-sm text-white">{preview.missingMessage || "Evidence file missing from SharePoint"}</div>}<div className="mt-2 text-center text-sm text-white">{preview.role === "before_photo" ? "Before" : "After"} · {preview.name}{!fullPreviewUrl&&preview.url?<span className="ml-2 text-xs text-slate-300">Tap image for full resolution</span>:null}</div></div></div> : null}
 
       <style jsx global>{`
         .input { width: 100%; border: 1px solid rgb(226 232 240); border-radius: 0.75rem; background: white; padding: 0.625rem 0.75rem; font-size: 0.875rem; outline: none; }
@@ -1299,9 +1327,15 @@ function PhotoChooser({ label, help, files, onChange }: { label: string; help: s
   return <label className="block rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4"><div className="flex items-center gap-2 font-bold text-slate-800"><Camera size={16} />{label}</div><div className="mt-1 text-xs text-slate-500">{help}</div><input type="file" multiple accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" onChange={(event) => onChange(Array.from(event.target.files ?? []))} className="mt-3 block w-full text-xs" />{files.length ? <div className="mt-2 text-xs font-semibold text-blue-700">{files.length} photo(s) selected</div> : null}</label>;
 }
 
-function Stat({ label, value, tone = "slate" }: { label: string; value: number; tone?: "slate" | "rose" | "blue" | "green" }) {
+function Stat({ label, value, tone = "slate" }: { label: string; value: number | string; tone?: "slate" | "rose" | "blue" | "green" }) {
   const classes = tone === "rose" ? "bg-rose-50 text-rose-700" : tone === "blue" ? "bg-blue-50 text-blue-700" : tone === "green" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700";
   return <div className={`rounded-2xl px-3 py-3 ${classes}`}><div className="text-[10px] font-bold uppercase tracking-wide opacity-70">{label}</div><div className="mt-1 text-xl font-black">{value}</div></div>;
+}
+
+function formatStatPercent(value:number){return `${Number.isInteger(value)?value:value.toFixed(1)}%`;}
+
+function StatsTable({title,rows,total}:{title:string;rows:RevisionStatRow[];total:number}){
+  return <section><h3 className="mb-2 text-xs font-black uppercase tracking-wide text-slate-500">{title}</h3>{rows.length?<div className="divide-y divide-slate-100">{rows.map(row=><div key={row.label} className="flex items-center justify-between gap-3 py-2 text-sm"><span className="min-w-0 truncate font-semibold text-slate-700">{row.label}</span><span className="shrink-0 text-slate-600">{row.count} / {total} · {formatStatPercent(row.percent)}</span></div>)}</div>:<p className="text-sm text-slate-500">No records</p>}</section>;
 }
 
 function Modal({ title, subtitle, onClose, children, wide = false }: { title: string; subtitle?: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {

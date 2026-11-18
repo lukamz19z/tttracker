@@ -1,4 +1,6 @@
 import { FieldFindingCard } from "@/components/quality/FieldFindingCard";
+import { QualityQuickPreview } from "@/components/quality/QualityQuickPreview";
+import { QualityListThumbnail } from "@/components/quality/QualityListThumbnail";
 import { deleteLocalQualityPhoto } from "@/lib/offline/quality-photo-deletion";
 import { QualitySwipeViewer, QualityFindingEvidenceViewer, type GalleryPhoto } from "@/components/quality/QualityEvidenceGallery";
 import { fieldListRows, filterFieldRows, groupFieldRows, fieldStateKey } from "../../../lib/quality/field-list";
@@ -141,6 +143,7 @@ export default function RevisionDetailScreen() {
   const {can}=useAccess();
   const [queuedEdits, setQueuedEdits] = useState<OfflineRevisionItemUpdate[]>([]);
   const [deleteOpen,setDeleteOpen]=useState(false);
+  const [quickPreviewId,setQuickPreviewId]=useState("");
   const [deleteConfirmation,setDeleteConfirmation]=useState("");
   const [deleting,setDeleting]=useState(false);
   const { profile } = useAuth();
@@ -1096,10 +1099,11 @@ export default function RevisionDetailScreen() {
       title={rectCode}
       virtualRows={fieldGroups.flatMap(group => [
         { id: `group:${group.label}`, content: <Text style={styles.title}>{group.label} · {group.rows.length}</Text> },
-        ...group.rows.map(row => ({ id: row.item.id, content: <FieldFindingCard row={row} issueTypes={data?.issueTypes||[]} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(row.item.id)}`)} onPhotos={()=>void openFindingEvidence(row.item.id)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/> })),
+        ...group.rows.map(row => ({ id: row.item.id, content: <View style={{flexDirection:"row",gap:8,alignItems:"flex-start"}}><QualityListThumbnail projectId={projectId} fileId={detail?.files.find(file=>file.revision_item_id===row.item.id&&!file.deletion_pending&&!file.is_outdated&&(file.file_role==="before_photo"||file.file_role==="after_photo"))?.id} label={row.item.fli_number||"Finding"}/><View style={{flex:1}}><FieldFindingCard row={row} issueTypes={data?.issueTypes||[]} locked={Boolean(serverRevision?.finalised_at) || ["Ready for Review", "Closed"].includes(serverRevision?.status || "")} onOpen={()=>setQuickPreviewId(row.item.id)} onPhotos={()=>void openFindingEvidence(row.item.id)} onActions={()=>confirmDeleteFinding(row.item.fli_number || "Finding",row.item.id,revisionItems.find(item=>item.id===row.item.id)?.mobile_client_mutation_id || undefined)}/></View></View> })),
       ])}
       subtitle={[qualityTowerDisplay(tower?.name,workspace?.towerLabel,detail?.towerLabel),clean(serverRevision?.client_reference||workspace?.clientReference)?`Punchlist ${clean(serverRevision?.client_reference||workspace?.clientReference)}`:null,`${revisionItems.length+pendingFindingCount} FLI${revisionItems.length+pendingFindingCount===1?"":"s"}`,online?"Online":"Offline"].filter(Boolean).join(" · ")}
     >
+      <QualityQuickPreview visible={Boolean(quickPreviewId)} projectId={projectId} kind="revision-items" recordId={quickPreviewId} onClose={()=>setQuickPreviewId("")} onOpenFull={()=>router.push(`/revisions/${encodeURIComponent(serverRevision?.id || routeRevisionId)}/${encodeURIComponent(quickPreviewId)}`)}/>
       <View style={styles.revisionCard}>
         {can("mobile.rectifications") ? <Pressable accessibilityLabel="Rectification actions" style={{alignSelf:"flex-end",minHeight:44,minWidth:44,alignItems:"center",justifyContent:"center"}} onPress={()=>Alert.alert("Rectification actions",deleteLabel,[{text:"Cancel",style:"cancel"},{text:"Delete Rectification",style:"destructive",onPress:()=>{setDeleteConfirmation("");setDeleteOpen(true);}}])}><Text style={{fontSize:24}}>⋮</Text></Pressable> : null}
         <Modal visible={deleteOpen} transparent onRequestClose={()=>{if(!deleting)setDeleteOpen(false);}}>

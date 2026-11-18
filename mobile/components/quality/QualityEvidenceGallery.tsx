@@ -3,21 +3,21 @@ import { useEffect, useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, View, useWindowDimensions, ActivityIndicator, Alert } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { downloadQualityFile } from "@/lib/api/quality";
+import { downloadQualityFile, downloadQualityImageVariant } from "@/lib/api/quality";
 import { queueQualityPhotoDelete } from "@/lib/offline/quality-photo-deletion";
 import { useSync } from "@/contexts/SyncContext";
 import type { QualityFile } from "@/types/quality";
 export type GalleryPhoto={id:string;role:string;uri?:string;file?:QualityFile};
 function EvidenceThumbnail({photo,onPress}:{photo:GalleryPhoto;onPress:()=>void}) {
   const [uri,setUri]=useState(photo.uri||"");
-  useEffect(()=>{if(uri||!photo.file)return;let active=true;void downloadQualityFile(photo.file.id,photo.file.file_name,true).then(value=>{if(active)setUri(value);}).catch(()=>undefined);return()=>{active=false;};},[uri,photo.file]);
+  useEffect(()=>{if(uri||!photo.file)return;let active=true;void downloadQualityImageVariant(photo.file.project_id,photo.file.id,photo.file.file_name,"preview").then(value=>{if(active)setUri(value);}).catch(()=>undefined);return()=>{active=false;};},[uri,photo.file]);
   return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${photo.role.includes("after")?"After":"Before"} photo`} onPress={onPress} style={{minHeight:120,justifyContent:"center",alignItems:"center",backgroundColor:"#e2e8f0",borderRadius:12,overflow:"hidden"}}>
-    {uri?<Image alt={`${photo.role.includes("after")?"After":"Before"} evidence photo`} source={{uri}} contentFit="cover" style={{width:"100%",height:180}}/>:<Text style={{color:"#64748b",padding:20}}>Loading photo…</Text>}
+    {uri?<Image alt={`${photo.role.includes("after")?"After":"Before"} evidence photo`} source={{uri}} contentFit="contain" style={{width:"100%",height:180}}/>:<Text style={{color:"#64748b",padding:20}}>Loading photo…</Text>}
   </Pressable>;
 }
 function EvidenceImage({photo,active}:{photo:GalleryPhoto;active:boolean}) {
   const [uri,setUri]=useState(photo.uri),[error,setError]=useState(""),[attempt,setAttempt]=useState(0);
-  useEffect(()=>{if(!active||photo.uri||!photo.file)return;let live=true;void downloadQualityFile(photo.file.id,photo.file.file_name,true).then(value=>{if(live){setUri(value);setError("");}}).catch(error=>{if(live)setError(error instanceof Error?error.message:"Photo unavailable offline. Download its preview while connected.");});return()=>{live=false;};},[active,photo.uri,photo.file,attempt]);
+  useEffect(()=>{if(!active||photo.uri||!photo.file)return;let live=true;void downloadQualityImageVariant(photo.file.project_id,photo.file.id,photo.file.file_name,"full").then(value=>{if(live){setUri(value);setError("");}}).catch(error=>{if(live)setError(error instanceof Error?error.message:"Photo unavailable offline. Download it while connected.");});return()=>{live=false;};},[active,photo.uri,photo.file,attempt]);
   if(!active)return null;
   return uri?<Image alt="Quality evidence photo" source={{uri}} contentFit="contain" allowDownscaling style={{flex:1,width:"100%"}}/>:error?<Pressable onPress={()=>setAttempt(n=>n+1)}><Text style={{color:"white",padding:20}}>{error} · Retry</Text></Pressable>:<ActivityIndicator color="white"/>;
 }

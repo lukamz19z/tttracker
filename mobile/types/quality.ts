@@ -207,6 +207,7 @@ export type QualityPayload = {
 
 export type QualityDefectListRow = QualityDefect & {
   evidenceCount: number;
+  thumbnailFileId?: string | null;
 };
 
 export type QualityRevisionListRow = QualityRevision & {

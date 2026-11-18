@@ -78,11 +78,16 @@ export async function GET(request: Request, context: RouteContext) {
     const contentType =
       (annotated && file.annotated_sharepoint_item_id) || legacyAnnotation ? "image/jpeg" : response.headers.get("content-type") || file.mime_type || "application/octet-stream";
 
-    const preview = new URL(request.url).searchParams.get("preview") === "1" && contentType.startsWith("image/");
+    const imageVariant = new URL(request.url).searchParams.get("variant");
+    const legacyPreview = new URL(request.url).searchParams.get("preview") === "1";
+    const variant = imageVariant === "thumbnail" || imageVariant === "preview" ? imageVariant : legacyPreview ? "preview" : "full";
+    const preview = variant !== "full" && contentType.startsWith("image/");
     if(preview) {
-      const requestedQuality=Number(new URL(request.url).searchParams.get("quality") || 78);
-      const quality=Math.max(45,Math.min(88,Number.isFinite(requestedQuality)?Math.round(requestedQuality):78));
-      bytes=Uint8Array.from(await sharp(Buffer.from(bytes)).resize({width:960,height:960,fit:"inside",withoutEnlargement:true}).jpeg({quality}).toBuffer()).buffer;
+      const requestedQuality=Number(new URL(request.url).searchParams.get("quality") || (variant === "thumbnail" ? 66 : 82));
+      const defaultQuality=variant === "thumbnail" ? 66 : 82;
+      const quality=Math.max(45,Math.min(88,Number.isFinite(requestedQuality)?Math.round(requestedQuality):defaultQuality));
+      const maxDimension=variant === "thumbnail" ? 320 : 1200;
+      bytes=Uint8Array.from(await sharp(Buffer.from(bytes)).rotate().resize({width:maxDimension,height:maxDimension,fit:"inside",withoutEnlargement:true}).jpeg({quality,mozjpeg:true}).toBuffer()).buffer;
     }
     return new Response(bytes, {
       status: 200,

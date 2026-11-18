@@ -148,13 +148,17 @@ export async function GET(request: NextRequest) {
       .filter(Boolean);
 
     const evidenceCounts = new Map<string, number>();
+    const thumbnails = new Map<string, string>();
 
     if (defectIds.length) {
       const evidenceResult = await service
         .from("tower_quality_files")
-        .select("defect_id")
+        .select("id,defect_id,created_at")
         .in("defect_id", defectIds)
-        .eq("file_role", "defect_photo");
+        .eq("file_role", "defect_photo")
+        .eq("deletion_pending", false)
+        .eq("is_outdated", false)
+        .order("created_at", { ascending: true });
 
       if (evidenceResult.error) {
         throw new Error(evidenceResult.error.message);
@@ -164,6 +168,7 @@ export async function GET(request: NextRequest) {
         const id = String(row.defect_id ?? "");
         if (!id) continue;
         evidenceCounts.set(id, (evidenceCounts.get(id) ?? 0) + 1);
+        if(!thumbnails.has(id))thumbnails.set(id,String(row.id));
       }
     }
 
@@ -172,6 +177,7 @@ export async function GET(request: NextRequest) {
       assigned_to_label:row.assigned_to_label ? qualityDisplayName(row.assigned_to_label):null,
       evidenceCount:
         evidenceCounts.get(String(row.id ?? "")) ?? 0,
+      thumbnailFileId:thumbnails.get(String(row.id ?? "")) ?? null,
     }));
 
     return NextResponse.json({

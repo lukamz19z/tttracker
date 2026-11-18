@@ -85,6 +85,8 @@ type DefectRow = {
 };
 
 type QualityFile = {
+  deletion_pending?: boolean;
+  is_outdated?: boolean;
   id: string;
   defect_id: string | null;
   file_role: "defect_photo";
@@ -221,6 +223,7 @@ export default function TowerDefectsPage() {
   const [photosLoading, setPhotosLoading] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [preview, setPreview] = useState<PhotoView | null>(null);
+  const [fullPreviewUrl,setFullPreviewUrl]=useState("");
   const [projectTimeZone,setProjectTimeZone]=useState<string|null>(null);
   const prettyDateTime=(value:string|null|undefined)=>formatQualityDateTime(value,projectTimeZone);
 
@@ -773,8 +776,8 @@ export default function TowerDefectsPage() {
     }
   }
 
-  async function fetchQualityFileUrl(fileId: string) {
-    const response = await apiFetch(`/api/quality/files/${encodeURIComponent(fileId)}/content`);
+  async function fetchQualityFileUrl(fileId: string, variant: "preview" | "full" = "preview") {
+    const response = await apiFetch(`/api/quality/files/${encodeURIComponent(fileId)}/content${variant === "preview" ? "?variant=preview" : ""}`);
     if (!response.ok) {
       let message = "Photo could not be loaded.";
       try {
@@ -792,6 +795,7 @@ export default function TowerDefectsPage() {
       .forEach((photo) => URL.revokeObjectURL(photo.url));
     setPhotoViews([]);
     setPreview(null);
+    setFullPreviewUrl("");
   }
 
   async function openPhotos(row: DefectRow) {
@@ -1073,7 +1077,7 @@ export default function TowerDefectsPage() {
             <tbody>
               {filteredRows.map((row) => (
                 <tr key={row.id} className="border-t border-slate-100 align-top hover:bg-slate-50/70">
-                  <td className="px-4 py-4"><div className="font-black text-slate-950">{row.defect_number || "Legacy Defect"}</div><div className="mt-1 text-xs text-slate-500">{row.client_reference || "No client reference"}</div></td>
+                  <td className="px-4 py-4"><div className="flex items-center gap-3">{(()=>{const thumb=filesByDefect.get(row.id)?.find(file=>file.file_role==="defect_photo"&&!file.deletion_pending&&!file.is_outdated);return thumb?<img loading="lazy" decoding="async" src={`/api/quality/files/${encodeURIComponent(thumb.id)}/content?variant=thumbnail`} alt={`${row.defect_number||"Defect"} thumbnail`} className="h-12 w-12 rounded-lg bg-slate-100 object-contain"/>:<div className="h-12 w-12 rounded-lg bg-slate-100"/>;})()}<div><div className="font-black text-slate-950">{row.defect_number || "Legacy Defect"}</div><div className="mt-1 text-xs text-slate-500">{row.client_reference || "No client reference"}</div></div></div></td>
                   <td className="px-4 py-4"><div className="font-bold text-slate-800">{issueTypeName(row.issue_type_id)}</div><div className="mt-1 max-w-md whitespace-pre-wrap text-xs leading-5 text-slate-600">{row.description || "-"}</div>{row.urgency_note?<div className="mt-1 text-xs font-semibold text-slate-700">{row.urgency_note}</div>:null}{row.affected_activity?<div className="mt-1 text-xs text-slate-500">Activity: {row.affected_activity}</div>:null}{row.responsibility ? <div className="mt-1 text-xs text-slate-400">Responsibility: {row.responsibility}</div> : null}{row.assigned_to_label ? <div className="mt-1 text-xs font-semibold text-blue-600">Assigned: {qualityDisplayName(row.assigned_to_label)}</div> : null}{row.leg ? <div className="mt-1 text-xs text-slate-500">Leg {row.leg}</div> : null}</td>
                   <td className="px-4 py-4 text-xs text-slate-600"><div><b>Segment:</b> {row.segment || "-"}</div><div><b>Member:</b> {row.member_number || "-"}</div><div><b>Drawing:</b> {row.drawing_number || "-"}</div></td>
                   <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${severityClasses(row.severity)}`}>{row.severity.toUpperCase()}</span>{row.work_impact?<div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-[10px] font-black ${row.work_impact.toLowerCase().includes("block")?"bg-rose-100 text-rose-700":row.work_impact.toLowerCase().includes("delay")?"bg-amber-100 text-amber-800":"bg-slate-100 text-slate-600"}`}>{row.work_impact.toUpperCase()}</div>:null}{row.required_by?(()=>{const due=defectRequiredByState(row.required_by,row.status,projectTimeZone);return <div className={`mt-2 text-xs font-bold ${due?.overdue?"text-rose-700":"text-slate-600"}`}>{due?.overdue?"OVERDUE":due?.relative||"Required"} {defectRequiredByDisplay(row.required_by)}</div>;})():null}</td>
@@ -1225,11 +1229,11 @@ export default function TowerDefectsPage() {
           <div className="mb-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="font-bold text-slate-900">Add SharePoint evidence</div><div className="text-xs text-slate-500">New photos are stored under 03 Quality → Defects → this tower → this Defect ID.</div></div><label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-bold text-white"><Camera size={16} />{photoUploading ? "Uploading…" : "Add Photos"}<input type="file" multiple disabled={photoUploading} accept="image/jpeg,image/png,image/heic,image/heif,.jpg,.jpeg,.png,.heic,.heif" className="hidden" onChange={(event) => { const files = Array.from(event.target.files ?? []); event.currentTarget.value = ""; void addPhotosToOpenDefect(files); }} /></label></div>
           </div>
-          {photosLoading ? <div className="py-12 text-center text-sm text-slate-500">Loading evidence…</div> : <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">{photoViews.map((photo) => <button key={photo.id} type="button" onClick={() => setPreview(photo)} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left"><img src={photo.url} alt={photo.name} className="aspect-square w-full object-cover" /><div className="p-2"><div className="truncate text-xs font-bold text-slate-700">{photo.name}</div><div className="mt-1 text-[10px] text-slate-400">{photo.source === "sharepoint" ? "SharePoint" : "Legacy Supabase"} · {qualityCaptureLabel(photo.capturedAt,projectTimeZone,photo.recordedAt)}</div></div></button>)}{photoViews.length === 0 ? <div className="col-span-full py-12 text-center text-sm text-slate-500">No photos attached.</div> : null}</div>}
+          {photosLoading ? <div className="py-12 text-center text-sm text-slate-500">Loading evidence…</div> : <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">{photoViews.map((photo) => <button key={photo.id} type="button" onClick={() => {setFullPreviewUrl("");setPreview(photo);}} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 text-left"><div className="flex aspect-square items-center justify-center bg-slate-100"><img loading="lazy" src={photo.url} alt={photo.name} className="max-h-full max-w-full object-contain" /></div><div className="p-2"><div className="truncate text-xs font-bold text-slate-700">{photo.name}</div><div className="mt-1 text-[10px] text-slate-400">{photo.source === "sharepoint" ? "SharePoint" : "Legacy Supabase"} · {qualityCaptureLabel(photo.capturedAt,projectTimeZone,photo.recordedAt)}</div></div></button>)}{photoViews.length === 0 ? <div className="col-span-full py-12 text-center text-sm text-slate-500">No photos attached.</div> : null}</div>}
         </Modal>
       ) : null}
 
-      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => setPreview(null)}><div className="max-h-[95vh] max-w-[95vw]" onClick={(event) => event.stopPropagation()}><img src={preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" /><div className="mt-2 text-center text-sm text-white">{preview.name}</div></div></div> : null}
+      {preview ? <div className="fixed inset-0 z-100 flex items-center justify-center bg-black/90 p-4" onClick={() => {setPreview(null);setFullPreviewUrl("");}}><div className="max-h-[95vh] max-w-[95vw]" onClick={(event) => event.stopPropagation()}><img onClick={()=>{if(!fullPreviewUrl&&preview.source==="sharepoint")void fetchQualityFileUrl(preview.id,"full").then(setFullPreviewUrl).catch(()=>undefined);}} src={fullPreviewUrl||preview.url} alt={preview.name} className="max-h-[90vh] max-w-[92vw] rounded-2xl object-contain" /><div className="mt-2 text-center text-sm text-white">{preview.name}{!fullPreviewUrl&&preview.source==="sharepoint"?<span className="ml-2 text-xs text-slate-300">Tap image for full resolution</span>:null}</div></div></div> : null}
 
       <style jsx global>{`
         .input { width: 100%; border: 1px solid rgb(226 232 240); border-radius: 0.75rem; background: white; padding: 0.625rem 0.75rem; font-size: 0.875rem; outline: none; }
