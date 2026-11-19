@@ -634,10 +634,18 @@ export async function downloadQualityFile(
 }
 
 export type QualityImageVariant = "thumbnail" | "preview" | "full";
+export async function cachedQualityImageVariant(projectId: string,fileId: string,variant: QualityImageVariant) {
+  const cached=(await getCache<string>(`quality-image:${projectId}:${variant}:${fileId}`))?.value;
+  return cached&&new File(cached).exists?cached:null;
+}
 export async function downloadQualityImageVariant(projectId: string, fileId: string, fileName: string, variant: QualityImageVariant) {
   const cacheKey = `quality-image:${projectId}:${variant}:${fileId}`;
   const cached = (await getCache<string>(cacheKey))?.value;
   if (cached && new File(cached).exists) return cached;
+  if(variant==="preview") {
+    const legacy=(await getCache<string>(`quality:preview:${fileId}`))?.value;
+    if(legacy&&new File(legacy).exists){await setCache(cacheKey,legacy);return legacy;}
+  }
   const query = variant === "full" ? "" : `?variant=${variant}`;
   const response = await apiFetch(`/api/quality/files/${encodeURIComponent(fileId)}/content${query}`, { timeoutMs: 120_000 });
   if (!response.ok) throw new Error(response.status === 404 ? "Evidence file missing from SharePoint." : "Quality evidence could not be opened.");
@@ -648,20 +656,6 @@ export async function downloadQualityImageVariant(projectId: string, fileId: str
   file.write(bytes);
   await setCache(cacheKey, file.uri);
   return file.uri;
-}
-
-export type QualityQuickPreview = {
-  projectId: string; revisionId: string | null; recordId: string; kind: "defects" | "revision-items";
-  number: string; tower: string; section: string; leg: string; issueType: string; status: string; shortDescription: string;
-  beforeFileId: string | null; beforeFileName: string | null; afterFileId: string | null; afterFileName: string | null;
-};
-export async function loadQualityQuickPreview(projectId: string, kind: QualityQuickPreview["kind"], recordId: string) {
-  const cacheKey = `quality-quick-preview:${projectId}:${kind}:${recordId}`;
-  const cached = await getCache<QualityQuickPreview>(cacheKey);
-  if (cached?.value) return cached.value;
-  const result = await apiJson<QualityQuickPreview>(`/api/mobile/quality/previews/${kind}/${encodeURIComponent(recordId)}?projectId=${encodeURIComponent(projectId)}`, { timeoutMs: 20_000 });
-  await setCache(cacheKey, result);
-  return result;
 }
 
 export type QualityMemberCatalogRow = {

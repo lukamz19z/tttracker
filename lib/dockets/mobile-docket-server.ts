@@ -2,7 +2,8 @@
 
 // lib/dockets/mobile-docket-server.ts
 
-import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import { type SupabaseClient, type User } from "@supabase/supabase-js";
+import { createServiceClient, getRequestUser } from "@/lib/access/server";
 
 import {
   SECTION_PROGRESS_WEIGHTS,
@@ -24,16 +25,6 @@ export type MobileDocketContext = {
   user: User;
   identity: MobileDocketIdentity;
 };
-
-function requiredEnv(name: string) {
-  const value = process.env[name]?.trim();
-
-  if (!value) {
-    throw new Error(`Missing environment variable: ${name}`);
-  }
-
-  return value;
-}
 
 export function clean(value: unknown) {
   return String(value ?? "").trim();
@@ -202,43 +193,8 @@ export async function requireMobileDocketUser(
     throw err;
   }
 
-  const supabaseUrl = requiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const anonKey = requiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  const serviceKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
-
-  const authClient = createClient(supabaseUrl, anonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-
-  const {
-    data: { user },
-    error: userError,
-  } = await authClient.auth.getUser(token);
-
-  if (userError || !user) {
-    const err = new Error("Your TTTracker session has expired. Sign in again.");
-    (err as Error & { status?: number }).status = 401;
-    throw err;
-  }
-
-  const service: ServiceClient = createClient(
-    supabaseUrl,
-    serviceKey,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    },
-  );
+  const user = await getRequestUser(request);
+  const service: ServiceClient = createServiceClient();
 
   await requirePermission(service, user.id);
   if (process.env.NODE_ENV === "development" && trace) console.info("[mobile-trace]", { trace, phase: "docket_auth_permission", durationMs: Date.now() - startedAt });
@@ -247,8 +203,8 @@ export async function requireMobileDocketUser(
 
   return {
     service,
-    user,
-    identity: await resolveIdentity(service, user),
+    user: user as User,
+    identity: await resolveIdentity(service, user as User),
   };
 }
 

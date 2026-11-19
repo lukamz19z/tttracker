@@ -37,7 +37,6 @@ import {
 } from "@/components/quality/QualitySelector";
 import { QualityShell } from "@/components/quality/QualityShell";
 import { QualityStatusPill } from "@/components/quality/QualityStatusPill";
-import { QualityQuickPreview } from "@/components/quality/QualityQuickPreview";
 import { QualityListThumbnail } from "@/components/quality/QualityListThumbnail";
 import { SyncStatus } from "@/components/sync/SyncStatus";
 import { useQuality } from "@/contexts/QualityContext";
@@ -92,7 +91,6 @@ export default function DefectsScreen() {
     useState(false);
   const [error, setError] =
     useState<string | null>(null);
-  const [quickPreviewId,setQuickPreviewId]=useState("");
   const loadedScope=useRef("");
   const loadedProject=useRef(projectId);
   const listScopeKey=JSON.stringify([projectId,debouncedQuery,status,urgency,towerId,memberNumber,issueTypeId]);
@@ -569,7 +567,7 @@ export default function DefectsScreen() {
         <Pressable
           key={row.id}
           style={styles.card}
-          onPress={() => setQuickPreviewId(row.id)}
+          onPress={() => router.push(`/defects/${encodeURIComponent(row.id)}` as Href)}
         >
           <View style={styles.cardHead}>
             <QualityListThumbnail projectId={projectId} fileId={row.thumbnailFileId} label={clean(row.defect_number)||"Defect"}/>
@@ -688,7 +686,6 @@ export default function DefectsScreen() {
         }}
       />
       <QualitySelector visible={selector==="urgency"} title="Filter by urgency / assignment" options={urgencyOptions} onClose={()=>setSelector(null)} onSelect={option=>{setUrgency(option.id);setSelector(null);}}/>
-      <QualityQuickPreview visible={Boolean(quickPreviewId)} projectId={projectId} kind="defects" recordId={quickPreviewId} onClose={()=>setQuickPreviewId("")} onOpenFull={()=>router.push(`/defects/${encodeURIComponent(quickPreviewId)}` as Href)}/>
     </QualityShell>
   );
 }

@@ -1,11 +1,12 @@
 export const PROFILE_MOBILE_TRACE_PATH = "/api/mobile/bootstrap";
+export const DASHBOARD_SUMMARY_MOBILE_TRACE_PATH = "/api/mobile/dashboard-summary";
 
 export function shouldTraceMobileRequest(
   development: boolean,
   flag: string | undefined,
   pathname: string,
 ) {
-  return development || (flag === "1" && pathname === PROFILE_MOBILE_TRACE_PATH);
+  return development || (flag === "1" && [PROFILE_MOBILE_TRACE_PATH, DASHBOARD_SUMMARY_MOBILE_TRACE_PATH].includes(pathname));
 }
 
 /** Client production diagnostics are opt-in and cover every mobile request. */

@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
-import { hasV1FullAccess, isV1FullAccessRole } from "@/lib/access/server";
+import { getRequestUser, hasV1FullAccess, isV1FullAccessRole } from "@/lib/access/server";
 
 export type QualityProjectRow = {
   timezone?: string | null;
@@ -55,13 +55,8 @@ export async function requireQualityUser(request: Request) {
 
   if (!token) throw new Error("UNAUTHENTICATED");
 
+  const user = await getRequestUser(request);
   const service = createQualityAdminSupabase();
-  const {
-    data: { user },
-    error: userError,
-  } = await service.auth.getUser(token);
-
-  if (userError || !user) throw new Error("UNAUTHENTICATED");
 
   const { data: roleRow, error: roleError } = await service
     .from("user_roles")
@@ -73,7 +68,7 @@ export async function requireQualityUser(request: Request) {
 
   return {
     service,
-    user,
+    user: user as User,
     role: String(roleRow?.role ?? "").trim().toLowerCase(),
   };
 }

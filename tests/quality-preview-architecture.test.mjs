@@ -13,28 +13,20 @@ test("quality image variants are bounded and preserve aspect ratio", async () =>
   assert.match(route, /mozjpeg:true/);
 });
 
-test("quick preview API selects lightweight fields and active evidence only", async () => {
-  const route = await source("app/api/mobile/quality/previews/[kind]/[recordId]/route.ts");
-  assert.match(route, /DEFECT_FIELDS/);
-  assert.match(route, /ITEM_FIELDS/);
-  assert.match(route, /deletion_pending/, "preview excludes deletion-pending photos");
-  assert.match(route, /is_outdated/, "preview excludes outdated photos");
-  assert.doesNotMatch(route, /select\("\*"\)/);
-  assert.match(route, /shortDescription/);
-  assert.match(route, /beforeFileId/);
-  assert.match(route, /afterFileId/);
+test("revision list photo action remains separate from the full issue action", async () => {
+  const screen = await source("mobile/app/revisions/[revisionId].tsx");
+  assert.match(screen, /onPhotos=\{\(\)=>void openFindingEvidence/);
+  assert.match(screen, /onOpen=\{\(\)=>router\.push/);
+  assert.doesNotMatch(screen, /QualityQuickPreview/);
+  assert.doesNotMatch(screen, /QualityListThumbnail/);
+  assert.match(screen, /content: <FieldFindingCard/);
 });
 
-test("full image is requested only from an explicit photo action", async () => {
-  const component = await source("mobile/components/quality/QualityQuickPreview.tsx");
-  assert.match(component, /downloadQualityImageVariant\(projectId,fileId,fileName,"full"\)/);
-  assert.match(component, /onPress=\{\(\)=>setPhoto/);
-  assert.match(component, /contentFit="contain"/);
-  assert.match(component, /Gesture\.Pinch/);
-});
-
-test("mobile preview caches are project and variant scoped", async () => {
+test("mobile preview caches are project and variant scoped and photos use contain", async () => {
   const api = await source("mobile/lib/api/quality.ts");
   assert.match(api, /quality-image:\$\{projectId\}:\$\{variant\}:\$\{fileId\}/);
-  assert.match(api, /quality-quick-preview:\$\{projectId\}:\$\{kind\}:\$\{recordId\}/);
+  const gallery = await source("mobile/components/quality/QualityEvidenceGallery.tsx");
+  assert.match(gallery, /contentFit="contain"/);
+  assert.match(gallery, /downloadQualityImageVariant\(photo\.file\.project_id,photo\.file\.id,photo\.file\.file_name,"full"\)/);
+  assert.match(gallery, /Gesture\.Pinch/);
 });

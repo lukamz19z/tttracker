@@ -46,7 +46,6 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import { supabase } from "@/lib/supabase";
-import { getApiSessionUser } from "@/lib/api/client";
 
 type SelectOption = {
   label: string;
@@ -234,68 +233,50 @@ export default function ProfileScreen() {
     [preferences],
   );
 
-  const loadProfilePreferences = useCallback(async () => {
+  const loadProfilePreferences = useCallback(() => {
     setPageLoading(true);
     setEmployeeLinkError(null);
+    const employeeData = profile?.employeeId ? {
+      id: profile.employeeId,
+      user_id: user?.id ?? null,
+      full_name: profile.fullName,
+      role: profile.employeeRole,
+      crew_id: profile.crewId,
+      active: true,
+      shirt_size: profile.shirtSize,
+      jacket_size: profile.jacketSize,
+      glove_size: profile.gloveSize,
+      pants_size: profile.pantsSize,
+    } satisfies EmployeeProfileRow : null;
+    const metadata = (user?.user_metadata ?? {}) as ProfileMetadata;
+    const loaded: WorkwearPreferences = {
+      preferredName: safeString(metadata.preferred_name),
+      gloveSize: safeString(employeeData?.glove_size),
+      shirtSize: safeString(employeeData?.shirt_size),
+      jacketSize: safeString(employeeData?.jacket_size),
+      pantsSize: safeString(employeeData?.pants_size),
+    };
 
-    try {
-      const currentUser = await getApiSessionUser();
-      if (!currentUser) throw new Error("No signed-in user was found.");
-
-      const { data: employeeData, error: employeeError } = await supabase
-        .from("employees")
-        .select(
-          "id, user_id, full_name, role, crew_id, active, shirt_size, jacket_size, glove_size, pants_size",
-        )
-        .eq("user_id", currentUser.id)
-        .maybeSingle();
-
-      if (employeeError) throw employeeError;
-
-      const metadata =
-        (currentUser.user_metadata ?? {}) as ProfileMetadata;
-
-      const loaded: WorkwearPreferences = {
-        preferredName: safeString(metadata.preferred_name),
-        gloveSize: safeString(employeeData?.glove_size),
-        shirtSize: safeString(employeeData?.shirt_size),
-        jacketSize: safeString(employeeData?.jacket_size),
-        pantsSize: safeString(employeeData?.pants_size),
-      };
-
-      setEmployee((employeeData ?? null) as EmployeeProfileRow | null);
-      setPreferences(loaded);
-      setSavedPreferences(loaded);
-
-      if (!employeeData) {
-        setEmployeeLinkError(
-          "Your account is not linked to an employee profile. An administrator must link your user account before workwear sizes can be updated.",
-        );
-      }
-    } catch (error) {
-      Alert.alert(
-        "Unable to load profile",
-        error instanceof Error
-          ? error.message
-          : "Please try again.",
+    setEmployee(employeeData);
+    setPreferences(loaded);
+    setSavedPreferences(loaded);
+    if (!employeeData && !profileLoading) {
+      setEmployeeLinkError(
+        "Your account is not linked to an employee profile. An administrator must link your user account before workwear sizes can be updated.",
       );
-    } finally {
-      setPageLoading(false);
     }
-  }, []);
+    setPageLoading(profileLoading);
+  }, [profile?.employeeId, profile?.fullName, profile?.employeeRole, profile?.crewId, profile?.shirtSize, profile?.jacketSize, profile?.gloveSize, profile?.pantsSize, profileLoading, user?.id, user?.user_metadata]);
 
   useEffect(() => {
-    void loadProfilePreferences();
+    loadProfilePreferences();
   }, [loadProfilePreferences]);
 
   async function refreshAll() {
     setRefreshing(true);
 
     try {
-      await Promise.all([
-        refreshProfile(),
-        loadProfilePreferences(),
-      ]);
+      await refreshProfile();
     } catch (error) {
       Alert.alert(
         "Unable to refresh",

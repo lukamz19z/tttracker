@@ -12,9 +12,10 @@ test("production tracing is disabled by default and enabled only by the public f
 });
 
 test("production trace flag does not trace ordinary mobile API requests", () => {
-  for (const path of ["/api/mobile/materials/bootstrap", "/api/mobile/quality/bootstrap", "/api/mobile/dashboard-summary"]) {
+  for (const path of ["/api/mobile/materials/bootstrap", "/api/mobile/quality/bootstrap"]) {
     assert.equal(shouldTraceMobileRequest(false, "1", path), false);
   }
+  assert.equal(shouldTraceMobileRequest(false, "1", "/api/mobile/dashboard-summary"), true, "the explicitly scoped dashboard RPC is traceable");
   assert.equal(shouldTraceMobileRequest(true, undefined, "/api/mobile/materials/bootstrap"), true, "development keeps broader diagnostics");
 });
 
@@ -85,7 +86,8 @@ test("production server trace requires its own flag and only accepts the Profile
   assert.match(helper, /process\.env\.TTTRACKER_PERF_TRACE/);
   assert.match(helper, /x-tttracker-trace-id/);
   assert.match(helper, /isSafeMobileTraceId\(id\)/);
-  assert.match(policy, /pathname === PROFILE_MOBILE_TRACE_PATH/);
+  assert.match(policy, /PROFILE_MOBILE_TRACE_PATH/);
+  assert.match(policy, /DASHBOARD_SUMMARY_MOBILE_TRACE_PATH/);
   assert.match(policy, /PROFILE_MOBILE_TRACE_PATH = "\/api\/mobile\/bootstrap"/);
 });
 

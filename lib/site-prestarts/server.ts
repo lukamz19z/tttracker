@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import { getRequestUser } from "@/lib/access/server";
 
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
@@ -85,12 +86,7 @@ export async function requireSitePrestartUser(request: Request) {
 
   const service = createSitePrestartServiceClient();
 
-  const {
-    data: { user },
-    error,
-  } = await service.auth.getUser(token);
-
-  if (error || !user) throw new Error("AUTH_REQUIRED");
+  const user = await getRequestUser(request) as User;
 
   await requirePermission(service, user.id);
   const identity = await identityForUser(service, user);

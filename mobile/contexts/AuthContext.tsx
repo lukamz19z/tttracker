@@ -15,6 +15,7 @@ import {
 
 import { supabase } from "@/lib/supabase";
 import { clearMobileBootstrapCache, getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
+import { logMobilePerf } from "@/lib/perf-trace";
 import { isCurrentProjectGeneration, resolveInitialProjectId } from "@/lib/project-context";
 import { isTransientBackendFailure } from "../../lib/backend-resilience";
 
@@ -34,6 +35,10 @@ export type MobileProfile = {
   crewId: string | null;
   crewNumber: string | null;
   crewName: string | null;
+  shirtSize: string | null;
+  jacketSize: string | null;
+  gloveSize: string | null;
+  pantsSize: string | null;
   projectId: string | null;
   projectName: string | null;
   projectNumber: string | null;
@@ -134,6 +139,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     userId: string;
     promise: Promise<void>;
   } | null>(null);
+  const profileRefreshCountRef = useRef(0);
 
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthContextValue["status"]>("initialising");
@@ -239,6 +245,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
                 crewId: employee?.crewId ?? null,
                 crewNumber: employee?.crewNumber ?? null,
                 crewName: employee?.crewName ?? null,
+                shirtSize: employee?.shirtSize ?? null,
+                jacketSize: employee?.jacketSize ?? null,
+                gloveSize: employee?.gloveSize ?? null,
+                pantsSize: employee?.pantsSize ?? null,
                 projectId: currentSelection.id,
                 projectName: currentSelection.name,
                 projectNumber: currentSelection.projectNumber,
@@ -273,6 +283,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
             crewId: employee?.crewId ?? null,
             crewNumber: employee?.crewNumber ?? null,
             crewName: employee?.crewName ?? null,
+            shirtSize: employee?.shirtSize ?? null,
+            jacketSize: employee?.jacketSize ?? null,
+            gloveSize: employee?.gloveSize ?? null,
+            pantsSize: employee?.pantsSize ?? null,
             projectId: selectedProject?.id ?? null,
             projectName: selectedProject?.name ?? null,
             projectNumber: selectedProject?.projectNumber ?? null,
@@ -363,6 +377,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       return;
     }
 
+    profileRefreshCountRef.current += 1;
+    logMobilePerf("profile-refresh", { module: "profile", operation: "refresh", userId: session.user.id, invocationCount: profileRefreshCountRef.current });
     clearMobileBootstrapCache(session.user.id);
     lastPersistenceTargetRef.current = null;
     await fetchAndApplyProfile(session, true);

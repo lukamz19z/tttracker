@@ -5,7 +5,6 @@ import { deleteQualityDefect } from "@/lib/offline/quality-deletion";
 import { qualityDisplayName } from "../../../lib/quality/display-name";
 import { defectRequiredByDisplay, defectRequiredByState } from "../../../lib/quality/defect-dates";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Image } from "expo-image";
 import {
   useLocalSearchParams, router,
 } from "expo-router";
@@ -39,6 +38,7 @@ import {
 } from "react-native";
 
 import { QualityPhotoPicker } from "@/components/quality/QualityPhotoPicker";
+import { QualitySwipeViewer } from "@/components/quality/QualityEvidenceGallery";
 import { qualityTowerDisplay } from "../../../lib/quality/tower-label";
 import { formatQualityDateTime, qualityCaptureLabel } from "../../../lib/quality/date-time";
 import { QualitySelector } from "@/components/quality/QualitySelector";
@@ -51,7 +51,6 @@ import { useSync } from "@/contexts/SyncContext";
 import {
   cachedQualityDefectDetail,
   cachedQualityMemberCatalog,
-  downloadQualityFile,
   refreshQualityDefectDetail,
   refreshQualityMemberCatalog,
   type QualityMemberCatalogRow,
@@ -90,11 +89,6 @@ type EditState = {
   workImpact: string;
   affectedActivity: string;
   urgencyNote: string;
-};
-
-type Preview = {
-  uri: string;
-  name: string;
 };
 
 type LifecycleMode = "fixed" | "close" | "reopen";
@@ -219,8 +213,7 @@ function DefectDetailContent() {
   >([]);
   const [photoSaving, setPhotoSaving] =
     useState(false);
-  const [preview, setPreview] =
-    useState<Preview | null>(null);
+  const [photoViewerIndex,setPhotoViewerIndex]=useState<number|null>(null);
 
   const towerId = clean(defect?.tower_id);
 
@@ -578,28 +571,7 @@ function DefectDetailContent() {
     finally{setLifecycleSaving(false);}
   }
 
-  async function openFile(file: QualityFile) {
-    try {
-      const uri = await downloadQualityFile(
-        clean(file.id),
-        clean(file.file_name) || "Defect photo",
-      );
-
-      setPreview({
-        uri,
-        name:
-          clean(file.file_name) ||
-          "Defect photo",
-      });
-    } catch (error) {
-      Alert.alert(
-        "Photo could not be opened",
-        error instanceof Error
-          ? error.message
-          : "Unknown error.",
-      );
-    }
-  }
+  function openFile(file: QualityFile) {setPhotoViewerIndex(defectFiles.findIndex(row=>row.id===file.id));}
 
   async function savePhotos() {
     if (!defect || !projectId || !towerId) return;
@@ -1411,32 +1383,7 @@ function DefectDetailContent() {
         </SafeAreaView>
       </Modal>
 
-      <Modal
-        visible={Boolean(preview)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPreview(null)}
-      >
-        <Pressable
-          style={styles.previewBack}
-          onPress={() => setPreview(null)}
-        >
-          <View style={styles.previewInner}>
-            {preview ? (
-              <Image
-                source={{ uri: preview.uri }}
-                style={styles.previewImage}
-                contentFit="contain"
-                accessibilityLabel={preview.name}
-                alt={preview.name}
-              />
-            ) : null}
-            <Text style={styles.previewName}>
-              {preview?.name}
-            </Text>
-          </View>
-        </Pressable>
-      </Modal>
+      {photoViewerIndex!==null?<QualitySwipeViewer photos={defectFiles.map(file=>({id:file.id,role:file.file_role,file}))} initialIndex={Math.max(0,photoViewerIndex)} onClose={()=>setPhotoViewerIndex(null)}/>:null}
     </QualityShell>
   );
 }

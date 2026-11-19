@@ -20,6 +20,10 @@ export type MobileIdentity = {
   crewNumber: string | null;
   crewName: string | null;
   currentProjectId: string | null;
+  shirtSize: string | null;
+  jacketSize: string | null;
+  gloveSize: string | null;
+  pantsSize: string | null;
 };
 
 type EmployeeRow = {
@@ -28,6 +32,10 @@ type EmployeeRow = {
   role: string | null;
   crew_id: string | null;
   current_project_id: string | null;
+  shirt_size: string | null;
+  jacket_size: string | null;
+  glove_size: string | null;
+  pants_size: string | null;
   crews:
     | { id: string; crew_number: string | null; crew_name: string | null }
     | Array<{ id: string; crew_number: string | null; crew_name: string | null }>
@@ -67,6 +75,10 @@ export async function mobileIdentityForUser(
       role,
       crew_id,
       current_project_id,
+      shirt_size,
+      jacket_size,
+      glove_size,
+      pants_size,
       crews(id,crew_number,crew_name)
     `)
     .eq("user_id", userId)
@@ -94,6 +106,10 @@ export async function mobileIdentityForUser(
     crewNumber: clean(crew?.crew_number) || null,
     crewName: clean(crew?.crew_name) || null,
     currentProjectId: employee?.current_project_id ?? null,
+    shirtSize: employee?.shirt_size ?? null,
+    jacketSize: employee?.jacket_size ?? null,
+    gloveSize: employee?.glove_size ?? null,
+    pantsSize: employee?.pants_size ?? null,
   };
 }
 

@@ -58,7 +58,7 @@ export function createServiceClient(): AccessService {
   );
 }
 
-export async function getRequestUser(request: NextRequest) {
+export async function getRequestUser(request: Request) {
   const trace = mobilePerfTrace(request);
   const tokenStartedAt = Date.now();
   const authorization = request.headers.get("authorization") ?? "";

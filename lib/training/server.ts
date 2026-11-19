@@ -7,6 +7,7 @@ import {
   type User,
 
 } from "@supabase/supabase-js";
+import { getRequestUser } from "@/lib/access/server";
 
 
 
@@ -718,37 +719,7 @@ export async function requireTrainingUser(
 
 
 
-  const {
-
-    data: { user },
-
-    error,
-
-  } =
-
-    await service.auth.getUser(
-
-      token,
-
-    );
-
-
-
-  if (
-
-    error ||
-
-    !user
-
-  ) {
-
-    throw new Error(
-
-      "AUTH_REQUIRED",
-
-    );
-
-  }
+  const user = await getRequestUser(request) as User;
 
 
 

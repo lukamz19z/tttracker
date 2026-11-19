@@ -40,6 +40,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAccess } from "@/lib/access";
 import { apiJson } from "@/lib/api/client";
 import { getMyTraining } from "@/lib/api/training";
+import { logMobilePerf } from "@/lib/perf-trace";
 import { supabase } from "@/lib/supabase";
 import type { TrainingRecord } from "@/types/training";
 
@@ -400,6 +401,7 @@ export default function HomeScreen() {
   const personalLoadedForUser = useRef<string | null>(null);
   const notificationsLoadedForUser = useRef<string | null>(null);
   const projectRequestVersion = useRef(0);
+  const dashboardSummaryRequestCount = useRef(0);
   const loadedDashboardProjectId = useRef<string | null>(null);
   const projectDashboardFetchedAt = useRef(0);
   const notificationLoadActive = useRef(false);
@@ -543,7 +545,7 @@ export default function HomeScreen() {
 
         const [vehicleResult, prestartResult] = await Promise.all([
           supabase.from("vehicle_assets")
-            .select("id,vehicle_id,vehicle_rego,rego,make,model,category,project,crew,status")
+            .select("id,vehicle_id,vehicle_rego,make,model,category,project,crew,status")
             .eq("id", assignedVehicleId).maybeSingle(),
           supabase.from("vehicle_prestarts")
             .select("id,vehicle_asset_id,asset_type,asset_label,vehicle_rego,inspected_by_name,prestart_date,created_at,severity,result,fleet_job_number")
@@ -622,6 +624,9 @@ export default function HomeScreen() {
       }
 
       const requestStartedAt = Date.now();
+      dashboardSummaryRequestCount.current += 1;
+      const requestCount = dashboardSummaryRequestCount.current;
+      logMobilePerf("dashboard-summary", { module: "home", operation: "dashboard-summary", projectId, requestCount, source: "network-start" });
       const summary = await apiJson<ProjectDashboardData>(
         `/api/mobile/dashboard-summary?projectId=${encodeURIComponent(projectId)}`,
       );
@@ -636,12 +641,14 @@ export default function HomeScreen() {
         if (__DEV__) console.debug("TTTracker dashboard cache unavailable", { category: cacheError instanceof Error ? cacheError.name : "unknown" });
       }
       if (__DEV__) console.debug("TTTracker Home dashboard summary", {
-        requestCount: 1,
+        requestCount,
         durationMs: Date.now() - requestStartedAt,
         cache: "refreshed",
       });
+      logMobilePerf("dashboard-summary", { module: "home", operation: "dashboard-summary", projectId, requestCount, durationMs: Date.now() - requestStartedAt, source: "network", outcome: "success" });
     } catch (error) {
       if (requestVersion !== projectRequestVersion.current) return;
+      logMobilePerf("dashboard-summary", { module: "home", operation: "dashboard-summary", projectId, requestCount: dashboardSummaryRequestCount.current, outcome: "failure", errorCategory: error instanceof Error ? error.name : "unknown" });
       setProjectError(
         error instanceof Error
           ? error.message

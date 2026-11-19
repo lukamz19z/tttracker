@@ -15,6 +15,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { apiJson, apiUrl } from "@/lib/api/client";
 import { getMobileBootstrap } from "@/lib/api/mobile-bootstrap";
+import { logMobilePerf } from "@/lib/perf-trace";
 
 export type DynamicRole = {
   id: string;
@@ -227,6 +228,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
   const lastServerRefreshRef = useRef(0);
   const latestAccessRef = useRef<AccessMePayload | null>(null);
   const latestBootstrapRef = useRef<BootstrapPayload | null>(null);
+  const approvalCountsRequestRef = useRef<{ userId: string; promise: Promise<ApprovalCounts> } | null>(null);
+  const accessSnapshotLoadCountRef = useRef(0);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -301,6 +304,8 @@ export function AccessProvider({ children }: PropsWithChildren) {
     }
     if (mountedRef.current) setError(null);
     const startedAt = Date.now();
+    accessSnapshotLoadCountRef.current += 1;
+    logMobilePerf("access-snapshot", { module: "session", operation: "access-snapshot", source: "bootstrap-start", userId, invocationCount: accessSnapshotLoadCountRef.current, refresh: forceBootstrap ? "explicit" : "normal" });
     if (__DEV__) console.debug("TTTracker access refresh", { url: apiUrl("/api/mobile/bootstrap") });
 
     const requestedUserId = userId;
@@ -318,10 +323,21 @@ export function AccessProvider({ children }: PropsWithChildren) {
       const access = accessFromBootstrap(bootstrap);
       applyAccess(access);
       applyBootstrap(bootstrap);
+      logMobilePerf("access-snapshot", { module: "session", operation: "access-snapshot", source: "bootstrap", userId, durationMs: Date.now() - startedAt, permissionCount: bootstrap.permissions?.length ?? 0, projectCount: bootstrap.projects?.length ?? 0, outcome: "success" });
+      logMobilePerf("navigation-permission-resolution", { module: "navigation", operation: "permission-resolution", source: "bootstrap-memory", permissionCount: bootstrap.permissions?.length ?? 0, projectCount: bootstrap.projects?.length ?? 0 });
 
       // Approval badges are secondary navigation decoration. Fetch them after
       // the shell's permissions, projects and navigation have been applied.
-      void apiJson<ApprovalCounts>("/api/mobile/bootstrap/approval-counts")
+      const pendingApprovalCounts = approvalCountsRequestRef.current?.userId === requestedUserId
+        ? approvalCountsRequestRef.current.promise
+        : apiJson<ApprovalCounts>("/api/mobile/bootstrap/approval-counts");
+      if (approvalCountsRequestRef.current?.promise !== pendingApprovalCounts) {
+        const tracked = pendingApprovalCounts.finally(() => {
+          if (approvalCountsRequestRef.current?.promise === tracked) approvalCountsRequestRef.current = null;
+        });
+        approvalCountsRequestRef.current = { userId: requestedUserId, promise: tracked };
+      }
+      void (approvalCountsRequestRef.current?.promise ?? pendingApprovalCounts)
         .then((counts) => {
           if (mountedRef.current && activeUserIdRef.current === requestedUserId) {
             setApprovalCounts(counts);
@@ -353,6 +369,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       if (operational) console.warn("TTTracker access refresh unavailable:", message);
       else console.error("TTTracker access refresh failed:", refreshError);
       if (__DEV__) console.debug("TTTracker access refresh fallback", { durationMs: Date.now() - startedAt, cachedAccessRetained });
+      logMobilePerf("access-snapshot", { module: "session", operation: "access-snapshot", source: "bootstrap", userId, durationMs: Date.now() - startedAt, outcome: "failure", errorCategory: refreshError instanceof Error ? refreshError.name : "unknown", cachedAccessRetained });
       setStale(cachedAccessRetained);
       setError(cachedAccessRetained ? null : message);
     } finally {
@@ -422,6 +439,7 @@ export function AccessProvider({ children }: PropsWithChildren) {
       if (cached) {
         applyAccess(cached.access);
         applyBootstrap(cached.bootstrap);
+        logMobilePerf("navigation-permission-resolution", { module: "navigation", operation: "permission-resolution", source: "memory-cache", permissionCount: normaliseMobilePermissions(cached.access).length, projectCount: normaliseProjectIds(cached.access).length });
         setLoading(false);
 
         const savedAt = new Date(cached.savedAt).getTime();

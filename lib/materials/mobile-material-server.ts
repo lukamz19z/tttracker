@@ -1,4 +1,5 @@
-import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import { type SupabaseClient, type User } from "@supabase/supabase-js";
+import { createServiceClient, getRequestUser } from "@/lib/access/server";
 
 type ServiceClient = SupabaseClient;
 
@@ -6,12 +7,6 @@ export type MobileMaterialContext = {
   service: ServiceClient;
   user: User;
 };
-
-function requiredEnv(name: string) {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Missing environment variable: ${name}`);
-  return value;
-}
 
 export function cleanMaterialValue(value: unknown) {
   return String(value ?? "").trim();
@@ -103,34 +98,13 @@ export async function requireMobileMaterialUser(
     throw err;
   }
 
-  const supabaseUrl = requiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const anonKey = requiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
-  const serviceKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
-
-  const authClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-
-  const {
-    data: { user },
-    error: userError,
-  } = await authClient.auth.getUser(token);
-
-  if (userError || !user) {
-    const err = new Error("Your TTTracker session has expired. Sign in again.");
-    (err as Error & { status?: number }).status = 401;
-    throw err;
-  }
-
-  const service: ServiceClient = createClient(supabaseUrl, serviceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const user = await getRequestUser(request);
+  const service: ServiceClient = createServiceClient();
 
   await requireMaterialPermission(service, user.id);
   await requireProjectAccess(service, user.id, projectId);
 
-  return { service, user };
+  return { service, user: user as User };
 }
 
 export function mobileMaterialApiError(error: unknown) {
