@@ -1,0 +1,2918 @@
+{
+  "datasetKey": "BC-HLW-VSL9-GMK5220-REV-A-REV-B",
+  "studyReference": {
+    "projectName": "HumeLink West",
+    "projectNumber": "P.26.0002",
+    "towerType": "VSL +9",
+    "crane": "Grove GMK5220",
+    "counterweightT": 41,
+    "workbookOutriggerSpanM": {
+      "x": 8.557,
+      "y": 8.1
+    },
+    "pdfChartOutriggerSpanM": {
+      "x": 8.55,
+      "y": 8.1
+    },
+    "padM": {
+      "width": 2,
+      "length": 2
+    },
+    "allowableGroundPressureKpa": 160,
+    "coordinateGeometryStatus": "incomplete; no OR1-OR4 or slew-centre coordinates inferred"
+  },
+  "method": {
+    "boxEffectiveLoadFactor": 0.75,
+    "pick": {
+      "main": 0.6,
+      "auxiliary": 0.6
+    },
+    "rotate": {
+      "main": 0.6,
+      "auxiliary": 0.6
+    },
+    "upendPlace": {
+      "main": 1,
+      "auxiliary": 0
+    },
+    "overheadKg": {
+      "main": {
+        "hook": 600,
+        "rope": 180,
+        "attachment": 60,
+        "rigging": 140,
+        "total": 980
+      },
+      "auxiliary": {
+        "hook": 300,
+        "rope": 90,
+        "attachment": 60,
+        "rigging": 120,
+        "total": 570
+      }
+    }
+  },
+  "charts": [
+    {
+      "key": "45.36 m main boom",
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "windRestriction": "Maximum permitted windspeed 12 m/s for selected chart configuration in source PDF",
+      "sourcePage": "PDF p. 8",
+      "points": [
+        {
+          "radiusM": 20,
+          "capacityT": 18.8
+        },
+        {
+          "radiusM": 26,
+          "capacityT": 11.4
+        }
+      ]
+    },
+    {
+      "key": "63.62 m main boom",
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "windRestriction": "Maximum permitted windspeed 10 m/s for highlighted 63.62 m configuration in source PDF",
+      "sourcePage": "PDF p. 8",
+      "points": [
+        {
+          "radiusM": 20,
+          "capacityT": 16.2
+        },
+        {
+          "radiusM": 22,
+          "capacityT": 15.3
+        }
+      ]
+    },
+    {
+      "key": "68.00 m main boom + 12 m fly",
+      "boomConfiguration": "68.00 m main boom + 12 m fly",
+      "boomLengthM": 68,
+      "flyJib": "12 m swingaway, 5 degree offset",
+      "windRestriction": "Maximum permitted windspeed 8 m/s for highlighted fly configuration in source PDF",
+      "sourcePage": "PDF p. 9",
+      "points": [
+        {
+          "radiusM": 20,
+          "capacityT": 7.4
+        },
+        {
+          "radiusM": 22,
+          "capacityT": 7.4
+        }
+      ]
+    }
+  ],
+  "sourceDocuments": [
+    {
+      "fileName": "BCC-P.25.002-HLW-LS-VSL9-GMK5220-REV-A.xlsm",
+      "revision": "A",
+      "sourceType": "BC lift-study workbook",
+      "sheets": [
+        "Inputs",
+        "Lifting Sum.",
+        "Lift detail sheets"
+      ]
+    },
+    {
+      "fileName": "BCC-HLW-VSL9-GMK5220-LS-REV-B.pdf",
+      "revision": "B",
+      "sourceType": "BC lift-study PDF; appended manufacturer load-chart reproductions",
+      "pages": [
+        8,
+        9
+      ]
+    }
+  ],
+  "lifts": [
+    {
+      "liftNumber": "1A/1B",
+      "sequenceNo": 1,
+      "description": "Leg Halves",
+      "liftType": "Erection",
+      "towerSegments": "Legs + Body Ext 1",
+      "elements": [
+        {
+          "description": "+5B Leg X2",
+          "massKg": 3440,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 3440,
+      "expectedEffectiveElementMassKg": 3440,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 12,
+        "widthM": 11.035,
+        "heightM": 5.517
+      },
+      "installedHeightM": 12,
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "boomSequence": "1+0.5+0.5+0.5+0.5+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 25.517,
+      "chartRadiusM": 26,
+      "chartCapacityT": 11.4,
+      "windLimitMps": 12,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 25.517
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 25.517
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 25.517
+        }
+      ],
+      "sourceSheet": "Lift - 1A, 1B",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 4.42,
+        "capacityPct": 38.771929824561404,
+        "chartRadiusM": 26,
+        "chartCapacityT": 11.4
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 42.6,
+          "pressureTonnesPerM2": 10.65,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 27.54,
+          "pressureTonnesPerM2": 6.885,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 22.75,
+          "pressureTonnesPerM2": 5.6875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 37.9,
+          "pressureTonnesPerM2": 9.475,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 11.8,
+          "pressureTonnesPerM2": 2.95,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 24.7,
+          "pressureTonnesPerM2": 6.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 12.5,
+          "pressureTonnesPerM2": 3.125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 12.5,
+          "pressureTonnesPerM2": 3.125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 24.7,
+          "pressureTonnesPerM2": 6.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 11.8,
+          "pressureTonnesPerM2": 2.95,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 37.9,
+          "pressureTonnesPerM2": 9.475,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 22.7,
+          "pressureTonnesPerM2": 5.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 27.5,
+          "pressureTonnesPerM2": 6.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 42.68,
+          "pressureTonnesPerM2": 10.67,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ],
+      "sourceDescription": "Leg Halve"
+    },
+    {
+      "liftNumber": "2",
+      "sequenceNo": 2,
+      "description": "Extension Body 1 + Extension Body 2 Box",
+      "liftType": "Box",
+      "towerSegments": "Extension Body 1 + Extension Body 2 Box",
+      "elements": [
+        {
+          "description": "Body Ext 1",
+          "massKg": 2830,
+          "sequenceNo": 1
+        },
+        {
+          "description": "Body Ext 2",
+          "massKg": 4030,
+          "sequenceNo": 2
+        }
+      ],
+      "rawElementMassKg": 6860,
+      "expectedEffectiveElementMassKg": 5145,
+      "effectiveLoadFactor": 0.75,
+      "dimensions": {
+        "lengthM": 9,
+        "widthM": 11,
+        "heightM": 11
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "boomSequence": "1+0.5+0.5+0.5+0.5+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 18.8,
+      "windLimitMps": 12,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 2",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 6.125,
+        "capacityPct": 32.57978723404255,
+        "chartRadiusM": 20,
+        "chartCapacityT": 18.8
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 35.97,
+          "pressureTonnesPerM2": 8.9925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 27.6,
+          "pressureTonnesPerM2": 6.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 32.1,
+          "pressureTonnesPerM2": 8.025,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 17.2,
+          "pressureTonnesPerM2": 4.3,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.38,
+          "pressureTonnesPerM2": 6.095,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.2,
+          "pressureTonnesPerM2": 6.55,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 19.6,
+          "pressureTonnesPerM2": 4.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 19.6,
+          "pressureTonnesPerM2": 4.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.27,
+          "pressureTonnesPerM2": 6.5675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.3,
+          "pressureTonnesPerM2": 6.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 17.7,
+          "pressureTonnesPerM2": 4.425,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 32.13,
+          "pressureTonnesPerM2": 8.0325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 27.64,
+          "pressureTonnesPerM2": 6.91,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 35.97,
+          "pressureTonnesPerM2": 8.9925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "3",
+      "sequenceNo": 3,
+      "description": "Extension Body 1 + Extension Body 2",
+      "liftType": "Erection",
+      "towerSegments": "Extension Body 1 + Extension Body 2 ",
+      "elements": [
+        {
+          "description": "Body Ext 1",
+          "massKg": 2830,
+          "sequenceNo": 1
+        },
+        {
+          "description": "Body Ext 2",
+          "massKg": 4030,
+          "sequenceNo": 2
+        }
+      ],
+      "rawElementMassKg": 6860,
+      "expectedEffectiveElementMassKg": 6860,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 9,
+        "widthM": 11,
+        "heightM": 11
+      },
+      "installedHeightM": 21,
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "boomSequence": "1+0.5+0.5+0.5+0.5+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 18.8,
+      "windLimitMps": 12,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 3",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 7.840000000000001,
+        "capacityPct": 41.70212765957447,
+        "chartRadiusM": 20,
+        "chartCapacityT": 18.8
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 39.7,
+          "pressureTonnesPerM2": 9.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 28.3,
+          "pressureTonnesPerM2": 7.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 23.86,
+          "pressureTonnesPerM2": 5.965,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 35.3,
+          "pressureTonnesPerM2": 8.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 15.5,
+          "pressureTonnesPerM2": 3.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.7,
+          "pressureTonnesPerM2": 6.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.3,
+          "pressureTonnesPerM2": 6.575,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 17.2,
+          "pressureTonnesPerM2": 4.3,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 17.14,
+          "pressureTonnesPerM2": 4.285,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.3,
+          "pressureTonnesPerM2": 6.575,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.7,
+          "pressureTonnesPerM2": 6.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 15.5,
+          "pressureTonnesPerM2": 3.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 35.3,
+          "pressureTonnesPerM2": 8.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 23.86,
+          "pressureTonnesPerM2": 5.965,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 28.29,
+          "pressureTonnesPerM2": 7.0725,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 39.73,
+          "pressureTonnesPerM2": 9.9325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "4",
+      "sequenceNo": 4,
+      "description": "Common Body 1+ Common Body 2 Box",
+      "liftType": "Box",
+      "towerSegments": "Common Body 1+ Common Body 2 Box",
+      "elements": [
+        {
+          "description": "Common Body 2",
+          "massKg": 4360,
+          "sequenceNo": 1
+        },
+        {
+          "description": "Common Body 1",
+          "massKg": 5275,
+          "sequenceNo": 2
+        }
+      ],
+      "rawElementMassKg": 9635,
+      "expectedEffectiveElementMassKg": 7226.25,
+      "effectiveLoadFactor": 0.75,
+      "dimensions": {
+        "lengthM": 15.602,
+        "widthM": 9.74,
+        "heightM": 9.74
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "boomSequence": "1+0.5+0.5+0.5+0.5+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 18.8,
+      "windLimitMps": 12,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 4",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 8.20625,
+        "capacityPct": 43.65026595744681,
+        "chartRadiusM": 20,
+        "chartCapacityT": 18.8
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 40.5,
+          "pressureTonnesPerM2": 10.125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 23.88,
+          "pressureTonnesPerM2": 5.97,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 36,
+          "pressureTonnesPerM2": 9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 15,
+          "pressureTonnesPerM2": 3.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.8,
+          "pressureTonnesPerM2": 6.2,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.4,
+          "pressureTonnesPerM2": 6.6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 16.6,
+          "pressureTonnesPerM2": 4.15,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 16.6,
+          "pressureTonnesPerM2": 4.15,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.4,
+          "pressureTonnesPerM2": 6.6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.8,
+          "pressureTonnesPerM2": 6.2,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 15,
+          "pressureTonnesPerM2": 3.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 36,
+          "pressureTonnesPerM2": 9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 23.9,
+          "pressureTonnesPerM2": 5.975,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 40.5,
+          "pressureTonnesPerM2": 10.125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "5",
+      "sequenceNo": 5,
+      "description": "Common Body 1+ Common Body 2",
+      "liftType": "Erection",
+      "towerSegments": "Common Body 1+ Common Body 2",
+      "elements": [
+        {
+          "description": "Common Body 2",
+          "massKg": 4360,
+          "sequenceNo": 1
+        },
+        {
+          "description": "Common Body 1",
+          "massKg": 5375,
+          "sequenceNo": 2
+        }
+      ],
+      "rawElementMassKg": 9735,
+      "expectedEffectiveElementMassKg": 9735,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 15.602,
+        "widthM": 9.74,
+        "heightM": 9.74
+      },
+      "installedHeightM": 36.602000000000004,
+      "boomConfiguration": "45.36 m main boom",
+      "boomLengthM": 45.36,
+      "flyJib": null,
+      "boomSequence": "1+0.5+0.5+0.5+0.5+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 18.8,
+      "windLimitMps": 12,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 5",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 10.715,
+        "capacityPct": 56.994680851063826,
+        "chartRadiusM": 20,
+        "chartCapacityT": 18.8
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 46,
+          "pressureTonnesPerM2": 11.5,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 29.37,
+          "pressureTonnesPerM2": 7.3425,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 40.7,
+          "pressureTonnesPerM2": 10.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 11.76,
+          "pressureTonnesPerM2": 2.94,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 25.3,
+          "pressureTonnesPerM2": 6.325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.5,
+          "pressureTonnesPerM2": 6.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 13,
+          "pressureTonnesPerM2": 3.25,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 13,
+          "pressureTonnesPerM2": 3.25,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.5,
+          "pressureTonnesPerM2": 6.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 25.3,
+          "pressureTonnesPerM2": 6.325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 11.76,
+          "pressureTonnesPerM2": 2.94,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 40.7,
+          "pressureTonnesPerM2": 10.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 29.37,
+          "pressureTonnesPerM2": 7.3425,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 46,
+          "pressureTonnesPerM2": 11.5,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "6",
+      "sequenceNo": 6,
+      "description": "Super Structure 3 Box",
+      "liftType": "Box",
+      "towerSegments": "Bottom Super",
+      "elements": [
+        {
+          "description": "Super Structure 3",
+          "massKg": 7245,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 7245,
+      "expectedEffectiveElementMassKg": 5433.75,
+      "effectiveLoadFactor": 0.75,
+      "dimensions": {
+        "lengthM": 8.928999999999998,
+        "widthM": 4,
+        "heightM": 4
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "boomSequence": "1+1+1+1+1+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 16.2,
+      "windLimitMps": 10,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 6",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 6.41375,
+        "capacityPct": 39.59104938271605,
+        "chartRadiusM": 20,
+        "chartCapacityT": 16.2
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 32.6,
+          "pressureTonnesPerM2": 8.15,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 28,
+          "pressureTonnesPerM2": 7,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 28.7,
+          "pressureTonnesPerM2": 7.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 20.3,
+          "pressureTonnesPerM2": 5.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.93,
+          "pressureTonnesPerM2": 6.2325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 22.1,
+          "pressureTonnesPerM2": 5.525,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 23.2,
+          "pressureTonnesPerM2": 5.8,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 21.8,
+          "pressureTonnesPerM2": 5.45,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 20.3,
+          "pressureTonnesPerM2": 5.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 27.2,
+          "pressureTonnesPerM2": 6.8,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 31.6,
+          "pressureTonnesPerM2": 7.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 32.7,
+          "pressureTonnesPerM2": 8.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "7",
+      "sequenceNo": 7,
+      "description": "Super Structure 3 + Bottom Crossarms",
+      "liftType": "Erection",
+      "towerSegments": "Bottom Super + X-arms",
+      "elements": [
+        {
+          "description": "Super Structure 3",
+          "massKg": 7245,
+          "sequenceNo": 1
+        },
+        {
+          "description": "Bottom Crossarms x 2",
+          "massKg": 4865,
+          "sequenceNo": 2
+        }
+      ],
+      "rawElementMassKg": 12110,
+      "expectedEffectiveElementMassKg": 12110,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 8.928999999999998,
+        "widthM": 25.8,
+        "heightM": 4
+      },
+      "installedHeightM": 45.531000000000006,
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "boomSequence": "1+1+1+1+1+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 16.2,
+      "windLimitMps": 10,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 7",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 13.09,
+        "capacityPct": 80.80246913580247,
+        "chartRadiusM": 20,
+        "chartCapacityT": 16.2
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 47.29,
+          "pressureTonnesPerM2": 11.8225,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 31.6,
+          "pressureTonnesPerM2": 7.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24.45,
+          "pressureTonnesPerM2": 6.1125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 40.12,
+          "pressureTonnesPerM2": 10.03,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 11.63,
+          "pressureTonnesPerM2": 2.9075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 27.3,
+          "pressureTonnesPerM2": 6.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 11.5,
+          "pressureTonnesPerM2": 2.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 11.5,
+          "pressureTonnesPerM2": 2.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 27.3,
+          "pressureTonnesPerM2": 6.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 11.6,
+          "pressureTonnesPerM2": 2.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 40.2,
+          "pressureTonnesPerM2": 10.05,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24.5,
+          "pressureTonnesPerM2": 6.125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 31.6,
+          "pressureTonnesPerM2": 7.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 47.3,
+          "pressureTonnesPerM2": 11.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "8",
+      "sequenceNo": 8,
+      "description": "Middle Super Box",
+      "liftType": "Box",
+      "towerSegments": "Middle Super ",
+      "elements": [
+        {
+          "description": "Super Structure 2",
+          "massKg": 5940,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 5940,
+      "expectedEffectiveElementMassKg": 4455,
+      "effectiveLoadFactor": 0.75,
+      "dimensions": {
+        "lengthM": 11.25,
+        "widthM": 3.416,
+        "heightM": 3.416
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "boomSequence": "1+1+1+1+1+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 16.2,
+      "windLimitMps": 10,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 8",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 5.4350000000000005,
+        "capacityPct": 33.54938271604939,
+        "chartRadiusM": 20,
+        "chartCapacityT": 16.2
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 30.5,
+          "pressureTonnesPerM2": 7.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 27.5,
+          "pressureTonnesPerM2": 6.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 21.6,
+          "pressureTonnesPerM2": 5.4,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.6,
+          "pressureTonnesPerM2": 6.15,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.6,
+          "pressureTonnesPerM2": 6.65,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.6,
+          "pressureTonnesPerM2": 6.65,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.6,
+          "pressureTonnesPerM2": 6.15,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 21.6,
+          "pressureTonnesPerM2": 5.4,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 27.5,
+          "pressureTonnesPerM2": 6.875,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 30.5,
+          "pressureTonnesPerM2": 7.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "9",
+      "sequenceNo": 9,
+      "description": "Middle Super",
+      "liftType": "Erection",
+      "towerSegments": "Middle Super ",
+      "elements": [
+        {
+          "description": "Super Structure 2",
+          "massKg": 5940,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 5940,
+      "expectedEffectiveElementMassKg": 5940,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 11.25,
+        "widthM": 3.416,
+        "heightM": 3.416
+      },
+      "installedHeightM": 56.781000000000006,
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "boomSequence": "1+1+1+1+1+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 16.2,
+      "windLimitMps": 10,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 9",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 6.920000000000001,
+        "capacityPct": 42.71604938271605,
+        "chartRadiusM": 20,
+        "chartCapacityT": 16.2
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 33.8,
+          "pressureTonnesPerM2": 8.45,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 28.3,
+          "pressureTonnesPerM2": 7.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24.11,
+          "pressureTonnesPerM2": 6.0275,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 29.6,
+          "pressureTonnesPerM2": 7.4,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 19.66,
+          "pressureTonnesPerM2": 4.915,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 25.1,
+          "pressureTonnesPerM2": 6.275,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 21.3,
+          "pressureTonnesPerM2": 5.325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 21.3,
+          "pressureTonnesPerM2": 5.325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 25.1,
+          "pressureTonnesPerM2": 6.275,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 19.7,
+          "pressureTonnesPerM2": 4.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 29.6,
+          "pressureTonnesPerM2": 7.4,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24.11,
+          "pressureTonnesPerM2": 6.0275,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 28.3,
+          "pressureTonnesPerM2": 7.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 33.8,
+          "pressureTonnesPerM2": 8.45,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "10A/10B",
+      "sequenceNo": 10,
+      "description": "Middle Crossarm Each",
+      "liftType": "Erection",
+      "towerSegments": "Middle Crossarm Each",
+      "elements": [
+        {
+          "description": "Middle Crossarms",
+          "massKg": 3462.5,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 3462.5,
+      "expectedEffectiveElementMassKg": 3462.5,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 3,
+        "widthM": 11.9,
+        "heightM": 3
+      },
+      "installedHeightM": 56.781000000000006,
+      "boomConfiguration": "63.62 m main boom",
+      "boomLengthM": 63.62,
+      "flyJib": null,
+      "boomSequence": "1+1+1+1+1+0.5",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 21.708,
+      "chartRadiusM": 22,
+      "chartCapacityT": 15.3,
+      "windLimitMps": 10,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 21.708
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 21.708
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 21.708
+        }
+      ],
+      "sourceSheet": "Lift - 10A, 10B",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 4.4425,
+        "capacityPct": 29.0359477124183,
+        "chartRadiusM": 22,
+        "chartCapacityT": 15.3
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 26.96,
+          "pressureTonnesPerM2": 6.74,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 25.33,
+          "pressureTonnesPerM2": 6.3325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 22.9,
+          "pressureTonnesPerM2": 5.725,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.2,
+          "pressureTonnesPerM2": 6.05,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.5,
+          "pressureTonnesPerM2": 6.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 25.27,
+          "pressureTonnesPerM2": 6.3175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 25.27,
+          "pressureTonnesPerM2": 6.3175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.6,
+          "pressureTonnesPerM2": 6.65,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.23,
+          "pressureTonnesPerM2": 6.0575,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 22.9,
+          "pressureTonnesPerM2": 5.725,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 25.33,
+          "pressureTonnesPerM2": 6.3325,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 26.96,
+          "pressureTonnesPerM2": 6.74,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "11",
+      "sequenceNo": 11,
+      "description": "Top Super Box",
+      "liftType": "Box",
+      "towerSegments": "Top Super",
+      "elements": [
+        {
+          "description": "Super Structure 1",
+          "massKg": 3940,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 3940,
+      "expectedEffectiveElementMassKg": 2955,
+      "effectiveLoadFactor": 0.75,
+      "dimensions": {
+        "lengthM": 11.625,
+        "widthM": 2.7,
+        "heightM": 2.7
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "68.00 m main boom + 12 m fly",
+      "boomLengthM": 68,
+      "flyJib": "12 m swingaway; 5 degree offset",
+      "boomSequence": "1+1+1+1+1+1",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 7.4,
+      "windLimitMps": 8,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 11",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 3.935,
+        "capacityPct": 53.17567567567567,
+        "chartRadiusM": 20,
+        "chartCapacityT": 7.4
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 27.3,
+          "pressureTonnesPerM2": 6.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24.15,
+          "pressureTonnesPerM2": 6.0375,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 25.27,
+          "pressureTonnesPerM2": 6.3175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 23.3,
+          "pressureTonnesPerM2": 5.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.4,
+          "pressureTonnesPerM2": 6.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 25.9,
+          "pressureTonnesPerM2": 6.475,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 25.9,
+          "pressureTonnesPerM2": 6.475,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.4,
+          "pressureTonnesPerM2": 6.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 23.3,
+          "pressureTonnesPerM2": 5.825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 25.27,
+          "pressureTonnesPerM2": 6.3175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24.15,
+          "pressureTonnesPerM2": 6.0375,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 27.25,
+          "pressureTonnesPerM2": 6.8125,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 28.4,
+          "pressureTonnesPerM2": 7.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "12",
+      "sequenceNo": 12,
+      "description": "Top Super",
+      "liftType": "Erection",
+      "towerSegments": "Top Super ",
+      "elements": [
+        {
+          "description": "Super Structure 1",
+          "massKg": 3940,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 3940,
+      "expectedEffectiveElementMassKg": 3940,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 11.625,
+        "widthM": 2.7,
+        "heightM": 2.7
+      },
+      "installedHeightM": 68.406,
+      "boomConfiguration": "68.00 m main boom + 12 m fly",
+      "boomLengthM": 68,
+      "flyJib": "12 m swingaway; 5 degree offset",
+      "boomSequence": "1+1+1+1+1+1",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 20,
+      "chartRadiusM": 20,
+      "chartCapacityT": 7.4,
+      "windLimitMps": 8,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 20
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 20
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 20
+        }
+      ],
+      "sourceSheet": "Lift - 12",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 4.92,
+        "capacityPct": 66.48648648648648,
+        "chartRadiusM": 20,
+        "chartCapacityT": 7.4
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 30.5,
+          "pressureTonnesPerM2": 7.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 27.7,
+          "pressureTonnesPerM2": 6.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24.2,
+          "pressureTonnesPerM2": 6.05,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 22,
+          "pressureTonnesPerM2": 5.5,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 24.7,
+          "pressureTonnesPerM2": 6.175,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 24.3,
+          "pressureTonnesPerM2": 6.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 24.3,
+          "pressureTonnesPerM2": 6.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 24.73,
+          "pressureTonnesPerM2": 6.1825,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 22,
+          "pressureTonnesPerM2": 5.5,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 26.94,
+          "pressureTonnesPerM2": 6.735,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24.2,
+          "pressureTonnesPerM2": 6.05,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 27.8,
+          "pressureTonnesPerM2": 6.95,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 30.5,
+          "pressureTonnesPerM2": 7.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "13A/13B",
+      "sequenceNo": 13,
+      "description": "Top Crossarms Each",
+      "liftType": "Erection",
+      "towerSegments": "Top Crossarms Each",
+      "elements": [
+        {
+          "description": "Top Crossarms Each",
+          "massKg": 4460,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 4460,
+      "expectedEffectiveElementMassKg": 4460,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 2.7,
+        "widthM": 12,
+        "heightM": 2.7
+      },
+      "installedHeightM": 0,
+      "boomConfiguration": "68.00 m main boom + 12 m fly",
+      "boomLengthM": 68,
+      "flyJib": "12 m swingaway; 5 degree offset",
+      "boomSequence": "1+1+1+1+1+1",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 21.35,
+      "chartRadiusM": 22,
+      "chartCapacityT": 7.4,
+      "windLimitMps": 8,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 21.35
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 21.35
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 21.35
+        }
+      ],
+      "sourceSheet": "Lift - 13A, 13B",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 5.44,
+        "capacityPct": 73.51351351351352,
+        "chartRadiusM": 22,
+        "chartCapacityT": 7.4
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 31.6,
+          "pressureTonnesPerM2": 7.9,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 30.7,
+          "pressureTonnesPerM2": 7.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24.2,
+          "pressureTonnesPerM2": 6.05,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 21.4,
+          "pressureTonnesPerM2": 5.35,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 22.5,
+          "pressureTonnesPerM2": 5.625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 27,
+          "pressureTonnesPerM2": 6.75,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 24.3,
+          "pressureTonnesPerM2": 6.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 28,
+          "pressureTonnesPerM2": 7,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 23.4,
+          "pressureTonnesPerM2": 5.85,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 27.85,
+          "pressureTonnesPerM2": 6.9625,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 24.9,
+          "pressureTonnesPerM2": 6.225,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 25,
+          "pressureTonnesPerM2": 6.25,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 26.7,
+          "pressureTonnesPerM2": 6.675,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 23.4,
+          "pressureTonnesPerM2": 5.85,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 30.8,
+          "pressureTonnesPerM2": 7.7,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    },
+    {
+      "liftNumber": "14A/14B",
+      "sequenceNo": 14,
+      "description": "Earth Peak Each",
+      "liftType": "Erection",
+      "towerSegments": "Earthwires ",
+      "elements": [
+        {
+          "description": "Earth Peaks",
+          "massKg": 1122.5,
+          "sequenceNo": 1
+        }
+      ],
+      "rawElementMassKg": 1122.5,
+      "expectedEffectiveElementMassKg": 1122.5,
+      "effectiveLoadFactor": 1,
+      "dimensions": {
+        "lengthM": 2.7,
+        "widthM": 10.2,
+        "heightM": 2.7
+      },
+      "installedHeightM": 68.406,
+      "boomConfiguration": "68.00 m main boom + 12 m fly",
+      "boomLengthM": 68,
+      "flyJib": "12 m swingaway; 5 degree offset",
+      "boomSequence": "1+1+1+1+1+1",
+      "nominalRadiusM": 20,
+      "maximumRadiusM": 21.35,
+      "chartRadiusM": 22,
+      "chartCapacityT": 7.4,
+      "windLimitMps": 8,
+      "hookNomination": "Main hook; auxiliary share participates in Pick and Rotate only",
+      "phases": [
+        {
+          "key": "pick",
+          "name": "Pick",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 1,
+          "radiusM": 21.35
+        },
+        {
+          "key": "rotate",
+          "name": "Rotate",
+          "mainLoadShare": 0.6,
+          "auxiliaryLoadShare": 0.6,
+          "sequenceNo": 2,
+          "radiusM": 21.35
+        },
+        {
+          "key": "upend-place",
+          "name": "Upend / Place",
+          "mainLoadShare": 1,
+          "auxiliaryLoadShare": 0,
+          "sequenceNo": 3,
+          "radiusM": 21.35
+        }
+      ],
+      "sourceSheet": "Lift - 14A, 14B",
+      "sourceSheetRevision": "A",
+      "summary": {
+        "totalLoadT": 2.1025,
+        "capacityPct": 28.412162162162165,
+        "chartRadiusM": 22,
+        "chartCapacityT": 7.4
+      },
+      "externalReferenceReactions": [
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR1",
+          "reactionTonnes": 24.3,
+          "pressureTonnesPerM2": 6.075,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR1",
+          "reactionTonnes": 26.3,
+          "pressureTonnesPerM2": 6.575,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR2",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR2",
+          "reactionTonnes": 22.12,
+          "pressureTonnesPerM2": 5.53,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR3",
+          "reactionTonnes": 25.7,
+          "pressureTonnesPerM2": 6.425,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR3",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR1",
+          "support": "OR4",
+          "reactionTonnes": 26.9,
+          "pressureTonnesPerM2": 6.725,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR2",
+          "support": "OR4",
+          "reactionTonnes": 28.8,
+          "pressureTonnesPerM2": 7.2,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR1",
+          "reactionTonnes": 28.8,
+          "pressureTonnesPerM2": 7.2,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR1",
+          "reactionTonnes": 26.9,
+          "pressureTonnesPerM2": 6.725,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR2",
+          "reactionTonnes": 23.7,
+          "pressureTonnesPerM2": 5.925,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR2",
+          "reactionTonnes": 25.7,
+          "pressureTonnesPerM2": 6.425,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR3",
+          "reactionTonnes": 22.12,
+          "pressureTonnesPerM2": 5.53,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR3",
+          "reactionTonnes": 24,
+          "pressureTonnesPerM2": 6,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR3",
+          "support": "OR4",
+          "reactionTonnes": 26.3,
+          "pressureTonnesPerM2": 6.575,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        },
+        {
+          "boomPosition": "main_boom_over_OR4",
+          "support": "OR4",
+          "reactionTonnes": 24.4,
+          "pressureTonnesPerM2": 6.1,
+          "padAreaM2": 4,
+          "origin": "external_reference"
+        }
+      ]
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import {
   FolderKanban,
   HardHat,
   LayoutDashboard,
+  Scale,
   Plus,
   ReceiptText,
   RefreshCw,
@@ -116,6 +117,14 @@ const MODULES: ModuleCard[] = [
     icon: <ShieldCheck size={21} />,
     accent: "rose",
     permissionPrefixes: ["tt.hseq", "tt.safety"],
+  },
+  {
+    title: "Lift Engineering",
+    description: "Manage crane data, rigging, load charts, tower templates and project lift studies.",
+    href: "/lift-engineering",
+    icon: <Scale size={21} />,
+    accent: "blue",
+    permissionPrefixes: ["tt.lift_engineering"],
   },
   {
     title: "Create Project",

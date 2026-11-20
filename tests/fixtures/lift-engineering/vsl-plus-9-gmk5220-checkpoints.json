@@ -1,0 +1,23 @@
+{
+  "study": {
+    "tower": "VSL +9",
+    "crane": "Grove GMK5220",
+    "counterweightT": 41,
+    "outriggerSpanM": { "x": 8.557, "y": 8.1 },
+    "padM": { "x": 2, "y": 2 },
+    "allowableGroundPressureKpa": 160
+  },
+  "workbookMethodInputs": {
+    "boxEffectiveLoadFactor": 0.75,
+    "pickLoadShare": { "main": 0.6, "auxiliary": 0.6 },
+    "rotateLoadShare": { "main": 0.6, "auxiliary": 0.6 },
+    "mainUpendPlaceLoadShare": { "main": 1, "auxiliary": 0 },
+    "mainOverheadT": { "hook": 0.6, "rope": 0.18, "attachment": 0.06, "rigging": 0.14, "total": 0.98 },
+    "auxiliaryOverheadT": { "hook": 0.3, "rope": 0.09, "attachment": 0.06, "rigging": 0.12, "total": 0.57 }
+  },
+  "checkpoints": [
+    { "liftNumber": "LIFT 1A/1B", "effectiveElementMassKg": 3440, "requiredRadiusM": 25.517, "chartRadiusM": 26, "chartCapacityT": 11.4, "governingMainTotalLoadT": 4.42, "utilisationPct": 38.77 },
+    { "liftNumber": "LIFT 7", "description": "Super Structure 3 + Bottom Crossarms", "effectiveElementMassKg": 12110, "requiredRadiusM": null, "chartRadiusM": null, "chartCapacityT": 16.2, "governingMainTotalLoadT": 13.09, "utilisationPct": 80.8 },
+    { "liftNumber": "LIFT 12", "description": "Top Super", "effectiveElementMassKg": 3940, "boomConfiguration": "68 m boom + 12 m fly", "requiredRadiusM": null, "chartRadiusM": null, "chartCapacityT": 7.4, "governingMainTotalLoadT": 4.92, "utilisationPct": 66.49 }
+  ]
+}
