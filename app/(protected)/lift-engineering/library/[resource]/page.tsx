@@ -8,6 +8,7 @@ import { ChartPointEditor } from "./ChartPointEditor";
 import { RevisionManager } from "./RevisionManager";
 import { ChartBookImporter } from "./ChartBookImporter";
 import { ManualChartEntry } from "./ManualChartEntry";
+import { CraneProfilesLibrary } from "./CraneProfilesLibrary";
 
 const definitions: Record<string, { title: string; fields: Array<{ key: string; label: string; type?: string; required?: boolean }>; keyLabel: string }> = {
   cranes: { title: "Crane Profiles", keyLabel: "name", fields: [{ key: "name", label: "Profile name", required: true }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" }, { key: "notes", label: "Notes" }] },
@@ -27,17 +28,18 @@ export default function LiftLibraryPage({ params }: { params: Promise<{ resource
   const [editingId, setEditingId] = useState("");
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const definition = definitions[resource];
-  const api = useCallback(async (init?: RequestInit) => {
+  const api = useCallback(async (init?: RequestInit, query = "") => {
     const { data: { session } } = await supabase.auth.getSession(); if (!session?.access_token) throw new Error("Your session has expired.");
     const headers = new Headers(init?.headers); headers.set("Authorization", `Bearer ${session.access_token}`);
     if (init?.body) headers.set("Content-Type", "application/json");
-    const response = await fetch(`/api/lift-engineering/library/${encodeURIComponent(resource)}`, { ...init, headers, cache: "no-store" });
+    const response = await fetch(`/api/lift-engineering/library/${encodeURIComponent(resource)}${query}`, { ...init, headers, cache: "no-store" });
     const result = await response.json() as { error?: string; records?: RecordRow[]; record?: RecordRow };
     if (!response.ok) throw new Error(result.error || "Lift Engineering library request failed."); return result;
   }, [resource, supabase]);
-  const load = useCallback(async () => { if (!definition) return; setError(""); try { const result = await api(); setRecords(result.records ?? []); } catch (e) { setError(e instanceof Error ? e.message : "Library could not be loaded."); } }, [api, definition]);
+  const load = useCallback(async () => { if (!definition || resource === "cranes") return; setError(""); try { const query = resource === "charts" && typeof window !== "undefined" ? window.location.search : ""; const result = await api(undefined, query); setRecords(result.records ?? []); } catch (e) { setError(e instanceof Error ? e.message : "Library could not be loaded."); } }, [api, definition, resource]);
   useEffect(() => { let active = true; void params.then(({ resource: key }) => { if (active) setResource(key); }); return () => { active = false; }; }, [params]);
   useEffect(() => { void load(); }, [load]);
+  if (resource === "cranes") return <CraneProfilesLibrary/>;
   async function createRecord(event: React.FormEvent) {
     event.preventDefault(); if (!definition) return; setBusy(true); setError("");
     try {

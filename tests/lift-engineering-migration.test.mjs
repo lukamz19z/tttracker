@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 
@@ -16,7 +16,10 @@ test("V1 Lift Engineering migration applies against the required existing projec
     `);
     const migration = await readFile(new URL("../supabase/migrations/20261120120000_v1_lift_engineering.sql", import.meta.url), "utf8");
     await db.exec(migration);
-    await db.exec(await readFile(new URL("../supabase/migrations/20261121160000_v1_lift_chart_configuration.sql", import.meta.url), "utf8"));
+    const migrationFiles = await readdir(new URL("../supabase/migrations/", import.meta.url));
+    const chartConfigurationMigrations = migrationFiles.filter((name) => name.endsWith("_v1_lift_chart_configuration.sql"));
+    assert.equal(chartConfigurationMigrations.length, 1, "expected one V1 lift chart configuration migration");
+    await db.exec(await readFile(new URL(`../supabase/migrations/${chartConfigurationMigrations[0]}`, import.meta.url), "utf8"));
     const tables = await db.query("select tablename from pg_tables where schemaname='public' and tablename like 'lift_%'");
     const names = new Set(tables.rows.map((row) => row.tablename));
     for (const table of ["lift_crane_profiles", "lift_crane_profile_revisions", "lift_rigging_arrangements", "lift_load_chart_points", "lift_tower_templates", "lift_studies", "lift_study_revisions", "lift_study_outrigger_results", "lift_documents", "lift_study_reviews"]) assert.ok(names.has(table), `migration should create ${table}`);
