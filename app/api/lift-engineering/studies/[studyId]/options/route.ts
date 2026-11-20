@@ -15,7 +15,7 @@ export async function GET(request: Request, context: { params: Promise<{ studyId
       service.from("lift_crane_configuration_revisions").select("id,configuration_id,revision,status").order("created_at", { ascending: false }),
       service.from("lift_tower_templates").select("id,name,structure_type").eq("active", true).order("name"),
       service.from("lift_tower_template_revisions").select("id,template_id,revision,status").order("created_at", { ascending: false }),
-      service.from("lift_load_charts").select("id,name,revision,configuration_revision_id,boom_configuration,boom_length_m,fly_jib").eq("active", true).order("name"),
+      service.from("lift_load_charts").select("id,crane_profile_id,name,revision,status,configuration_revision_id,counterweight_t,outrigger_state,slew_sector,boom_configuration,boom_length_m,fly_jib,manufacturer_configuration,source_document").eq("active", true).neq("status", "Superseded").order("name"),
       service.from("lift_rigging_arrangements").select("id,name").eq("active", true).order("name"),
       service.from("lift_crane_hooks").select("id,name,mass_kg,crane_profile_revision_id").order("name"),
       service.from("lift_crane_ropes").select("id,name,mass_kg,crane_profile_revision_id").order("name"),

@@ -1,4 +1,4 @@
-type LibraryOption = { id: string; name?: string; boom_configuration?: string; configuration_revision_id?: string };
+type LibraryOption = { id: string; name?: string; boom_configuration?: string; configuration_revision_id?: string; manufacturer_configuration?: { identityKey?: string } | null };
 type TemplateElement = { mass_kg?: number | string };
 type TemplatePhase = { phase_key: string; phase_name: string; main_load_share: number | string; auxiliary_load_share: number | string; radius_m?: number | string | null };
 export type TemplateLiftRecord = {
@@ -44,8 +44,8 @@ export function mapTemplateLiftsToStudyInputs(rows: TemplateLiftRecord[], option
       auxiliaryRiggingArrangementId: auxiliaryArrangementId,
       chartId: chart.id,
       auxiliaryChartId: chart.id,
-      configurationKey: chart.boom_configuration,
-      auxiliaryConfigurationKey: chart.boom_configuration,
+      configurationKey: chart.manufacturer_configuration?.identityKey ?? chart.boom_configuration,
+      auxiliaryConfigurationKey: chart.manufacturer_configuration?.identityKey ?? chart.boom_configuration,
       externalReferenceReactions: Array.isArray(notes.externalReferenceReactions) ? notes.externalReferenceReactions : [],
       phases: (row.phases ?? []).map((phase) => ({
         key: phase.phase_key,

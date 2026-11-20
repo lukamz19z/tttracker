@@ -5,14 +5,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { mapTemplateLiftsToStudyInputs, type TemplateLiftRecord } from "@/lib/lift-engineering/template-study-input";
+import { ChartConfigurationSelector, type PointSelection } from "./ChartConfigurationSelector";
 
-type Option = { id: string; name?: string; revision?: string; crane_profile_id?: string; configuration_id?: string; template_id?: string; crane_profile_revision_id?: string; mass_kg?: number; boom_configuration?: string; boom_length_m?: number; configuration_revision_id?: string };
+type Option = { id: string; name?: string; manufacturer?: string; model?: string; revision?: string; status?: string; crane_profile_id?: string; configuration_id?: string; template_id?: string; crane_profile_revision_id?: string; mass_kg?: number; boom_configuration?: string; boom_length_m?: number; configuration_revision_id?: string; counterweight_t?: number; outrigger_state?: string; slew_sector?: string; fly_jib?: string | null; manufacturer_configuration?: Record<string, unknown> | null; source_document?: Record<string, unknown> };
 type Options = { cranes: Option[]; craneRevisions: Option[]; configurations: Option[]; configurationRevisions: Option[]; templates: Option[]; templateRevisions: Option[]; charts: Option[]; arrangements: Option[]; hooks: Option[]; ropes: Option[]; attachments: Option[] };
 type StudyPayload = { study: { id: string; project_id: string; study_number: string; title: string; status: string; current_revision_id: string }; revision: Record<string, unknown> | null; lifts: Array<Record<string, unknown>> };
 type LiftDraft = { liftNumber: string; description: string; liftType: string; elementMassKg: string; factor: string; radiusM: string; mainShare: string; auxiliaryShare: string; mainHookId: string; mainRopeId: string; mainAttachmentId: string; mainRiggingArrangementId: string; auxiliaryHookId: string; auxiliaryRopeId: string; auxiliaryAttachmentId: string; auxiliaryRiggingArrangementId: string; chartId: string; auxiliaryChartId: string; configurationKey: string; auxiliaryConfigurationKey: string; phasesJson: string };
-type SetupDraft = { craneRevisionId: string; configurationRevisionId: string; templateRevisionId: string; padWidthM: string; padLengthM: string; allowableGroundPressureKpa: string };
+type SetupDraft = { craneProfileId: string; craneRevisionId: string; configurationRevisionId: string; templateRevisionId: string; padWidthM: string; padLengthM: string; allowableGroundPressureKpa: string };
 const blankLift: LiftDraft = { liftNumber: "", description: "", liftType: "Custom", elementMassKg: "", factor: "1", radiusM: "", mainShare: "1", auxiliaryShare: "0", mainHookId: "", mainRopeId: "", mainAttachmentId: "", mainRiggingArrangementId: "", auxiliaryHookId: "", auxiliaryRopeId: "", auxiliaryAttachmentId: "", auxiliaryRiggingArrangementId: "", chartId: "", auxiliaryChartId: "", configurationKey: "", auxiliaryConfigurationKey: "", phasesJson: "" };
-const blankSetup: SetupDraft = { craneRevisionId: "", configurationRevisionId: "", templateRevisionId: "", padWidthM: "", padLengthM: "", allowableGroundPressureKpa: "" };
+const blankSetup: SetupDraft = { craneProfileId: "", craneRevisionId: "", configurationRevisionId: "", templateRevisionId: "", padWidthM: "", padLengthM: "", allowableGroundPressureKpa: "" };
 const inputFields = [
   { key: "liftNumber", label: "Lift number" }, { key: "description", label: "Description" },
   { key: "elementMassKg", label: "Element mass (kg)", type: "number" }, { key: "factor", label: "Effective load factor", type: "number" },
@@ -26,6 +27,8 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
   const [options, setOptions] = useState<Options | null>(null);
   const [setupDraft, setSetupDraft] = useState<SetupDraft>(blankSetup);
   const [draft, setDraft] = useState<LiftDraft>(blankLift);
+  const [chartSelection, setChartSelection] = useState<PointSelection>(null);
+  const [auxiliaryChartSelection, setAuxiliaryChartSelection] = useState<PointSelection>(null);
   const [lifts, setLifts] = useState<Array<Record<string, unknown>>>([]);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
@@ -59,6 +62,7 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
       const revision = study.revision ?? {};
       const calculationInputs = revision.calculation_inputs as { studySettings?: Record<string, unknown> } | undefined;
       setSetupDraft({
+        craneProfileId: String(library.craneRevisions.find((item) => item.id === String(revision.crane_profile_revision_id ?? ""))?.crane_profile_id ?? ""),
         craneRevisionId: String(revision.crane_profile_revision_id ?? ""),
         configurationRevisionId: String(revision.configuration_revision_id ?? ""),
         templateRevisionId: String(revision.template_revision_id ?? ""),
@@ -84,20 +88,25 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
 
   function addLift() {
     try {
+      const selectedChartId = draft.chartId || chartSelection?.chart.id || "";
+      const selectedChartKey = draft.configurationKey || String(chartSelection?.chart.manufacturer_configuration?.identityKey ?? chartSelection?.chart.boom_configuration ?? "");
+      const requiredRadius = draft.radiusM.trim() ? Number(draft.radiusM) : chartSelection?.requiredRadiusM;
       const phases = draft.phasesJson.trim()
         ? JSON.parse(draft.phasesJson) as unknown
-        : [{ key: "main", name: "Main Upend / Place", loadShare: { main: Number(draft.mainShare), auxiliary: Number(draft.auxiliaryShare) }, radiusM: Number(draft.radiusM) }];
+        : [{ key: "main", name: "Main Upend / Place", loadShare: { main: Number(draft.mainShare), auxiliary: Number(draft.auxiliaryShare) }, radiusM: Number(requiredRadius) }];
       if (!Array.isArray(phases)) throw new Error("Operating phases must be a JSON array.");
-      if (!draft.liftNumber.trim() || !draft.chartId || !Number.isFinite(Number(draft.elementMassKg))) throw new Error("Lift number, element mass and load chart are required.");
+      if (!draft.liftNumber.trim() || !selectedChartId || !Number.isFinite(Number(draft.elementMassKg)) || !Number.isFinite(Number(requiredRadius)) || !chartSelection?.point) throw new Error("Lift number, element mass, required radius and an exact chart point at or above that radius are required.");
+      const usesAuxiliary = phases.some((phase) => Boolean(phase && typeof phase === "object" && "loadShare" in phase && Number((phase as { loadShare?: { auxiliary?: number } }).loadShare?.auxiliary ?? 0) > 0));
+      if (usesAuxiliary && !auxiliaryChartSelection?.point) throw new Error("This lift uses the auxiliary hook. Select its exact manufacturer chart configuration and confirm a chart point at or above the required radius.");
       setLifts((current) => [...current, {
         liftNumber: draft.liftNumber.trim(), description: draft.description.trim() || draft.liftNumber.trim(), liftType: draft.liftType,
         elementMassKg: Number(draft.elementMassKg), effectiveLoadFactor: Number(draft.factor),
         mainHookId: draft.mainHookId, mainRopeId: draft.mainRopeId || null, mainAttachmentId: draft.mainAttachmentId || null,
         mainRiggingArrangementId: draft.mainRiggingArrangementId || null, auxiliaryHookId: draft.auxiliaryHookId || null,
         auxiliaryRopeId: draft.auxiliaryRopeId || null, auxiliaryAttachmentId: draft.auxiliaryAttachmentId || null,
-        auxiliaryRiggingArrangementId: draft.auxiliaryRiggingArrangementId || null, chartId: draft.chartId,
-        auxiliaryChartId: draft.auxiliaryChartId || null, configurationKey: draft.configurationKey,
-        auxiliaryConfigurationKey: draft.auxiliaryConfigurationKey, sequenceNo: current.length + 1, phases,
+        auxiliaryRiggingArrangementId: draft.auxiliaryRiggingArrangementId || null, chartId: selectedChartId,
+        auxiliaryChartId: usesAuxiliary ? auxiliaryChartSelection?.chart.id : null, configurationKey: selectedChartKey,
+        auxiliaryConfigurationKey: usesAuxiliary ? String(auxiliaryChartSelection?.chart.manufacturer_configuration?.identityKey ?? auxiliaryChartSelection?.chart.boom_configuration ?? "") : selectedChartKey, sequenceNo: current.length + 1, phases,
       }]);
       setDraft({ ...blankLift, liftNumber: `LIFT ${lifts.length + 2}` });
       setError("");
@@ -158,20 +167,21 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
     {error && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
     {options && <form onSubmit={(event) => void saveSetup(event)} className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-4">
       <h2 className="font-bold md:col-span-4">Study setup</h2>
-      <label className="text-xs font-bold text-slate-600">Crane profile revision<select value={setupDraft.craneRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, craneRevisionId: event.target.value }))} disabled={issued} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a crane revision</option>{options.craneRevisions.map((row) => <option key={row.id} value={row.id}>{options.cranes.find((crane) => crane.id === row.crane_profile_id)?.name} · Rev {row.revision}</option>)}</select></label>
-      <label className="text-xs font-bold text-slate-600">Configuration revision<select value={setupDraft.configurationRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, configurationRevisionId: event.target.value }))} disabled={issued} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a configuration revision</option>{options.configurationRevisions.map((row) => <option key={row.id} value={row.id}>{options.configurations.find((config) => config.id === row.configuration_id)?.name} · Rev {row.revision}</option>)}</select></label>
+      <label className="text-xs font-bold text-slate-600">Crane<select value={setupDraft.craneProfileId} onChange={(event) => { setSetupDraft((current) => ({ ...current, craneProfileId: event.target.value, craneRevisionId: "", configurationRevisionId: "" })); setChartSelection(null); }} disabled={issued} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a crane</option>{options.cranes.map((row) => <option key={row.id} value={row.id}>{row.manufacturer} {row.model}</option>)}</select></label>
+      <label className="text-xs font-bold text-slate-600">Crane profile revision<select value={setupDraft.craneRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, craneRevisionId: event.target.value }))} disabled={issued || !setupDraft.craneProfileId} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a crane revision</option>{options.craneRevisions.filter((row) => row.crane_profile_id === setupDraft.craneProfileId).map((row) => <option key={row.id} value={row.id}>{row.status} · Rev {row.revision}</option>)}</select></label>
+      <label className="text-xs font-bold text-slate-600">Configuration revision<select value={setupDraft.configurationRevisionId} onChange={(event) => { setSetupDraft((current) => ({ ...current, configurationRevisionId: event.target.value })); setChartSelection(null); }} disabled={issued || !setupDraft.craneProfileId} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a configuration revision</option>{options.configurationRevisions.filter((row) => options.configurations.find((config) => config.id === row.configuration_id)?.crane_profile_id === setupDraft.craneProfileId).map((row) => <option key={row.id} value={row.id}>{options.configurations.find((config) => config.id === row.configuration_id)?.name} · {row.status} · Rev {row.revision}</option>)}</select></label>
       <label className="text-xs font-bold text-slate-600">Template revision<select value={setupDraft.templateRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, templateRevisionId: event.target.value }))} disabled={issued} className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">No template</option>{options.templateRevisions.map((row) => <option key={row.id} value={row.id}>{options.templates.find((template) => template.id === row.template_id)?.name} · Rev {row.revision}</option>)}</select></label>
       {([...[{ key: "padWidthM", label: "Pad width (m)" }, { key: "padLengthM", label: "Pad length (m)" }, { key: "allowableGroundPressureKpa", label: "Allowable ground pressure (kPa)" }] as const]).map((field) => <label key={field.key} className="text-xs font-bold text-slate-600">{field.label}<input type="number" min="0" step="any" value={setupDraft[field.key]} onChange={(event) => setSetupDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={issued} className="mt-1 block w-full rounded-lg border px-2 py-2"/></label>)}
       <div className="flex flex-wrap items-end gap-2"><button disabled={issued || busy} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save setup</button><button type="button" disabled={issued || busy || !setupDraft.templateRevisionId} onClick={() => void loadSelectedTemplate()} className="rounded-lg border px-4 py-2 text-sm font-bold disabled:opacity-50">Load selected template lifts</button></div>
     </form>}
-    {!issued && options && <section className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm"><h2 className="font-bold">Add lift calculation</h2><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    {!issued && options && <section className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm"><h2 className="font-bold">Add lift calculation</h2>
+    {setupDraft.craneProfileId && <ChartConfigurationSelector charts={options.charts} craneProfileId={setupDraft.craneProfileId} initialRadius={draft.radiusM} onSelect={setChartSelection}/>}
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <label className="text-xs font-bold text-slate-600">Lift type<select value={draft.liftType} onChange={(event) => setField("liftType", event.target.value)} className="mt-1 block w-full rounded-lg border px-2 py-2 text-sm">{["Erection", "Box", "Box Flip", "Panel", "Tailing", "Aerial Installation", "Custom"].map((type) => <option key={type}>{type}</option>)}</select></label>
       {inputFields.map((field) => <label key={field.key} className="text-xs font-bold text-slate-600">{field.label}<input type={"type" in field ? field.type : "text"} value={draft[field.key]} onChange={(event) => setField(field.key, event.target.value)} className="mt-1 block w-full rounded-lg border px-2 py-2 text-sm"/></label>)}
       {renderSelect("Main hook", "mainHookId", options.hooks, true)}{renderSelect("Main rope", "mainRopeId", options.ropes)}{renderSelect("Main attachment", "mainAttachmentId", options.attachments)}{renderSelect("Main rigging arrangement", "mainRiggingArrangementId", options.arrangements)}
       {renderSelect("Auxiliary hook", "auxiliaryHookId", options.hooks)}{renderSelect("Auxiliary rope", "auxiliaryRopeId", options.ropes)}{renderSelect("Auxiliary attachment", "auxiliaryAttachmentId", options.attachments)}{renderSelect("Auxiliary rigging arrangement", "auxiliaryRiggingArrangementId", options.arrangements)}
-      {renderSelect("Main load chart", "chartId", options.charts, true)}{renderSelect("Auxiliary load chart", "auxiliaryChartId", options.charts)}
-      <label className="text-xs font-bold text-slate-600">Chart configuration key<input value={draft.configurationKey} onChange={(event) => setField("configurationKey", event.target.value)} placeholder="Must match chart point key" className="mt-1 block w-full rounded-lg border px-2 py-2"/></label>
-      <label className="text-xs font-bold text-slate-600">Auxiliary configuration key<input value={draft.auxiliaryConfigurationKey} onChange={(event) => setField("auxiliaryConfigurationKey", event.target.value)} placeholder="Optional; defaults to chart configuration" className="mt-1 block w-full rounded-lg border px-2 py-2"/></label>
+      <details className="rounded-lg border p-3 sm:col-span-2 lg:col-span-4"><summary className="cursor-pointer text-xs font-bold text-slate-700">Auxiliary hook chart configuration (required when an operating phase uses the auxiliary hook)</summary><div className="mt-3"><ChartConfigurationSelector charts={options.charts} craneProfileId={setupDraft.craneProfileId} initialRadius={draft.radiusM} onSelect={setAuxiliaryChartSelection}/></div></details>
       <label className="text-xs font-bold text-slate-600 sm:col-span-2 lg:col-span-4">Operating phases JSON (optional)<textarea value={draft.phasesJson} onChange={(event) => setField("phasesJson", event.target.value)} placeholder='[{"key":"pick","name":"Pick","loadShare":{"main":0.6,"auxiliary":0.6},"radiusM":25.517}]' rows={2} className="mt-1 block w-full rounded-lg border px-2 py-2 font-mono text-xs"/></label>
     </div><div className="flex flex-wrap gap-2"><button onClick={addLift} type="button" className="rounded-lg border px-4 py-2 text-sm font-bold">Add lift to calculation</button><button disabled={!lifts.length || busy} onClick={() => void calculate()} type="button" className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{busy ? "Calculating…" : `Calculate ${lifts.length} lift${lifts.length === 1 ? "" : "s"}`}</button></div><ul className="space-y-1 text-sm text-slate-700">{lifts.map((lift, index) => <li key={`${String(lift.liftNumber)}-${index}`} className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>{String(lift.liftNumber)} · {String(lift.description)}</span><button type="button" onClick={() => setLifts((current) => current.filter((_, rowIndex) => rowIndex !== index))} className="text-xs font-bold text-rose-700">Remove</button></li>)}</ul></section>}
     {result && <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><h2 className="font-bold text-emerald-950">Result</h2><pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-white/70 p-3 text-xs">{JSON.stringify(result.governingLift ?? result, null, 2)}</pre></section>}

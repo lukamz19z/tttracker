@@ -19,12 +19,15 @@ export async function POST(request: Request) {
     const chartId = typeof body.chartId === "string" ? body.chartId.trim() : "";
     const rows = Array.isArray(body.rows) ? body.rows as Array<Record<string, unknown>> : [];
     if (!chartId || !rows.length || rows.length > 3000) liftInvalid("Chart and between 1 and 3,000 chart points are required.");
-    const { data: chart, error: chartError } = await service.from("lift_load_charts").select("id").eq("id", chartId).maybeSingle();
+    const { data: chart, error: chartError } = await service.from("lift_load_charts").select("id,status,manufacturer_configuration").eq("id", chartId).maybeSingle();
     if (chartError) throw new Error(chartError.message); if (!chart) liftInvalid("Load chart was not found.");
+    if (["Verified", "Superseded"].includes(String(chart.status))) liftInvalid("Verified or superseded manufacturer chart points are immutable. Create a new draft chart revision.");
+    const identityKey = (chart.manufacturer_configuration as Record<string, unknown> | null)?.identityKey;
     const points = rows.map((row, index) => {
       const configurationKey = typeof row.configurationKey === "string" ? row.configurationKey.trim() : "";
       const radiusM = Number(row.radiusM); const ratedCapacityT = Number(row.ratedCapacityT);
       if (!configurationKey || !Number.isFinite(radiusM) || radiusM < 0 || !Number.isFinite(ratedCapacityT) || ratedCapacityT <= 0) liftInvalid(`Chart point ${index + 1} needs a configuration key, non-negative radius and positive capacity.`);
+      if (typeof identityKey === "string" && configurationKey !== identityKey) liftInvalid("Chart point configuration key must match the exact manufacturer chart configuration.");
       return { load_chart_id: chartId, configuration_key: configurationKey, radius_m: radiusM, rated_capacity_t: ratedCapacityT,
         source_page: typeof row.sourcePage === "string" ? row.sourcePage.trim() || null : null };
     });

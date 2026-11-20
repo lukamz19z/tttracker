@@ -40,14 +40,20 @@ export async function POST(request: Request, context: Context) {
     const componentIds = [...new Set(rawLifts.flatMap((row) => selectedIds([row.mainHookId,row.mainRopeId,row.mainAttachmentId,row.auxiliaryHookId,row.auxiliaryRopeId,row.auxiliaryAttachmentId])))];
     const arrangementIds = [...new Set(rawLifts.flatMap((row) => selectedIds([row.mainRiggingArrangementId,row.auxiliaryRiggingArrangementId])))];
     if (!revision.crane_profile_revision_id || !revision.configuration_revision_id) liftInvalid("Select a crane profile revision and configuration revision in Study Setup before calculating.");
+    const { data: selectedCraneRevision, error: selectedCraneError } = await service.from("lift_crane_profile_revisions").select("crane_profile_id").eq("id", revision.crane_profile_revision_id).maybeSingle();
+    if (selectedCraneError) throw new Error(selectedCraneError.message);
+    if (!selectedCraneRevision) liftInvalid("The study crane revision is unavailable.");
     const [chartResult, pointResult] = await Promise.all([
-      service.from("lift_load_charts").select("id,revision,source_document,boom_configuration,configuration_revision_id").in("id", chartIds),
+      service.from("lift_load_charts").select("id,crane_profile_id,revision,status,active,source_document,boom_configuration,manufacturer_configuration,configuration_revision_id").in("id", chartIds),
       service.from("lift_load_chart_points").select("id,load_chart_id,configuration_key,radius_m,rated_capacity_t,source_page").in("load_chart_id", chartIds),
     ]);
     if (chartResult.error) throw new Error(`Load-chart metadata read failed: ${chartResult.error.message}`);
     if (pointResult.error) throw new Error(`Load-chart point read failed: ${pointResult.error.message}`);
     if ((chartResult.data ?? []).length !== chartIds.length) liftInvalid("One or more selected load charts are unavailable.");
-    if ((chartResult.data ?? []).some((chart) => chart.configuration_revision_id !== revision.configuration_revision_id)) liftInvalid("A load chart does not match the study crane configuration revision.");
+    if ((chartResult.data ?? []).some((chart) => chart.crane_profile_id !== selectedCraneRevision.crane_profile_id)) liftInvalid("A load chart belongs to a different crane profile than the study.");
+    if ((chartResult.data ?? []).some((chart) => !chart.active || ["Draft", "Superseded"].includes(String(chart.status)))) {
+      liftInvalid("Only imported or verified active manufacturer charts can be used. Draft or superseded charts must not determine lifting capacity.");
+    }
     const [hookRows, ropeRows, attachmentRows, arrangementRows, arrangements] = await Promise.all([
       componentIds.length ? service.from("lift_crane_hooks").select("id,mass_kg,crane_profile_revision_id").in("id", componentIds) : Promise.resolve({ data: [], error: null }),
       componentIds.length ? service.from("lift_crane_ropes").select("id,mass_kg,crane_profile_revision_id").in("id", componentIds) : Promise.resolve({ data: [], error: null }),
@@ -104,7 +110,10 @@ export async function POST(request: Request, context: Context) {
       const mainChart = chartById.get(chartId);
       const configurationKey = typeof row.configurationKey === "string" && row.configurationKey.trim() ? row.configurationKey.trim() : String(mainChart?.boom_configuration ?? "");
       const auxiliaryConfigurationKey = typeof row.auxiliaryConfigurationKey === "string" ? row.auxiliaryConfigurationKey : String(chartById.get(auxiliaryChartId ?? chartId)?.boom_configuration ?? `${configurationKey}:auxiliary`);
+      const mainIdentityKey = (mainChart?.manufacturer_configuration as Record<string, unknown> | null)?.identityKey;
+      if (typeof mainIdentityKey === "string" && configurationKey !== mainIdentityKey) liftInvalid(`Lift ${input.liftNumber} does not use the exact selected manufacturer chart configuration.`);
       const result = calculateLift(input, selectedPoints, configurationKey, auxiliaryConfigurationKey);
+      if (result.assessment === "missing_chart_capacity") liftInvalid("No manufacturer capacity is available at or beyond the required radius for this exact crane configuration.");
       const liftId = crypto.randomUUID();
       const liftRow = { id: liftId, templateLiftId: typeof row.templateLiftId === "string" ? row.templateLiftId : null,
         liftNumber: input.liftNumber, sequenceNo: Number.isInteger(Number(row.sequenceNo)) ? Number(row.sequenceNo) : index + 1,

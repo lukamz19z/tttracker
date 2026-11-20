@@ -138,10 +138,31 @@ const mainArrangement = await ensureArrangement("GMK5220 41 t validation · main
 const auxiliaryArrangement = await ensureArrangement("GMK5220 41 t validation · auxiliary arrangement", auxiliaryRiggingRevision);
 
 const charts = [];
+const configDimensions = ["chartFamily", "counterweightT", "outriggerLengthM", "outriggerWidthM", "slewRange", "boomType", "mainBoomLengthM", "flyJibFitted", "flyJibType", "flyJibLengthM", "flyJibAngleMode", "flyJibAngleDeg", "flyJibAngleMinDeg", "flyJibAngleMaxDeg", "boomExtensionM", "telescopeConfiguration", "configurationCode", "manufacturerChartId", "craneModel", "windSpeedMps", "reeving", "singleHookBlock", "manufacturerOptions"];
+const configValue = (value) => value === null || value === undefined || value === "" ? "<none>" : typeof value === "number" ? String(Number(value.toFixed(6))) : typeof value === "boolean" ? String(value) : String(value).trim().toLocaleLowerCase("en-AU");
+function configurationIdentity(configuration) {
+  const dimensions = Object.fromEntries(configDimensions.map((key) => [key, configValue(key === "flyJibFitted" && configuration[key] == null
+    ? Boolean(configuration.flyJibType || configuration.flyJibLengthM != null || configuration.flyJibAngleDeg != null)
+    : configuration[key])]));
+  const additional = Object.fromEntries(Object.entries(configuration).filter(([key]) => key !== "identityKey" && !configDimensions.includes(key)).sort(([a], [b]) => a.localeCompare(b)));
+  return JSON.stringify({ dimensions, additional });
+}
 for (const spec of dataset.charts) {
+  const isFly = Boolean(spec.flyJib);
+  const manufacturerConfiguration = {
+    manufacturer: "Grove", craneModel: "GMK5220", chartFamily: isFly ? "Swingaway" : "Main Boom", counterweightT: 41,
+    outriggerLengthM: 8.55, outriggerWidthM: 8.1, slewRange: "360°", boomType: "Telescopic",
+    mainBoomLengthM: spec.boomLengthM, flyJibFitted: isFly, flyJibType: isFly ? "Swingaway" : null,
+    flyJibLengthM: isFly ? 12 : null, flyJibAngleMode: isFly ? "fixed" : null,
+    flyJibAngleDeg: isFly ? 5 : null, flyJibAngleMinDeg: null, flyJibAngleMaxDeg: null,
+    boomExtensionM: null, telescopeConfiguration: null, configurationCode: null, manufacturerChartId: null,
+    windSpeedMps: null, reeving: null, singleHookBlock: null, manufacturerOptions: null,
+  };
+  manufacturerConfiguration.identityKey = configurationIdentity(manufacturerConfiguration);
   const chart = await writeByNaturalKey("lift_load_charts", { crane_profile_id: profile.id, name: `${spec.key} · 41 t full outriggers`, revision: "BC-REV-B" }, {
     crane_profile_id: profile.id, configuration_revision_id: configurationRevision.id,
     name: `${spec.key} · 41 t full outriggers`, revision: "BC-REV-B", counterweight_t: 41,
+    status: "Imported", manufacturer_configuration: manufacturerConfiguration,
     outrigger_state: "Full outriggers; chart source states 8.550 x 8.100 m",
     slew_sector: "360 degrees", boom_configuration: spec.key, boom_length_m: spec.boomLengthM,
     boom_sequence: null, fly_jib: spec.flyJib, wind_restriction: spec.windRestriction,
@@ -149,7 +170,7 @@ for (const spec of dataset.charts) {
       sourceClassification: "Chart data reproduced in BC lift-study PDF; verify against controlled manufacturer chart before operational issue." },
     notes: "Only conservative points needed for the supplied VSL+9 study's maximum radii are seeded; no interpolation is performed.",
   }, (row) => hasMarker(row.source_document));
-  const points = spec.points.map((point) => ({ load_chart_id: chart.id, configuration_key: spec.key,
+  const points = spec.points.map((point) => ({ load_chart_id: chart.id, configuration_key: manufacturerConfiguration.identityKey,
     radius_m: point.radiusM, rated_capacity_t: point.capacityT, source_page: spec.sourcePage }));
   const { error } = await supabase.from("lift_load_chart_points").upsert(points, { onConflict: "load_chart_id,configuration_key,radius_m" });
   if (error) throw new Error(`Load chart point import failed (${spec.key}): ${error.message}`);

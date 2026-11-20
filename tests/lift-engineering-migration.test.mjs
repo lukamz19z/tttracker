@@ -16,6 +16,7 @@ test("V1 Lift Engineering migration applies against the required existing projec
     `);
     const migration = await readFile(new URL("../supabase/migrations/20261120120000_v1_lift_engineering.sql", import.meta.url), "utf8");
     await db.exec(migration);
+    await db.exec(await readFile(new URL("../supabase/migrations/20261121160000_v1_lift_chart_configuration.sql", import.meta.url), "utf8"));
     const tables = await db.query("select tablename from pg_tables where schemaname='public' and tablename like 'lift_%'");
     const names = new Set(tables.rows.map((row) => row.tablename));
     for (const table of ["lift_crane_profiles", "lift_crane_profile_revisions", "lift_rigging_arrangements", "lift_load_chart_points", "lift_tower_templates", "lift_studies", "lift_study_revisions", "lift_study_outrigger_results", "lift_documents", "lift_study_reviews"]) assert.ok(names.has(table), `migration should create ${table}`);
@@ -27,6 +28,10 @@ test("V1 Lift Engineering migration applies against the required existing projec
     const grants = await db.query("select has_table_privilege('service_role','public.lift_studies','select') as service_select, has_table_privilege('authenticated','public.lift_studies','select') as authenticated_select");
     assert.equal(grants.rows[0].service_select, true);
     assert.equal(grants.rows[0].authenticated_select, false);
+    const chartColumns = await db.query("select column_name from information_schema.columns where table_schema='public' and table_name='lift_load_charts' and column_name in ('manufacturer_configuration','status')");
+    assert.deepEqual(new Set(chartColumns.rows.map((row) => row.column_name)), new Set(["manufacturer_configuration", "status"]));
+    const chartRls = await db.query("select relrowsecurity from pg_class where oid='public.lift_load_charts'::regclass");
+    assert.equal(chartRls.rows[0].relrowsecurity, true);
     const routines = await db.query("select proname from pg_proc where proname in ('v1_lift_study_save_calculation','v1_lift_study_workflow')");
     assert.equal(routines.rows.length, 2);
     const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
