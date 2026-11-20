@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chartConfigurationMatches, chartDimensionValue, chartFacetOptions, clearDownstreamChartSelections, exactChartConfigurationKey, selectNextChartPoint } from "../lib/lift-engineering/chart-configuration.ts";
-import { mapChartCsvRecords, parseChartCsv, suggestCsvMappings } from "../lib/lift-engineering/chart-csv.ts";
+import { buildChartCsvBatches, deduplicateChartCsvRows, mapChartCsvRecords, parseChartCsv, suggestCsvMappings } from "../lib/lift-engineering/chart-csv.ts";
 
 function chart(id, config, crane = "grove") {
   return { id, crane_profile_id: crane, configuration_revision_id: null, status: "Imported", manufacturer_configuration: { manufacturer: crane, craneModel: crane, ...config } };
@@ -63,5 +63,22 @@ test("actual manufacturer CSV columns map accessory ranges and source traceabili
   assert.equal(rows[0].configuration.telescopeConfiguration, "T1");
   assert.equal(rows[0].sourcePage, "384");
   assert.equal(rows[0].sourceDocument, "GMK5220.pdf");
+});
+
+test("chart importer collapses duplicate configuration/radius points conservatively before batching", () => {
+  const { headers, records } = parseChartCsv("manufacturer,crane_model,source_document,source_page,chart_family,boom_type,main_boom_length_m,radius_m,capacity_t,counterweight_t,outrigger_length_m,outrigger_width_m,slew_range\nGrove,GMK5220,chart.pdf,1,Main Boom,Telescopic,45.36,20,18.8,41,8.55,8.1,360\nGrove,GMK5220,chart.pdf,1,Main Boom,Telescopic,45.36,20,18.6,41,8.55,8.1,360\nGrove,GMK5220,chart.pdf,1,Main Boom,Telescopic,45.36,22,15.3,41,8.55,8.1,360\n");
+  const mapped = mapChartCsvRecords(records, suggestCsvMappings(headers));
+  const deduplicated = deduplicateChartCsvRows(mapped);
+  assert.equal(deduplicated.rows.length, 2);
+  assert.equal(deduplicated.skippedDuplicateRows, 1);
+  assert.equal(deduplicated.rows[0].capacityT, 18.6);
+  assert.deepEqual(deduplicated.conflicts[0].capacitiesT, [18.6, 18.8]);
+  assert.equal(deduplicated.conflicts[0].selectedCapacityT, 18.6);
+  const batches = buildChartCsvBatches(deduplicated.rows, 1);
+  assert.equal(batches.length, 2);
+  assert.equal(batches[0].rows.length, 1);
+  assert.equal(batches[0].rowStart, 2);
+  assert.equal(batches[0].rowEnd, 3);
+  assert.equal(batches[1].rows[0].radiusM, 22);
 });
 
