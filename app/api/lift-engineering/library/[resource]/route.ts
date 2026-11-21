@@ -8,7 +8,7 @@ const resources = {
   configurations: { table: "lift_crane_configurations", columns: "id,crane_profile_id,name,active,created_at", fields: ["crane_profile_id","name","active"] },
   rigging: { table: "lift_rigging_items", columns: "id,description,category,manufacturer,model,notes,active,created_at", fields: ["description","category","manufacturer","model","notes","active"] },
   arrangements: { table: "lift_rigging_arrangements", columns: "id,name,description,active,created_at", fields: ["name","description","active"] },
-  templates: { table: "lift_tower_templates", columns: "id,name,structure_type,description,active,created_at", fields: ["name","structure_type","description","active"] },
+  templates: { table: "lift_tower_templates", columns: "id,name,structure_type,tower_family,extension_configuration,description,nominal_height_m,metadata,active,created_at", fields: ["name","structure_type","tower_family","extension_configuration","description","nominal_height_m","metadata","active"] },
   charts: { table: "lift_load_charts", columns: "id,crane_profile_id,configuration_revision_id,name,revision,counterweight_t,outrigger_state,slew_sector,boom_configuration,boom_length_m,boom_sequence,fly_jib,wind_restriction,manufacturer_configuration,status,source_document,notes,active,created_at", fields: ["crane_profile_id","configuration_revision_id","name","revision","counterweight_t","outrigger_state","slew_sector","boom_configuration","boom_length_m","boom_sequence","fly_jib","wind_restriction","manufacturer_configuration","source_document","notes","active"] },
   settings: { table: "lift_calculation_settings", columns: "id,methodology_version,name,settings,is_active,created_at", fields: ["methodology_version","name","settings","is_active"] },
 } as const;

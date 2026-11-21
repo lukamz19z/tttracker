@@ -10,6 +10,7 @@ import { ChartBookImporter } from "./ChartBookImporter";
 import { ManualChartEntry } from "./ManualChartEntry";
 import { CraneProfilesLibrary } from "./CraneProfilesLibrary";
 import { CraneConfigurationsLibrary } from "./CraneConfigurationsLibrary";
+import { TowerTemplatesLibrary } from "./TowerTemplatesLibrary";
 
 const definitions: Record<string, { title: string; fields: Array<{ key: string; label: string; type?: string; required?: boolean }>; keyLabel: string }> = {
   cranes: { title: "Crane Profiles", keyLabel: "name", fields: [{ key: "name", label: "Profile name", required: true }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" }, { key: "notes", label: "Notes" }] },
@@ -37,11 +38,12 @@ export default function LiftLibraryPage({ params }: { params: Promise<{ resource
     const result = await response.json() as { error?: string; records?: RecordRow[]; record?: RecordRow };
     if (!response.ok) throw new Error(result.error || "Lift Engineering library request failed."); return result;
   }, [resource, supabase]);
-  const load = useCallback(async () => { if (!definition || resource === "cranes") return; setError(""); try { const query = resource === "charts" && typeof window !== "undefined" ? window.location.search : ""; const result = await api(undefined, query); setRecords(result.records ?? []); } catch (e) { setError(e instanceof Error ? e.message : "Library could not be loaded."); } }, [api, definition, resource]);
+  const load = useCallback(async () => { if (!definition || resource === "cranes" || resource === "templates") return; setError(""); try { const query = resource === "charts" && typeof window !== "undefined" ? window.location.search : ""; const result = await api(undefined, query); setRecords(result.records ?? []); } catch (e) { setError(e instanceof Error ? e.message : "Library could not be loaded."); } }, [api, definition, resource]);
   useEffect(() => { let active = true; void params.then(({ resource: key }) => { if (active) setResource(key); }); return () => { active = false; }; }, [params]);
   useEffect(() => { void load(); }, [load]);
   if (resource === "cranes") return <CraneProfilesLibrary/>;
   if (resource === "configurations") return <CraneConfigurationsLibrary/>;
+  if (resource === "templates") return <TowerTemplatesLibrary/>;
   async function createRecord(event: React.FormEvent) {
     event.preventDefault(); if (!definition) return; setBusy(true); setError("");
     try {

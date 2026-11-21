@@ -4,18 +4,17 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
-import { mapTemplateLiftsToStudyInputs, type TemplateLiftRecord } from "@/lib/lift-engineering/template-study-input";
 import { ChartConfigurationSelector, type PointSelection } from "./ChartConfigurationSelector";
 import { chartMatchesBaseSetup } from "@/lib/lift-engineering/base-configuration";
 import { readLiftJson } from "@/lib/lift-engineering/client-response";
 
-type Option = { id: string; name?: string; manufacturer?: string; model?: string; revision?: string; status?: string; crane_profile_id?: string; configuration_id?: string; template_id?: string; crane_profile_revision_id?: string; mass_kg?: number; boom_configuration?: string; boom_length_m?: number; configuration_revision_id?: string; counterweight_t?: number; outrigger_state?: string; data?: Record<string, unknown> | null; slew_sector?: string; fly_jib?: string | null; manufacturer_configuration?: Record<string, unknown> | null; source_document?: Record<string, unknown> };
-type Options = { cranes: Option[]; craneRevisions: Option[]; configurations: Option[]; configurationRevisions: Option[]; templates: Option[]; templateRevisions: Option[]; charts: Option[]; arrangements: Option[]; hooks: Option[]; ropes: Option[]; attachments: Option[] };
+type Option = { id: string; name?: string; manufacturer?: string; model?: string; revision?: string; status?: string; crane_profile_id?: string; configuration_id?: string; template_id?: string; lift_template_id?: string; tower_template_revision_id?: string; crane_profile_revision_id?: string; mass_kg?: number; boom_configuration?: string; boom_length_m?: number; configuration_revision_id?: string; counterweight_t?: number; outrigger_state?: string; data?: Record<string, unknown> | null; slew_sector?: string; fly_jib?: string | null; manufacturer_configuration?: Record<string, unknown> | null; source_document?: Record<string, unknown> };
+type Options = { cranes: Option[]; craneRevisions: Option[]; configurations: Option[]; configurationRevisions: Option[]; templates: Option[]; templateRevisions: Option[]; liftTemplates: Option[]; liftTemplateRevisions: Option[]; charts: Option[]; arrangements: Option[]; hooks: Option[]; ropes: Option[]; attachments: Option[] };
 type StudyPayload = { study: { id: string; project_id: string; study_number: string; title: string; status: string; current_revision_id: string }; revision: Record<string, unknown> | null; lifts: Array<Record<string, unknown>> };
-type LiftDraft = { liftNumber: string; description: string; liftType: string; elementMassKg: string; factor: string; radiusM: string; mainShare: string; auxiliaryShare: string; mainHookId: string; mainRopeId: string; mainAttachmentId: string; mainRiggingArrangementId: string; auxiliaryHookId: string; auxiliaryRopeId: string; auxiliaryAttachmentId: string; auxiliaryRiggingArrangementId: string; chartId: string; auxiliaryChartId: string; configurationKey: string; auxiliaryConfigurationKey: string; phasesJson: string };
-type SetupDraft = { craneProfileId: string; craneRevisionId: string; configurationRevisionId: string; templateRevisionId: string; padWidthM: string; padLengthM: string; allowableGroundPressureKpa: string };
-const blankLift: LiftDraft = { liftNumber: "", description: "", liftType: "Custom", elementMassKg: "", factor: "1", radiusM: "", mainShare: "1", auxiliaryShare: "0", mainHookId: "", mainRopeId: "", mainAttachmentId: "", mainRiggingArrangementId: "", auxiliaryHookId: "", auxiliaryRopeId: "", auxiliaryAttachmentId: "", auxiliaryRiggingArrangementId: "", chartId: "", auxiliaryChartId: "", configurationKey: "", auxiliaryConfigurationKey: "", phasesJson: "" };
-const blankSetup: SetupDraft = { craneProfileId: "", craneRevisionId: "", configurationRevisionId: "", templateRevisionId: "", padWidthM: "", padLengthM: "", allowableGroundPressureKpa: "" };
+type LiftDraft = { liftNumber: string; description: string; liftType: string; elementMassKg: string; factor: string; radiusM: string; mainShare: string; auxiliaryShare: string; mainHookId: string; mainRopeId: string; mainAttachmentId: string; mainRiggingArrangementId: string; auxiliaryHookId: string; auxiliaryRopeId: string; auxiliaryAttachmentId: string; auxiliaryRiggingArrangementId: string; chartId: string; auxiliaryChartId: string; configurationKey: string; auxiliaryConfigurationKey: string; phasesJson: string; erectionTemplateLiftId: string };
+type SetupDraft = { craneProfileId: string; craneRevisionId: string; configurationRevisionId: string; templateRevisionId: string; erectionTemplateRevisionId: string; padWidthM: string; padLengthM: string; allowableGroundPressureKpa: string };
+const blankLift: LiftDraft = { liftNumber: "", description: "", liftType: "Custom", elementMassKg: "", factor: "1", radiusM: "", mainShare: "1", auxiliaryShare: "0", mainHookId: "", mainRopeId: "", mainAttachmentId: "", mainRiggingArrangementId: "", auxiliaryHookId: "", auxiliaryRopeId: "", auxiliaryAttachmentId: "", auxiliaryRiggingArrangementId: "", chartId: "", auxiliaryChartId: "", configurationKey: "", auxiliaryConfigurationKey: "", phasesJson: "", erectionTemplateLiftId: "" };
+const blankSetup: SetupDraft = { craneProfileId: "", craneRevisionId: "", configurationRevisionId: "", templateRevisionId: "", erectionTemplateRevisionId: "", padWidthM: "", padLengthM: "", allowableGroundPressureKpa: "" };
 const inputFields = [
   { key: "liftNumber", label: "Lift number" }, { key: "description", label: "Description" },
   { key: "elementMassKg", label: "Element mass (kg)", type: "number" }, { key: "factor", label: "Effective load factor", type: "number" },
@@ -32,6 +31,7 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
   const [chartSelection, setChartSelection] = useState<PointSelection>(null);
   const [auxiliaryChartSelection, setAuxiliaryChartSelection] = useState<PointSelection>(null);
   const [lifts, setLifts] = useState<Array<Record<string, unknown>>>([]);
+  const [methodLifts, setMethodLifts] = useState<Array<Record<string, unknown>>>([]);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -72,18 +72,21 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
       setData(study);
       setOptions(library);
       const revision = study.revision ?? {};
-      const calculationInputs = revision.calculation_inputs as { studySettings?: Record<string, unknown> } | undefined;
+      const calculationInputs = revision.calculation_inputs as { studySettings?: Record<string, unknown>; towerLiftTemplateSnapshot?: { lifts?: Array<Record<string, unknown>> } } | undefined;
       setSetupDraft({
         craneProfileId: String(library.craneRevisions.find((item) => item.id === String(revision.crane_profile_revision_id ?? ""))?.crane_profile_id ?? ""),
         craneRevisionId: String(revision.crane_profile_revision_id ?? ""),
         configurationRevisionId: String(revision.configuration_revision_id ?? ""),
         templateRevisionId: String(revision.template_revision_id ?? ""),
+        erectionTemplateRevisionId: String(revision.erection_template_revision_id ?? ""),
         padWidthM: String(calculationInputs?.studySettings?.padWidthM ?? ""),
         padLengthM: String(calculationInputs?.studySettings?.padLengthM ?? ""),
         allowableGroundPressureKpa: String(calculationInputs?.studySettings?.allowableGroundPressureKpa ?? ""),
       });
       const snapshot = revision.input_snapshot as { lifts?: Array<Record<string, unknown>> } | undefined;
       if (snapshot?.lifts?.length) setLifts(snapshot.lifts.map((item) => ({ ...item, phases: item.phases ?? [] })));
+      const methodSnapshot = calculationInputs?.towerLiftTemplateSnapshot as { lifts?: Array<Record<string, unknown>> } | undefined;
+      setMethodLifts(methodSnapshot?.lifts ?? []);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Study could not be loaded.");
     }
@@ -112,6 +115,7 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
       if (usesAuxiliary && !auxiliaryChartSelection?.point) throw new Error("This lift uses the auxiliary hook. Select its exact manufacturer chart configuration and confirm a chart point at or above the required radius.");
       setLifts((current) => [...current, {
         liftNumber: draft.liftNumber.trim(), description: draft.description.trim() || draft.liftNumber.trim(), liftType: draft.liftType,
+        erectionTemplateLiftId: draft.erectionTemplateLiftId || null,
         elementMassKg: Number(draft.elementMassKg), effectiveLoadFactor: Number(draft.factor),
         mainHookId: draft.mainHookId, mainRopeId: draft.mainRopeId || null, mainAttachmentId: draft.mainAttachmentId || null,
         mainRiggingArrangementId: draft.mainRiggingArrangementId || null, auxiliaryHookId: draft.auxiliaryHookId || null,
@@ -143,6 +147,7 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
         craneProfileRevisionId: setupDraft.craneRevisionId,
         configurationRevisionId: setupDraft.configurationRevisionId,
         templateRevisionId: setupDraft.templateRevisionId || null,
+        erectionTemplateRevisionId: setupDraft.erectionTemplateRevisionId || null,
         padWidthM: setupDraft.padWidthM === "" ? null : Number(setupDraft.padWidthM),
         padLengthM: setupDraft.padLengthM === "" ? null : Number(setupDraft.padLengthM),
         allowableGroundPressureKpa: setupDraft.allowableGroundPressureKpa === "" ? null : Number(setupDraft.allowableGroundPressureKpa),
@@ -152,19 +157,10 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
     finally { setBusy(false); }
   }
 
-  async function loadSelectedTemplate() {
-    if (!options || !setupDraft.templateRevisionId || setupDraft.templateRevisionId !== String(data?.revision?.template_revision_id ?? "")) {
-      setError("Save the selected template in Study Setup before loading its lift sequence."); return;
-    }
-    setBusy(true); setError("");
-    try {
-      const response = await api(`/api/lift-engineering/library/templates/lifts?templateRevisionId=${encodeURIComponent(setupDraft.templateRevisionId)}`);
-      const templateLifts = Array.isArray(response.lifts) ? response.lifts as TemplateLiftRecord[] : [];
-      if (!templateLifts.length) throw new Error("The selected template revision has no lift sequence.");
-      const mapped = mapTemplateLiftsToStudyInputs(templateLifts, options, setupDraft.configurationRevisionId);
-      setLifts(mapped); setResult({ loadedTemplateLiftCount: mapped.length });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Template lift sequence could not be loaded."); }
-    finally { setBusy(false); }
+  function prepareMethodLift(item: Record<string, unknown>) {
+    setDraft((current) => ({ ...current, liftNumber: String(item.liftNumber ?? ""), description: String(item.description ?? item.name ?? ""), elementMassKg: String(item.steelWeightKg ?? 0), liftType: String(item.liftType ?? "Erection"), erectionTemplateLiftId: String(item.liftTemplateLiftId ?? "") }));
+    setError("");
+    document.getElementById("lift-calculation-inputs")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   const revision = data?.revision ?? {};
@@ -192,11 +188,13 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
         setDraft((current) => ({ ...current, chartId: "", auxiliaryChartId: "", configurationKey: "", auxiliaryConfigurationKey: "" }));
         if (before > compatibleLifts.length) setError(`${before - compatibleLifts.length} pending lift${before - compatibleLifts.length === 1 ? " was" : "s were"} cleared because its chart selection does not match the new base crane setup.`);
       }} disabled={issued || !setupDraft.craneProfileId} required className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">Select a configuration revision</option>{options.configurationRevisions.filter((row) => options.configurations.find((config) => config.id === row.configuration_id)?.crane_profile_id === setupDraft.craneProfileId).map((row) => <option key={row.id} value={row.id}>{options.configurations.find((config) => config.id === row.configuration_id)?.name} · {row.status} · Rev {row.revision}</option>)}</select></label>
-      <label className="text-xs font-bold text-slate-600">Template revision<select value={setupDraft.templateRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, templateRevisionId: event.target.value }))} disabled={issued} className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">No template</option>{options.templateRevisions.map((row) => <option key={row.id} value={row.id}>{options.templates.find((template) => template.id === row.template_id)?.name} · Rev {row.revision}</option>)}</select></label>
+      <label className="text-xs font-bold text-slate-600">Tower Template revision<select value={setupDraft.templateRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, templateRevisionId: event.target.value, erectionTemplateRevisionId: "" }))} disabled={issued} className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">No template</option>{options.templateRevisions.map((row) => <option key={row.id} value={row.id}>{options.templates.find((template) => template.id === row.template_id)?.name} · Rev {row.revision}</option>)}</select></label>
+      <label className="text-xs font-bold text-slate-600">Lift Template method<select value={setupDraft.erectionTemplateRevisionId} onChange={(event) => setSetupDraft((current) => ({ ...current, erectionTemplateRevisionId: event.target.value }))} disabled={issued || !setupDraft.templateRevisionId} className="mt-1 block w-full rounded-lg border px-2 py-2"><option value="">No Lift Template</option>{options.liftTemplateRevisions.filter((row) => row.tower_template_revision_id === setupDraft.templateRevisionId && ["draft", "active", "verified"].includes(String(row.status).toLowerCase())).map((row) => <option key={row.id} value={row.id}>{options.liftTemplates.find((item) => item.id === row.lift_template_id)?.name} · Rev {row.revision} · {row.status}</option>)}</select><span className="mt-1 block font-normal text-slate-500">Methods are filtered to the selected physical tower revision.</span></label>
       {([...[{ key: "padWidthM", label: "Pad width (m)" }, { key: "padLengthM", label: "Pad length (m)" }, { key: "allowableGroundPressureKpa", label: "Allowable ground pressure (kPa)" }] as const]).map((field) => <label key={field.key} className="text-xs font-bold text-slate-600">{field.label}<input type="number" min="0" step="any" value={setupDraft[field.key]} onChange={(event) => setSetupDraft((current) => ({ ...current, [field.key]: event.target.value }))} disabled={issued} className="mt-1 block w-full rounded-lg border px-2 py-2"/></label>)}
-      <div className="flex flex-wrap items-end gap-2"><button disabled={issued || busy} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save setup</button><button type="button" disabled={issued || busy || !setupDraft.templateRevisionId} onClick={() => void loadSelectedTemplate()} className="rounded-lg border px-4 py-2 text-sm font-bold disabled:opacity-50">Load selected template lifts</button></div>
+      <div className="flex flex-wrap items-end gap-2"><button disabled={issued || busy} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Save setup</button></div>
     </form>}
-    {!issued && options && <section className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm"><h2 className="font-bold">Add lift calculation</h2>
+    {methodLifts.length > 0 && <section className="space-y-2 rounded-2xl border bg-white p-4 shadow-sm"><div><h2 className="font-bold">Selected Erection Sequence</h2><p className="text-xs text-slate-500">Steel weights are derived from the saved Lift Template snapshot. Prepare a lift below to select study-specific crane and chart inputs.</p></div><ul className="divide-y">{methodLifts.map((item, index) => <li key={`${String(item.liftNumber)}-${index}`} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"><span><strong>{String(item.liftNumber)}</strong> · {String(item.name ?? item.description ?? "Lift")} · {Number(item.steelWeightKg ?? 0).toLocaleString()} kg steel</span>{!issued && <button type="button" onClick={() => prepareMethodLift(item)} className="rounded-lg border px-2 py-1 text-xs font-semibold">Prepare Lift</button>}</li>)}</ul></section>}
+    {!issued && options && <section id="lift-calculation-inputs" className="space-y-3 rounded-2xl border bg-white p-4 shadow-sm"><h2 className="font-bold">Add lift calculation</h2>
     {setupDraft.craneProfileId && <ChartConfigurationSelector charts={options.charts} craneProfileId={setupDraft.craneProfileId} baseSetup={selectedBaseSetup} initialRadius={draft.radiusM} onSelect={setChartSelection}/>}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <label className="text-xs font-bold text-slate-600">Lift type<select value={draft.liftType} onChange={(event) => setField("liftType", event.target.value)} className="mt-1 block w-full rounded-lg border px-2 py-2 text-sm">{["Erection", "Box", "Box Flip", "Panel", "Tailing", "Aerial Installation", "Custom"].map((type) => <option key={type}>{type}</option>)}</select></label>

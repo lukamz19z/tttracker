@@ -28,7 +28,7 @@ export async function POST(request: Request, context: Context) {
     if (!study) return NextResponse.json({ error: "Lift Study was not found." }, { status: 404 });
     await assertLiftProjectAccess(service, user.id, study.project_id);
     if (!study.current_revision_id) liftInvalid("Study revision is not ready for calculation.");
-    const { data: revision, error: revisionError } = await service.from("lift_study_revisions").select("id,status,issued_at,crane_profile_revision_id,configuration_revision_id,template_revision_id,calculation_inputs")
+    const { data: revision, error: revisionError } = await service.from("lift_study_revisions").select("id,status,issued_at,crane_profile_revision_id,configuration_revision_id,template_revision_id,erection_template_revision_id,calculation_inputs")
       .eq("id", study.current_revision_id).eq("study_id", study.id).single();
     if (revisionError) throw new Error(revisionError.message);
     if (revision.issued_at || revision.status !== "draft") liftInvalid("Issued or submitted revisions are immutable. Create a new revision before recalculating.");
@@ -131,6 +131,7 @@ export async function POST(request: Request, context: Context) {
       if (result.assessment === "missing_chart_capacity") liftInvalid("No manufacturer capacity is available at or beyond the required radius for this exact crane configuration.");
       const liftId = crypto.randomUUID();
       const liftRow = { id: liftId, templateLiftId: typeof row.templateLiftId === "string" ? row.templateLiftId : null,
+        erectionTemplateLiftId: typeof row.erectionTemplateLiftId === "string" ? row.erectionTemplateLiftId : null,
         liftNumber: input.liftNumber, sequenceNo: Number.isInteger(Number(row.sequenceNo)) ? Number(row.sequenceNo) : index + 1,
         description: String(row.description ?? input.liftNumber), liftType: String(row.liftType ?? "Custom"), inputSnapshot: { ...row, derived: input } };
       liftRows.push(liftRow);
@@ -157,6 +158,8 @@ export async function POST(request: Request, context: Context) {
     const studySettings = priorInputs.studySettings ?? {};
     const inputSnapshot = { projectId: study.project_id, studySettings, craneProfileRevisionId: revision.crane_profile_revision_id,
       configurationRevisionId: revision.configuration_revision_id, templateRevisionId: revision.template_revision_id,
+      erectionTemplateRevisionId: revision.erection_template_revision_id ?? null,
+      towerLiftTemplateSnapshot: (revision.calculation_inputs as Record<string, unknown> | null)?.towerLiftTemplateSnapshot ?? null,
       chartIds, loadChartRevisions, riggingRevisions,
       sourceDocuments: loadChartRevisions.map((chart) => chart.sourceDocument).filter(Boolean), lifts: inputLiftSnapshots };
     const ordered = [...output].sort((a, b) => Number((b.governingUtilisationPct as number | null) ?? -1) - Number((a.governingUtilisationPct as number | null) ?? -1));
