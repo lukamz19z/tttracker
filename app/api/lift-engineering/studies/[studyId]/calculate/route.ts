@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { calculateLift } from "@/lib/lift-engineering/calculations/study";
 import { liftApiError, liftInvalid, requireLiftAccess, assertLiftProjectAccess, LIFT_ACCESS } from "@/lib/lift-engineering/server";
 import type { LiftCalculationInput, LoadChartPoint } from "@/lib/lift-engineering/types";
+import { chartMatchesBaseSetup } from "@/lib/lift-engineering/base-configuration";
 
 const ENGINE_VERSION = "v1.0.0";
 type Context = { params: Promise<{ studyId: string }> };
@@ -40,9 +41,22 @@ export async function POST(request: Request, context: Context) {
     const componentIds = [...new Set(rawLifts.flatMap((row) => selectedIds([row.mainHookId,row.mainRopeId,row.mainAttachmentId,row.auxiliaryHookId,row.auxiliaryRopeId,row.auxiliaryAttachmentId])))];
     const arrangementIds = [...new Set(rawLifts.flatMap((row) => selectedIds([row.mainRiggingArrangementId,row.auxiliaryRiggingArrangementId])))];
     if (!revision.crane_profile_revision_id || !revision.configuration_revision_id) liftInvalid("Select a crane profile revision and configuration revision in Study Setup before calculating.");
-    const { data: selectedCraneRevision, error: selectedCraneError } = await service.from("lift_crane_profile_revisions").select("crane_profile_id").eq("id", revision.crane_profile_revision_id).maybeSingle();
+    const [selectedCraneResult, selectedConfigurationResult] = await Promise.all([
+      service.from("lift_crane_profile_revisions").select("crane_profile_id").eq("id", revision.crane_profile_revision_id).maybeSingle(),
+      service.from("lift_crane_configuration_revisions").select("id,configuration_id,counterweight_t,data").eq("id", revision.configuration_revision_id).maybeSingle(),
+    ]);
+    const selectedCraneRevision = selectedCraneResult.data;
+    const selectedConfigurationRevision = selectedConfigurationResult.data;
+    const selectedCraneError = selectedCraneResult.error ?? selectedConfigurationResult.error;
     if (selectedCraneError) throw new Error(selectedCraneError.message);
     if (!selectedCraneRevision) liftInvalid("The study crane revision is unavailable.");
+    if (!selectedConfigurationRevision) liftInvalid("The study crane configuration revision is unavailable.");
+    const { data: selectedConfiguration, error: selectedConfigurationParentError } = await service.from("lift_crane_configurations").select("crane_profile_id").eq("id", selectedConfigurationRevision.configuration_id).maybeSingle();
+    if (selectedConfigurationParentError) throw new Error(selectedConfigurationParentError.message);
+    if (!selectedConfiguration || selectedConfiguration.crane_profile_id !== selectedCraneRevision.crane_profile_id) liftInvalid("The selected base crane configuration does not belong to the study crane profile.");
+    const baseData = selectedConfigurationRevision.data && typeof selectedConfigurationRevision.data === "object" ? selectedConfigurationRevision.data as Record<string, unknown> : {};
+    const baseSetup = { counterweightT: selectedConfigurationRevision.counterweight_t == null ? null : Number(selectedConfigurationRevision.counterweight_t), outriggerLengthM: typeof baseData.outriggerLengthM === "number" ? baseData.outriggerLengthM : null, outriggerWidthM: typeof baseData.outriggerWidthM === "number" ? baseData.outriggerWidthM : null, slewRange: typeof baseData.slewRange === "string" ? baseData.slewRange : null };
+    if (baseSetup.counterweightT == null || baseSetup.outriggerLengthM == null || baseSetup.outriggerWidthM == null || !baseSetup.slewRange) liftInvalid("The selected base crane configuration is missing counterweight, outrigger or slew data required for exact chart matching.");
     const [chartResult, pointResult] = await Promise.all([
       service.from("lift_load_charts").select("id,crane_profile_id,revision,status,active,source_document,boom_configuration,manufacturer_configuration,configuration_revision_id").in("id", chartIds),
       service.from("lift_load_chart_points").select("id,load_chart_id,configuration_key,radius_m,rated_capacity_t,source_page").in("load_chart_id", chartIds),
@@ -51,6 +65,7 @@ export async function POST(request: Request, context: Context) {
     if (pointResult.error) throw new Error(`Load-chart point read failed: ${pointResult.error.message}`);
     if ((chartResult.data ?? []).length !== chartIds.length) liftInvalid("One or more selected load charts are unavailable.");
     if ((chartResult.data ?? []).some((chart) => chart.crane_profile_id !== selectedCraneRevision.crane_profile_id)) liftInvalid("A load chart belongs to a different crane profile than the study.");
+    if ((chartResult.data ?? []).some((chart) => !chartMatchesBaseSetup(chart, selectedCraneRevision.crane_profile_id, baseSetup))) liftInvalid("A selected lift chart does not match the study's exact base crane counterweight, outrigger geometry and slew range.");
     if ((chartResult.data ?? []).some((chart) => !chart.active || ["Draft", "Superseded"].includes(String(chart.status)))) {
       liftInvalid("Only imported or verified active manufacturer charts can be used. Draft or superseded charts must not determine lifting capacity.");
     }

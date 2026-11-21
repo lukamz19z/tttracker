@@ -13,13 +13,15 @@ async function readAll<T>(readPage: (from: number, to: number) => PromiseLike<{ 
 }
 
 type Revision = Record<string, unknown> & { id: string; configuration_id: string; revision: string; status: string; created_at: string };
+type ChartOption = { id: string; crane_profile_id: string; status: string; active: boolean; manufacturer_configuration: Record<string, unknown> | null };
 export async function GET(request: Request) {
   try {
     const { service } = await requireLiftAccess(request, LIFT_ACCESS.view);
-    const [configsResult, profilesResult, revisions] = await Promise.all([
+    const [configsResult, profilesResult, revisions, chartOptions] = await Promise.all([
       service.from("lift_crane_configurations").select("id,crane_profile_id,name,active,created_at" ).order("created_at", { ascending: false }),
       service.from("lift_crane_profiles").select("id,name,manufacturer,model,active"),
       readAll<Revision>((from, to) => service.from("lift_crane_configuration_revisions").select("*").order("created_at", { ascending: false }).range(from, to)),
+      readAll<ChartOption>((from, to) => service.from("lift_load_charts").select("id,crane_profile_id,status,active,manufacturer_configuration").range(from, to)),
     ]);
     if (configsResult.error) throw new Error(configsResult.error.message);
     if (profilesResult.error) throw new Error(profilesResult.error.message);
@@ -53,22 +55,7 @@ export async function GET(request: Request) {
       return { ...configuration, profile: profile ?? null, revisions: ownRevisions, currentRevision, revisionCount: ownRevisions.length, chartConfigurationCount: configurationChartCounts.get(configuration.id) ?? 0, profileChartConfigurationCount: profileChartCounts.get(configuration.crane_profile_id) ?? 0, lastUpdated: dates.at(-1) ?? configuration.created_at };
     });
     const profileOptions = profiles.map((profile) => ({ ...profile }));
-    const configurationOptions = revisions.reduce<Record<string, { counterweights: number[]; outriggers: string[]; slewRanges: string[] }>>((acc, revision) => {
-      const configuration = configurations.find((row) => row.id === revision.configuration_id);
-      if (!configuration) return acc;
-      const profileId = configuration.crane_profile_id;
-      const entry = acc[profileId] ?? (acc[profileId] = { counterweights: [], outriggers: [], slewRanges: [] });
-      if (revision.counterweight_t != null && !entry.counterweights.includes(Number(revision.counterweight_t))) entry.counterweights.push(Number(revision.counterweight_t));
-      if (revision.outrigger_state && !entry.outriggers.includes(String(revision.outrigger_state))) entry.outriggers.push(String(revision.outrigger_state));
-      const data = revision.data && typeof revision.data === "object" ? revision.data as Record<string, unknown> : {};
-      if (typeof data.slewRange === "string" && !entry.slewRanges.includes(data.slewRange)) entry.slewRanges.push(data.slewRange);
-      return acc;
-    }, {});
-    for (const options of Object.values(configurationOptions)) {
-      options.counterweights.sort((a, b) => a - b);
-      options.outriggers.sort((a, b) => a.localeCompare(b));
-      options.slewRanges.sort((a, b) => a.localeCompare(b));
-    }
+    const configurationOptions = chartOptions.map((chart) => ({ id: chart.id, crane_profile_id: chart.crane_profile_id, status: chart.status, active: chart.active, manufacturer_configuration: chart.manufacturer_configuration }));
     return NextResponse.json({ configurations: records, profiles: profileOptions, configurationOptions });
   } catch (error) {
     const result = liftApiError(error);

@@ -2,6 +2,15 @@ import { NextResponse } from "next/server";
 import { LIFT_ACCESS, liftApiError, requireLiftAccess } from "@/lib/lift-engineering/server";
 
 type Context = { params: Promise<{ configurationId: string }> };
+async function readAll<T>(readPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
+  const rows: T[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await readPage(from, from + 999);
+    if (error) throw new Error(error.message);
+    const page = data ?? []; rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
+}
 
 export async function GET(request: Request, context: Context) {
   try {
@@ -12,10 +21,11 @@ export async function GET(request: Request, context: Context) {
       .eq("id", configurationId).maybeSingle();
     if (configurationError) throw new Error(configurationError.message);
     if (!configuration) return NextResponse.json({ error: "Crane configuration was not found." }, { status: 404 });
-    const [profileResult, revisionsResult, profileChartsResult] = await Promise.all([
+    const [profileResult, revisionsResult, profileChartsResult, chartOptions] = await Promise.all([
       service.from("lift_crane_profiles").select("id,name,manufacturer,model,active").eq("id", configuration.crane_profile_id).maybeSingle(),
       service.from("lift_crane_configuration_revisions").select("*").eq("configuration_id", configurationId).order("created_at", { ascending: false }),
       service.from("lift_load_charts").select("id", { count: "exact", head: true }).eq("crane_profile_id", configuration.crane_profile_id),
+      readAll((from, to) => service.from("lift_load_charts").select("id,crane_profile_id,status,active,manufacturer_configuration").eq("crane_profile_id", configuration.crane_profile_id).in("status", ["Imported", "Verified"]).eq("active", true).range(from, to)),
     ]);
     if (profileResult.error) throw new Error(profileResult.error.message);
     if (revisionsResult.error) throw new Error(revisionsResult.error.message);
@@ -28,7 +38,7 @@ export async function GET(request: Request, context: Context) {
       if (matching.error) throw new Error(matching.error.message);
       matchingChartCount = matching.count ?? 0;
     }
-    return NextResponse.json({ configuration, profile: profileResult.data, revisions, currentRevision, matchingChartCount, profileChartCount: profileChartsResult.count ?? 0 });
+    return NextResponse.json({ configuration, profile: profileResult.data, revisions, currentRevision, matchingChartCount, profileChartCount: profileChartsResult.count ?? 0, chartOptions });
   } catch (error) {
     const result = liftApiError(error);
     return NextResponse.json({ error: result.message }, { status: result.status });
