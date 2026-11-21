@@ -3,7 +3,6 @@ import { LIFT_ACCESS, liftApiError, liftInvalid, requireLiftAccess } from "@/lib
 
 const revisionTables = {
   cranes: { table: "lift_crane_profile_revisions", parent: "crane_profile_id", fields: ["revision","status","source_document","technical_data","coordinate_convention","carrier_mass_kg","carrier_cg_x_m","carrier_cg_y_m","upperworks_mass_kg","upperworks_cg_x_m","upperworks_cg_y_m","boom_pivot_x_m","boom_pivot_y_m","counterweight_mass_kg","counterweight_cg_x_m","counterweight_cg_y_m"] },
-  configurations: { table: "lift_crane_configuration_revisions", parent: "configuration_id", fields: ["revision","status","data","counterweight_t","outrigger_state","boom_configuration","boom_length_m","fly_jib","wind_restriction","source_document","counterweight_cg_x_m","counterweight_cg_y_m","boom_mass_kg","boom_cg_x_m","boom_cg_y_m","fly_jib_mass_kg","fly_jib_cg_x_m","fly_jib_cg_y_m"] },
   rigging: { table: "lift_rigging_item_revisions", parent: "rigging_item_id", fields: ["revision","status","mass_kg","wll_t","source_document"] },
   templates: { table: "lift_tower_template_revisions", parent: "template_id", fields: ["revision","status","source_documents","notes"] },
 } as const;

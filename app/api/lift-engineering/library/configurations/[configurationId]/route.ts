@@ -12,6 +12,13 @@ async function readAll<T>(readPage: (from: number, to: number) => PromiseLike<{ 
   }
 }
 
+// This legacy path collides with the dynamic configuration detail segment
+// (/configurations/{configurationId}). Keep its failure explicit and JSON
+// instead of relying on Next's empty framework-generated 405 response.
+export async function POST() {
+  return NextResponse.json({ error: "Use POST /api/lift-engineering/library/configurations/{configurationId}/revisions to create a technical revision.", code: "use_configuration_revision_endpoint" }, { status: 405 });
+}
+
 export async function GET(request: Request, context: Context) {
   try {
     const { service } = await requireLiftAccess(request, LIFT_ACCESS.view);
@@ -30,7 +37,15 @@ export async function GET(request: Request, context: Context) {
     if (profileResult.error) throw new Error(profileResult.error.message);
     if (revisionsResult.error) throw new Error(revisionsResult.error.message);
     if (profileChartsResult.error) throw new Error(profileChartsResult.error.message);
-    const revisions = revisionsResult.data ?? [];
+    const revisions = await Promise.all((revisionsResult.data ?? []).map(async (revision) => {
+      const [studyUse, chartUse] = await Promise.all([
+        service.from("lift_study_revisions").select("id", { count: "exact", head: true }).eq("configuration_revision_id", revision.id),
+        service.from("lift_load_charts").select("id", { count: "exact", head: true }).eq("configuration_revision_id", revision.id),
+      ]);
+      if (studyUse.error) throw new Error(studyUse.error.message);
+      if (chartUse.error) throw new Error(chartUse.error.message);
+      return { ...revision, studyReferenceCount: studyUse.count ?? 0, chartReferenceCount: chartUse.count ?? 0 };
+    }));
     const currentRevision = revisions.find((revision) => ["verified", "active", "current"].includes(String(revision.status).toLowerCase())) ?? revisions[0] ?? null;
     let matchingChartCount = 0;
     if (currentRevision) {

@@ -81,7 +81,7 @@ export function CraneConfigurationsLibrary() {
     try {
       if (modal === "create") {
         if (!form.profileId) throw new Error("Select a crane profile.");
-        const configurationRevision = (({ parentId, ...revision }) => { void parentId; return revision; })(revisionPayload(""));
+        const configurationRevision = revisionPayload();
         const created = await api("/api/lift-engineering/library/configurations", { method: "POST", body: JSON.stringify({ crane_profile_id: form.profileId, name: form.name.trim() || suggestName(), active: true, configurationRevision }) });
         if (!created.record?.id) throw new Error("The configuration response did not include its ID. Retry is safe; an equivalent setup will be reused.");
         setModal(null); setEditing(null);
@@ -89,19 +89,19 @@ export function CraneConfigurationsLibrary() {
         return;
       } else if (modal === "edit" && editing) {
         await api("/api/lift-engineering/library/configurations", { method: "PATCH", body: JSON.stringify({ id: editing.id, name: form.name.trim() || suggestName() }) });
-        await api("/api/lift-engineering/library/configurations/revisions", { method: "POST", body: JSON.stringify(revisionPayload(editing.id)) });
+        await api(`/api/lift-engineering/library/configurations/${encodeURIComponent(editing.id)}/revisions`, { method: "POST", body: JSON.stringify(revisionPayload()) });
       } else if (modal === "revision" && editing) {
-        await api("/api/lift-engineering/library/configurations/revisions", { method: "POST", body: JSON.stringify(revisionPayload(editing.id)) });
+        await api(`/api/lift-engineering/library/configurations/${encodeURIComponent(editing.id)}/revisions`, { method: "POST", body: JSON.stringify(revisionPayload()) });
       }
       setModal(null); setEditing(null); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Crane configuration could not be saved."); }
     finally { submitting.current = false; setBusy(false); }
   }
-  function revisionPayload(parentId: string) {
+  function revisionPayload() {
     const length = form.outriggerLength === "" ? null : Number(form.outriggerLength);
     const width = form.outriggerWidth === "" ? null : Number(form.outriggerWidth);
     if ((length != null && (!Number.isFinite(length) || length <= 0)) || (width != null && (!Number.isFinite(width) || width <= 0))) throw new Error("Outrigger dimensions must be positive numbers.");
-    return { parentId, revision: form.revision.trim() || nextRevision(editing?.currentRevision?.revision), status: "draft", counterweight_t: form.counterweight === "" ? null : Number(form.counterweight), outrigger_state: form.customManual ? form.outriggerState || "Custom / Manual" : form.outriggerState || null, data: { configurationSource: form.customManual ? "custom_manual" : "manufacturer_chart", outriggerLengthM: length, outriggerWidthM: width, slewRange: form.slewRange || null, notes: form.notes.trim() || null } };
+    return { revision: form.revision.trim() || nextRevision(editing?.currentRevision?.revision), status: "draft", counterweight_t: form.counterweight === "" ? null : Number(form.counterweight), outrigger_state: form.customManual ? form.outriggerState || "Custom / Manual" : form.outriggerState || null, data: { configurationSource: form.customManual ? "custom_manual" : "manufacturer_chart", outriggerLengthM: length, outriggerWidthM: width, slewRange: form.slewRange || null, notes: form.notes.trim() || null } };
   }
 
   return <AppShell><main className="mx-auto max-w-6xl space-y-5 p-4 md:p-7">
