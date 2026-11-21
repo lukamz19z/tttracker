@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { exactChartConfigurationKey, type ManufacturerChartConfiguration } from "@/lib/lift-engineering/chart-configuration";
+import { sameConfigurationBase, type ConfigurationBaseIdentity } from "@/lib/lift-engineering/configuration-identity";
 import { LIFT_ACCESS, liftApiError, liftInvalid, requireLiftAccess } from "@/lib/lift-engineering/server";
 
 const resources = {
@@ -44,6 +45,64 @@ export async function POST(request: Request, context: Context) {
     const nameKey = ["cranes","rigging","templates"].includes(resource) ? "name" : resource === "arrangements" ? "name" : "name";
     if (resource !== "settings" && resource !== "charts" && !String(values[nameKey] ?? values.description ?? "").trim()) liftInvalid("A name or description is required.");
     if (resource === "settings" && (!values.methodology_version || !values.name || typeof values.settings !== "object")) liftInvalid("Methodology version, name and settings are required.");
+    if (resource === "configurations") {
+      const profileId = typeof values.crane_profile_id === "string" ? values.crane_profile_id.trim() : "";
+      const configurationRevision = body.configurationRevision;
+      if (!profileId || !values.name || !configurationRevision || typeof configurationRevision !== "object" || Array.isArray(configurationRevision)) {
+        liftInvalid("Crane profile, configuration name and base setup revision are required.");
+      }
+      const draft = configurationRevision as Record<string, unknown>;
+      const revisionLabel = typeof draft.revision === "string" ? draft.revision.trim() : "";
+      const counterweight = typeof draft.counterweight_t === "number" ? draft.counterweight_t : null;
+      const outriggerState = typeof draft.outrigger_state === "string" ? draft.outrigger_state.trim() : "";
+      const data = draft.data && typeof draft.data === "object" && !Array.isArray(draft.data) ? draft.data as Record<string, unknown> : {};
+      const length = typeof data.outriggerLengthM === "number" ? data.outriggerLengthM : null;
+      const width = typeof data.outriggerWidthM === "number" ? data.outriggerWidthM : null;
+      const slewRange = typeof data.slewRange === "string" ? data.slewRange.trim().toLocaleLowerCase("en-AU") : "";
+      if (!revisionLabel || counterweight == null || !Number.isFinite(counterweight) || !outriggerState || !slewRange) liftInvalid("A valid revision label, counterweight, outrigger setup and slew range are required.");
+      if ((length !== null && (!Number.isFinite(length) || length <= 0)) || (width !== null && (!Number.isFinite(width) || width <= 0))) liftInvalid("Outrigger dimensions must be positive numbers.");
+
+      // The V1 engineering library has no organisation/tenant column. The crane profile is
+      // therefore the applicable ownership scope for an equivalent base configuration.
+      const { data: profile, error: profileError } = await service.from("lift_crane_profiles").select("id").eq("id", profileId).maybeSingle();
+      if (profileError) throw new Error(profileError.message);
+      if (!profile) liftInvalid("Choose an existing crane profile.");
+      const { data: parents, error: parentsError } = await service.from("lift_crane_configurations").select("id,crane_profile_id,name,active").eq("crane_profile_id", profileId);
+      if (parentsError) throw new Error(parentsError.message);
+      let existing: { id: string; crane_profile_id: string; name: string; active: boolean } | null = null;
+      let existingRevision: Record<string, unknown> | null = null;
+      const requestedIdentity: ConfigurationBaseIdentity = { craneProfileId: profileId, counterweightT: counterweight, outriggerState, outriggerLengthM: length, outriggerWidthM: width, slewRange };
+      for (const parent of parents ?? []) {
+        const { data: revisions, error: revisionsError } = await service.from("lift_crane_configuration_revisions")
+          .select("id,revision,status,counterweight_t,outrigger_state,data").eq("configuration_id", parent.id);
+        if (revisionsError) throw new Error(revisionsError.message);
+        const match = (revisions ?? []).find((revision) => {
+          const revisionData = revision.data && typeof revision.data === "object" ? revision.data as Record<string, unknown> : {};
+          const currentIdentity: ConfigurationBaseIdentity = {
+            craneProfileId: parent.crane_profile_id,
+            counterweightT: typeof revision.counterweight_t === "number" ? revision.counterweight_t : null,
+            outriggerState: typeof revision.outrigger_state === "string" ? revision.outrigger_state : null,
+            outriggerLengthM: typeof revisionData.outriggerLengthM === "number" ? revisionData.outriggerLengthM : null,
+            outriggerWidthM: typeof revisionData.outriggerWidthM === "number" ? revisionData.outriggerWidthM : null,
+            slewRange: typeof revisionData.slewRange === "string" ? revisionData.slewRange : null,
+          };
+          return sameConfigurationBase(currentIdentity, requestedIdentity);
+        });
+        if (match) { existing = parent; existingRevision = match; break; }
+      }
+      if (existing) {
+        return NextResponse.json({ record: existing, revision: existingRevision, existing: true, message: "An equivalent crane configuration already exists." });
+      }
+      const { data: created, error: createError } = await service.from("lift_crane_configurations").insert(values).select(item.columns).single();
+      if (createError || !created) throw new Error(createError?.message || "Crane configuration was not returned.");
+      const createdConfigurationId = (created as unknown as { id: string }).id;
+      const revisionValues = Object.fromEntries(Object.entries(draft).filter(([key]) => ["revision","status","data","counterweight_t","outrigger_state","boom_configuration","boom_length_m","fly_jib","wind_restriction","source_document","counterweight_cg_x_m","counterweight_cg_y_m","boom_mass_kg","boom_cg_x_m","boom_cg_y_m","fly_jib_mass_kg","fly_jib_cg_x_m","fly_jib_cg_y_m"].includes(key)));
+      revisionValues.status = "draft";
+      const { data: createdRevision, error: revisionError } = await service.from("lift_crane_configuration_revisions")
+        .insert({ ...revisionValues, configuration_id: createdConfigurationId }).select("*").single();
+      if (revisionError || !createdRevision) throw new Error(revisionError?.message || "Configuration was created but its draft revision was not returned. Retry safely; the existing configuration will be reused.");
+      return NextResponse.json({ record: created, revision: createdRevision, existing: false }, { status: 201 });
+    }
     if (resource === "charts") {
       if (typeof values.manufacturer_configuration !== "object" || !values.manufacturer_configuration || Array.isArray(values.manufacturer_configuration)) {
         values.manufacturer_configuration = {};
@@ -70,6 +129,42 @@ export async function POST(request: Request, context: Context) {
     const { data, error } = await service.from(item.table).insert(values).select(item.columns).single();
     if (error || !data) throw new Error(error?.message || "Library record was not returned.");
     return NextResponse.json({ record: data }, { status: 201 });
+  } catch (error) { const result = liftApiError(error); return NextResponse.json({ error: result.message }, { status: result.status }); }
+}
+
+export async function DELETE(request: Request, context: Context) {
+  try {
+    const { resource } = await context.params;
+    if (resource !== "configurations") return NextResponse.json({ error: "Deletion is not supported for this library." }, { status: 405 });
+    const { service } = await requireLiftAccess(request, LIFT_ACCESS.manageLibrary);
+    const body = await request.json() as { id?: unknown };
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (!id) liftInvalid("Configuration ID is required.");
+    const { data: configuration, error: configurationError } = await service.from("lift_crane_configurations").select("id").eq("id", id).maybeSingle();
+    if (configurationError) throw new Error(configurationError.message);
+    if (!configuration) return NextResponse.json({ error: "Crane configuration was not found." }, { status: 404 });
+    const { data: revisions, error: revisionsError } = await service.from("lift_crane_configuration_revisions").select("id,status").eq("configuration_id", id);
+    if (revisionsError) throw new Error(revisionsError.message);
+    const revisionIds = (revisions ?? []).map((revision) => revision.id as string);
+    let referenced = false;
+    if (revisionIds.length) {
+      const [studyReference, chartReference] = await Promise.all([
+        service.from("lift_study_revisions").select("id", { count: "exact", head: true }).in("configuration_revision_id", revisionIds),
+        service.from("lift_load_charts").select("id", { count: "exact", head: true }).in("configuration_revision_id", revisionIds),
+      ]);
+      if (studyReference.error) throw new Error(studyReference.error.message);
+      if (chartReference.error) throw new Error(chartReference.error.message);
+      referenced = (studyReference.count ?? 0) > 0 || (chartReference.count ?? 0) > 0;
+    }
+    const deletable = !referenced && revisions?.length === 1 && String(revisions[0].status).toLowerCase() === "draft";
+    if (!deletable) return NextResponse.json({ error: referenced ? "This configuration is referenced by a lift study or load chart and cannot be deleted. Archive it instead." : "Only an unused configuration with its single automatically created draft revision can be deleted. Archive it instead.", code: "configuration_protected", archiveAvailable: true }, { status: 409 });
+    const { data: deleted, error: deleteError } = await service.from("lift_crane_configurations").delete().eq("id", id).select("id").maybeSingle();
+    if (deleteError) {
+      if (deleteError.code === "23503") return NextResponse.json({ error: "A protected engineering record started referencing this configuration. It was not deleted; archive it instead.", code: "configuration_protected", archiveAvailable: true }, { status: 409 });
+      throw new Error(deleteError.message);
+    }
+    if (!deleted) return NextResponse.json({ error: "Configuration was not deleted." }, { status: 409 });
+    return NextResponse.json({ ok: true, deletedId: deleted.id });
   } catch (error) { const result = liftApiError(error); return NextResponse.json({ error: result.message }, { status: result.status }); }
 }
 

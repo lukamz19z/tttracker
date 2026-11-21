@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Plus, Search, Truck, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
@@ -20,6 +21,8 @@ const craneName = (profile: Profile | null) => profile ? [profile.manufacturer, 
 const revisionData = (revision: TechnicalRevision | null) => revision?.data && typeof revision.data === "object" ? revision.data : {};
 
 export function CraneConfigurationsLibrary() {
+  const router = useRouter();
+  const submitting = useRef(false);
   const supabase = useMemo(() => createSupabaseBrowser(), []);
   const [summary, setSummary] = useState<Summary>({ configurations: [], profiles: [], configurationOptions: [] });
   const [search, setSearch] = useState(""); const [craneFilter, setCraneFilter] = useState("all"); const [statusFilter, setStatusFilter] = useState("all");
@@ -72,13 +75,18 @@ export function CraneConfigurationsLibrary() {
     return payload;
   }
   async function save(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true; setBusy(true); setError("");
     try {
       if (modal === "create") {
         if (!form.profileId) throw new Error("Select a crane profile.");
-        const parent = await api("/api/lift-engineering/library/configurations", { method: "POST", body: JSON.stringify({ crane_profile_id: form.profileId, name: form.name.trim() || suggestName(), active: true }) });
-        if (!parent.record?.id) throw new Error("Crane configuration was created without a returned record ID.");
-        await api("/api/lift-engineering/library/configurations/revisions", { method: "POST", body: JSON.stringify(revisionPayload(parent.record.id)) });
+        const configurationRevision = (({ parentId, ...revision }) => { void parentId; return revision; })(revisionPayload(""));
+        const created = await api("/api/lift-engineering/library/configurations", { method: "POST", body: JSON.stringify({ crane_profile_id: form.profileId, name: form.name.trim() || suggestName(), active: true, configurationRevision }) });
+        if (!created.record?.id) throw new Error("The configuration response did not include its ID. Retry is safe; an equivalent setup will be reused.");
+        setModal(null); setEditing(null);
+        router.push(`/lift-engineering/library/configurations/${encodeURIComponent(created.record.id)}`);
+        return;
       } else if (modal === "edit" && editing) {
         await api("/api/lift-engineering/library/configurations", { method: "PATCH", body: JSON.stringify({ id: editing.id, name: form.name.trim() || suggestName() }) });
         await api("/api/lift-engineering/library/configurations/revisions", { method: "POST", body: JSON.stringify(revisionPayload(editing.id)) });
@@ -87,7 +95,7 @@ export function CraneConfigurationsLibrary() {
       }
       setModal(null); setEditing(null); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Crane configuration could not be saved."); }
-    finally { setBusy(false); }
+    finally { submitting.current = false; setBusy(false); }
   }
   function revisionPayload(parentId: string) {
     const length = form.outriggerLength === "" ? null : Number(form.outriggerLength);
