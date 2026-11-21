@@ -9,6 +9,7 @@ import { RevisionManager } from "./RevisionManager";
 import { ChartBookImporter } from "./ChartBookImporter";
 import { ManualChartEntry } from "./ManualChartEntry";
 import { CraneProfilesLibrary } from "./CraneProfilesLibrary";
+import { CraneConfigurationsLibrary } from "./CraneConfigurationsLibrary";
 
 const definitions: Record<string, { title: string; fields: Array<{ key: string; label: string; type?: string; required?: boolean }>; keyLabel: string }> = {
   cranes: { title: "Crane Profiles", keyLabel: "name", fields: [{ key: "name", label: "Profile name", required: true }, { key: "manufacturer", label: "Manufacturer" }, { key: "model", label: "Model" }, { key: "notes", label: "Notes" }] },
@@ -40,6 +41,7 @@ export default function LiftLibraryPage({ params }: { params: Promise<{ resource
   useEffect(() => { let active = true; void params.then(({ resource: key }) => { if (active) setResource(key); }); return () => { active = false; }; }, [params]);
   useEffect(() => { void load(); }, [load]);
   if (resource === "cranes") return <CraneProfilesLibrary/>;
+  if (resource === "configurations") return <CraneConfigurationsLibrary/>;
   async function createRecord(event: React.FormEvent) {
     event.preventDefault(); if (!definition) return; setBusy(true); setError("");
     try {
