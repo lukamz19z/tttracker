@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { CHART_CONFIGURATION_DIMENSIONS, chartDimensionValue, chartFacetOptions, clearDownstreamChartSelections, selectNextChartPoint, type ChartConfigurationRecord, type ChartDimension } from "@/lib/lift-engineering/chart-configuration";
 import { chartMatchesBaseSetup } from "@/lib/lift-engineering/base-configuration";
+import { readLiftJson } from "@/lib/lift-engineering/client-response";
 
 type ChartPoint = { configurationKey: string; radiusM: number; capacityT: number; sourcePage: string | null };
 type Chart = Omit<ChartConfigurationRecord, "manufacturer_configuration"> & { name?: string; revision?: string; boom_configuration?: string; source_document?: Record<string, unknown>; manufacturer_configuration?: Record<string, unknown> | null };
@@ -56,9 +57,11 @@ export function ChartConfigurationSelector({ charts, craneProfileId, baseSetup, 
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error("Your session has expired.");
-      const response = await fetch(`/api/lift-engineering/library/charts/points?chartId=${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store" });
-      const payload = await response.json() as { error?: string; points?: Array<{ configuration_key: string; radius_m: number; rated_capacity_t: number; source_page?: string | null }> };
-      if (!response.ok) throw new Error(payload.error || "Manufacturer chart points could not be loaded.");
+      const path = `/api/lift-engineering/library/charts/points?chartId=${encodeURIComponent(id)}`;
+      const response = await fetch(path, { headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store" });
+      const operation = `GET ${path}`;
+      const payload = await readLiftJson<{ points?: Array<{ configuration_key: string; radius_m: number; rated_capacity_t: number; source_page?: string | null }> }>(response, operation);
+      if (!payload) throw new Error(`${operation} failed (${response.status}): The server returned an empty response.`);
       setPoints((payload.points ?? []).map((point) => ({ configurationKey: point.configuration_key, radiusM: Number(point.radius_m), capacityT: Number(point.rated_capacity_t), sourcePage: point.source_page ?? null })));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Manufacturer chart points could not be loaded."); }
     finally { setBusy(false); }

@@ -6,6 +6,7 @@ import { ArrowRight, Plus, Search, Truck, X } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { baseSetupOptions, type BaseConfigurationChart } from "@/lib/lift-engineering/base-configuration";
+import { readLiftJson } from "@/lib/lift-engineering/client-response";
 
 type Profile = { id: string; name: string; manufacturer: string | null; model: string | null; active: boolean };
 type TechnicalRevision = { id: string; revision: string; status: string; created_at: string; created_by: string | null; counterweight_t: number | null; outrigger_state: string | null; data: Record<string, unknown> | null };
@@ -29,8 +30,9 @@ export function CraneConfigurationsLibrary() {
   const load = useCallback(async () => {
     const accessToken = await token();
     const response = await fetch("/api/lift-engineering/library/configurations/summary", { headers: { Authorization: `Bearer ${accessToken}` }, cache: "no-store" });
-    const payload = await response.json() as Summary & { error?: string };
-    if (!response.ok) throw new Error(payload.error || "Crane configurations could not be loaded.");
+    const operation = "GET /api/lift-engineering/library/configurations/summary";
+    const payload = await readLiftJson<Summary>(response, operation);
+    if (!payload) throw new Error(`${operation} failed (${response.status}): The server returned an empty response.`);
     setSummary({ configurations: payload.configurations ?? [], profiles: payload.profiles ?? [], configurationOptions: payload.configurationOptions ?? [] });
   }, [token]);
   useEffect(() => { void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Crane configurations could not be loaded.")); }, [load]);
@@ -65,8 +67,8 @@ export function CraneConfigurationsLibrary() {
   async function api(path: string, init: RequestInit) {
     const accessToken = await token();
     const response = await fetch(path, { ...init, headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", ...init.headers } });
-    const payload = await response.json() as { error?: string; record?: { id: string }; revision?: TechnicalRevision };
-    if (!response.ok) throw new Error(payload.error || "Crane configuration could not be saved.");
+    const payload = await readLiftJson<{ record?: { id: string }; revision?: TechnicalRevision }>(response, `${init.method ?? "GET"} ${path}`);
+    if (!payload) throw new Error(`${init.method ?? "GET"} ${path} failed (${response.status}): The server returned an empty response.`);
     return payload;
   }
   async function save(event: React.FormEvent) {

@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRight, FileChartColumnIncreasing, Plus, Settings2 } fro
 import { AppShell } from "@/components/layout/app-shell";
 import { createSupabaseBrowser } from "@/lib/supabase";
 import { baseSetupOptions, type BaseConfigurationChart } from "@/lib/lift-engineering/base-configuration";
+import { readLiftJson } from "@/lib/lift-engineering/client-response";
 
 type Profile = { id: string; name: string; manufacturer: string | null; model: string | null; active: boolean };
 type Revision = { id: string; revision: string; status: string; created_at: string; created_by: string | null; counterweight_t: number | null; outrigger_state: string | null; boom_configuration: string | null; boom_length_m: number | null; fly_jib: string | null; counterweight_cg_x_m?: number | null; counterweight_cg_y_m?: number | null; data: Record<string, unknown> | null; source_document: unknown; wind_restriction: string | null };
@@ -26,7 +27,8 @@ export function CraneConfigurationDetail({ configurationId }: { configurationId:
   const token = useCallback(async () => { const { data: { session } } = await supabase.auth.getSession(); if (!session?.access_token) throw new Error("Your session has expired."); return session.access_token; }, [supabase]);
   const load = useCallback(async () => {
     const accessToken = await token(); const response = await fetch(`/api/lift-engineering/library/configurations/${encodeURIComponent(configurationId)}`, { headers: { Authorization: `Bearer ${accessToken}` }, cache: "no-store" });
-    const payload = await response.json() as Detail & { error?: string }; if (!response.ok) throw new Error(payload.error || "Crane configuration could not be loaded.");
+    const operation = `GET /api/lift-engineering/library/configurations/${encodeURIComponent(configurationId)}`;
+    const payload = await readLiftJson<Detail>(response, operation); if (!payload) throw new Error(`${operation} failed (${response.status}): The server returned an empty response.`);
     setDetail(payload); setName(payload.configuration.name); setSelectedRevisionId((current) => current || payload.currentRevision?.id || payload.revisions[0]?.id || "");
   }, [configurationId, token]);
   useEffect(() => { void load().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Crane configuration could not be loaded.")); }, [load]);
@@ -42,11 +44,13 @@ export function CraneConfigurationDetail({ configurationId }: { configurationId:
     try {
       const accessToken = await token();
       const updateResponse = await fetch("/api/lift-engineering/library/configurations", { method: "PATCH", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ id: detail.configuration.id, name: name.trim() }) });
-      const updatePayload = await updateResponse.json() as { error?: string }; if (!updateResponse.ok) throw new Error(updatePayload.error || "Configuration name could not be saved.");
+      const updateOperation = "PATCH /api/lift-engineering/library/configurations";
+      const updatePayload = await readLiftJson<{ record?: { id: string } }>(updateResponse, updateOperation); if (!updatePayload) throw new Error(`${updateOperation} failed (${updateResponse.status}): The server returned an empty response.`);
       const parsedLength = length === "" ? null : Number(length); const parsedWidth = width === "" ? null : Number(width);
       if ((parsedLength != null && (!Number.isFinite(parsedLength) || parsedLength <= 0)) || (parsedWidth != null && (!Number.isFinite(parsedWidth) || parsedWidth <= 0))) throw new Error("Outrigger dimensions must be positive numbers.");
       const response = await fetch("/api/lift-engineering/library/configurations/revisions", { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ parentId: detail.configuration.id, revision: revisionName.trim(), status: "draft", counterweight_t: counterweight === "" ? null : Number(counterweight), outrigger_state: customManual ? outriggerState || "Custom / Manual" : outriggerState || `${parsedLength} × ${parsedWidth} m`, data: { configurationSource: customManual ? "custom_manual" : "manufacturer_chart", outriggerLengthM: parsedLength, outriggerWidthM: parsedWidth, slewRange: slewRange || null, notes: notes.trim() || null } }) });
-      const payload = await response.json() as { error?: string; revision?: Revision }; if (!response.ok || !payload.revision) throw new Error(payload.error || "Draft technical revision could not be created.");
+      const revisionOperation = "POST /api/lift-engineering/library/configurations/revisions";
+      const payload = await readLiftJson<{ revision?: Revision }>(response, revisionOperation); if (!payload?.revision) throw new Error(`${revisionOperation} failed (${response.status}): The server returned an empty response.`);
       setModal(false); setSelectedRevisionId(payload.revision.id); setTab("revisions"); await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Configuration revision could not be saved."); }
     finally { setBusy(false); }

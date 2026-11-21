@@ -7,6 +7,7 @@ import { createSupabaseBrowser } from "@/lib/supabase";
 import { mapTemplateLiftsToStudyInputs, type TemplateLiftRecord } from "@/lib/lift-engineering/template-study-input";
 import { ChartConfigurationSelector, type PointSelection } from "./ChartConfigurationSelector";
 import { chartMatchesBaseSetup } from "@/lib/lift-engineering/base-configuration";
+import { readLiftJson } from "@/lib/lift-engineering/client-response";
 
 type Option = { id: string; name?: string; manufacturer?: string; model?: string; revision?: string; status?: string; crane_profile_id?: string; configuration_id?: string; template_id?: string; crane_profile_revision_id?: string; mass_kg?: number; boom_configuration?: string; boom_length_m?: number; configuration_revision_id?: string; counterweight_t?: number; outrigger_state?: string; data?: Record<string, unknown> | null; slew_sector?: string; fly_jib?: string | null; manufacturer_configuration?: Record<string, unknown> | null; source_document?: Record<string, unknown> };
 type Options = { cranes: Option[]; craneRevisions: Option[]; configurations: Option[]; configurationRevisions: Option[]; templates: Option[]; templateRevisions: Option[]; charts: Option[]; arrangements: Option[]; hooks: Option[]; ropes: Option[]; attachments: Option[] };
@@ -53,8 +54,8 @@ export default function LiftStudyDetailPage({ params }: { params: Promise<{ stud
     headers.set("Authorization", `Bearer ${session.access_token}`);
     if (init?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(path, { ...init, headers, cache: "no-store" });
-    const payload = await response.json() as Record<string, unknown>;
-    if (!response.ok) throw new Error(String(payload.error || `Lift Study request failed (${response.status}).`));
+    const payload = await readLiftJson<Record<string, unknown>>(response, `${init?.method ?? "GET"} ${path}`);
+    if (!payload) throw new Error(`${init?.method ?? "GET"} ${path} failed (${response.status}): The server returned an empty response.`);
     return payload;
   }, [supabase]);
 
